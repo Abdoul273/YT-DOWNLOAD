@@ -1143,8 +1143,7 @@ def build_ydl_cmd(url, opts, download_dir=None, filename_template=None):
         '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15',
         '--extractor-args', 'youtube:skip_unavailable_videos=true',
         '--extractor-args', 'youtube:player_client=ios',
-        '--socket-timeout', '30',
-        '--connect-timeout', '15'
+        '--socket-timeout', '30'
     ]
 
     dl_type = opts.get('type', 'video').lower()
@@ -1684,7 +1683,6 @@ def _get_ydl_info_with_retry(url):
             '--no-playlist',
             '--no-warnings',
             '--socket-timeout', '25',
-            '--connect-timeout', '15',
             '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
         ]
 
