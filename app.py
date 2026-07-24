@@ -345,6 +345,33 @@ def get_ydl_path():
     """Trouve le chemin de yt-dlp"""
     return shutil.which('yt-dlp') or 'yt-dlp'
 
+def generate_youtube_cookies():
+    """Générer des cookies YouTube de base pour contourner les blocages"""
+    try:
+        import uuid
+        cookies_file = Path(__file__).parent / 'cookies.txt'
+
+        # Format Netscape standard pour yt-dlp
+        cookies_content = """# Netscape HTTP Cookie File
+# Auto-generated YouTube cookies for Render.com
+.youtube.com	TRUE	/	TRUE	0	CONSENT	YES+cb
+.youtube.com	TRUE	/	TRUE	0	VISITOR_INFO1_LIVE	{}
+.youtube.com	TRUE	/	TRUE	0	YSC	{}
+.youtube.com	TRUE	/	TRUE	0	__Secure-3PSIDCC	{}
+""".format(
+            ''.join(str(uuid.uuid4()).split('-')[:5])[:24],
+            ''.join(str(uuid.uuid4()).split('-')[:4])[:10],
+            ''.join(str(uuid.uuid4()).split('-')[:6])[:32]
+        )
+
+        if not cookies_file.exists() or cookies_file.stat().st_size < 100:
+            cookies_file.write_text(cookies_content)
+            print("✅ Cookies YouTube de base générés")
+            return True
+    except Exception as e:
+        print(f"⚠️ Erreur génération cookies: {e}")
+    return False
+
 # ─── LANGUAGE MAP ────────────────────────────────────────────
 LANG_NAMES = {
     'ab': 'Abkhaze', 'aa': 'Afar', 'af': 'Afrikaans', 'ak': 'Akan',
@@ -1113,10 +1140,11 @@ def build_ydl_cmd(url, opts, download_dir=None, filename_template=None):
 
     # Options YouTube pour Render/Internet (évite les blocages d'authentification)
     cmd += [
-        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15',
         '--extractor-args', 'youtube:skip_unavailable_videos=true',
-        '--extractor-args', 'youtube:player_client=web',
-        '--socket-timeout', '30'
+        '--extractor-args', 'youtube:player_client=ios',
+        '--socket-timeout', '30',
+        '--connect-timeout', '15'
     ]
 
     dl_type = opts.get('type', 'video').lower()
@@ -1289,7 +1317,7 @@ def format_error(stderr_output, returncode):
     
     # Erreurs connues avec messages conviviaux
     error_map = [
-        ('Sign in to confirm you\'re not a bot', '🤖 YouTube nécessite l\'authentification — essayez plus tard ou utilisez des cookies'),
+        ('Sign in to confirm you\'re not a bot', '🤖 YouTube bloque les requêtes serveur — Attendez 10-30 minutes et réessayez, ou uploader les cookies YouTube via les paramètres'),
         ('Video unavailable', '❌ Vidéo non disponible dans votre région'),
         ('Private video', '🔒 Vidéo privée — accès refusé'),
         ('This video is private', '🔒 Vidéo privée — accès refusé'),
@@ -1615,6 +1643,76 @@ def upload_cookies():
     except Exception as e:
         return jsonify({'error': f'Erreur upload: {str(e)}'}), 500
 
+def _get_ydl_info_with_retry(url):
+    """Essayer de récupérer les infos vidéo avec plusieurs stratégies"""
+    ydl = get_ydl_path()
+    cookies_file = Path(__file__).parent / 'cookies.txt'
+    has_cookies = cookies_file.exists() and cookies_file.stat().st_size > 100
+
+    # Stratégies d'authentification YouTube à essayer
+    strategies = [
+        {
+            'name': 'Avec cookies (si disponibles)',
+            'args': ['--extractor-args', 'youtube:player_client=ios'] if has_cookies else None
+        },
+        {
+            'name': 'Client mobile iOS',
+            'args': ['--extractor-args', 'youtube:player_client=ios']
+        },
+        {
+            'name': 'Client mobile Android',
+            'args': ['--extractor-args', 'youtube:player_client=android']
+        },
+        {
+            'name': 'Client web standard',
+            'args': ['--extractor-args', 'youtube:player_client=web']
+        },
+        {
+            'name': 'Sans extraction d\'arguments',
+            'args': []
+        }
+    ]
+
+    last_error = None
+    for strategy in strategies:
+        if strategy['args'] is None:
+            continue
+
+        cmd = [
+            ydl,
+            '--dump-json',
+            '--no-playlist',
+            '--no-warnings',
+            '--socket-timeout', '25',
+            '--connect-timeout', '15',
+            '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+        ]
+
+        # Ajouter les cookies si disponibles
+        if has_cookies:
+            cmd += ['--cookies', str(cookies_file)]
+
+        # Ajouter les arguments spécifiques à la stratégie
+        if strategy['args']:
+            cmd.extend(strategy['args'])
+
+        cmd.append(url)
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+
+            if result.returncode == 0 and result.stdout.strip():
+                return json.loads(result.stdout), None
+
+            last_error = result.stderr.strip()
+
+        except subprocess.TimeoutExpired:
+            last_error = 'Timeout lors de la requête'
+        except Exception as e:
+            last_error = str(e)
+
+    return None, last_error
+
 @app.route('/api/info', methods=['POST'])
 def get_video_info():
     data = request.get_json()
@@ -1627,45 +1725,12 @@ def get_video_info():
     if cached_info:
         return jsonify(cached_info)
 
-    ydl = get_ydl_path()
-    cookies_file = Path(__file__).parent / 'cookies.txt'
-
-    cmd = [
-        ydl,
-        '--dump-json',
-        '--no-playlist',
-        '--no-warnings',
-        '--socket-timeout', '20',
-        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        '--extractor-args', 'youtube:skip_unavailable_videos=true',
-        '--extractor-args', 'youtube:player_client=web'
-    ]
-    if cookies_file.exists() and cookies_file.stat().st_size > 100:
-        cmd += ['--cookies', str(cookies_file)]
-    cmd.append(url)
-    
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
-        
-        if result.returncode != 0:
-            err = result.stderr.strip()
-            return jsonify({'error': format_error(err, result.returncode)}), 400
-        
-        if not result.stdout.strip():
-            return jsonify({'error': '❌ Aucune information reçue — URL invalide ou contenu indisponible'}), 400
-        
-        info = json.loads(result.stdout)
-        formats = info.get('formats', [])
-        duration_secs = info.get('duration', 0) or 0
-        
-        if result.returncode != 0:
-            err = result.stderr.strip()
-            return jsonify({'error': format_error(err, result.returncode)}), 400
-        
-        if not result.stdout.strip():
-            return jsonify({'error': '❌ Aucune information reçue — URL invalide ou contenu indisponible'}), 400
-        
-        info = json.loads(result.stdout)
+        info, error = _get_ydl_info_with_retry(url)
+
+        if info is None:
+            return jsonify({'error': format_error(error, 1)}), 400
+
         formats = info.get('formats', [])
         duration_secs = info.get('duration', 0) or 0
         
@@ -3678,7 +3743,10 @@ def v7_stats():
 if __name__ == '__main__':
     dl_dir = get_download_dir()
     deps = check_dependencies()
-    
+
+    # Générer les cookies YouTube de base si nécessaire
+    generate_youtube_cookies()
+
     # Charger l'état des téléchargements depuis la session précédente
     load_download_state()
     _ensure_schedule_worker()
