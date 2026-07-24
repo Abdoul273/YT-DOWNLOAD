@@ -1105,12 +1105,20 @@ def build_ydl_cmd(url, opts, download_dir=None, filename_template=None):
     
     ydl = get_ydl_path()
     cmd = [ydl]
-    
+
     # Ajouter les cookies si présents
     cookies_file = Path(__file__).parent / 'cookies.txt'
     if cookies_file.exists() and cookies_file.stat().st_size > 100:
         cmd += ['--cookies', str(cookies_file)]
-    
+
+    # Options YouTube pour Render/Internet (évite les blocages d'authentification)
+    cmd += [
+        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        '--extractor-args', 'youtube:skip_unavailable_videos=true',
+        '--extractor-args', 'youtube:player_client=web',
+        '--socket-timeout', '30'
+    ]
+
     dl_type = opts.get('type', 'video').lower()
     quality = str(opts.get('quality', 'best')).lower()
     fmt = opts.get('format', 'mp4').lower()
@@ -1281,6 +1289,7 @@ def format_error(stderr_output, returncode):
     
     # Erreurs connues avec messages conviviaux
     error_map = [
+        ('Sign in to confirm you\'re not a bot', '🤖 YouTube nécessite l\'authentification — essayez plus tard ou utilisez des cookies'),
         ('Video unavailable', '❌ Vidéo non disponible dans votre région'),
         ('Private video', '🔒 Vidéo privée — accès refusé'),
         ('This video is private', '🔒 Vidéo privée — accès refusé'),
@@ -1581,22 +1590,56 @@ def update_ytdlp():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/upload-cookies', methods=['POST'])
+def upload_cookies():
+    """Uploader des cookies pour YouTube"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'Aucun fichier fourni'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'Fichier vide'}), 400
+
+    if not file.filename.endswith(('.txt', '.cookies')):
+        return jsonify({'error': 'Format invalide — utilisez .txt ou .cookies'}), 400
+
+    try:
+        cookies_path = Path(__file__).parent / 'cookies.txt'
+        file.save(str(cookies_path))
+        file_size = cookies_path.stat().st_size
+        return jsonify({
+            'success': True,
+            'message': f'Cookies uploadés ({file_size} bytes)',
+            'size': file_size
+        })
+    except Exception as e:
+        return jsonify({'error': f'Erreur upload: {str(e)}'}), 500
+
 @app.route('/api/info', methods=['POST'])
 def get_video_info():
     data = request.get_json()
     url = clean_url(data.get('url', ''))
     if not url or not is_valid_url(url):
         return jsonify({'error': '🔗 URL invalide'}), 400
-    
+
     # Vérifier le cache d'abord
     cached_info = get_cached_video_info(url)
     if cached_info:
         return jsonify(cached_info)
-    
+
     ydl = get_ydl_path()
     cookies_file = Path(__file__).parent / 'cookies.txt'
-    
-    cmd = [ydl, '--dump-json', '--no-playlist', '--no-warnings', '--socket-timeout', '20']
+
+    cmd = [
+        ydl,
+        '--dump-json',
+        '--no-playlist',
+        '--no-warnings',
+        '--socket-timeout', '20',
+        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        '--extractor-args', 'youtube:skip_unavailable_videos=true',
+        '--extractor-args', 'youtube:player_client=web'
+    ]
     if cookies_file.exists() and cookies_file.stat().st_size > 100:
         cmd += ['--cookies', str(cookies_file)]
     cmd.append(url)
