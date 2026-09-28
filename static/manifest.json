@@ -1,0 +1,13 @@
+{
+  "name": "YT-NEXUS AETHER v7",
+  "short_name": "YT-NEXUS",
+  "description": "Ultra premium multi-platform video & audio downloader — Library, Monitor, Queue, SponsorBlock, Schedule.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#02040e",
+  "theme_color": "#00e5a0",
+  "icons": [
+    {"src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='192' height='192' viewBox='0 0 24 24' fill='none' stroke='%234f9eff' stroke-width='1.6'%3E%3Cpath d='M12 2L2 7l10 5 10-5-10-5z'/%3E%3Cpath d='M2 17l10 5 10-5'/%3E%3Cpath d='M2 12l10 5 10-5'/%3E%3C/svg%3E", "sizes": "192x192", "type": "image/svg+xml"},
+    {"src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 24 24' fill='none' stroke='%234f9eff' stroke-width='1.2'%3E%3Cpath d='M12 2L2 7l10 5 10-5-10-5z'/%3E%3Cpath d='M2 17l10 5 10-5'/%3E%3Cpath d='M2 12l10 5 10-5'/%3E%3C/svg%3E", "sizes": "512x512", "type": "image/svg+xml"}
+  ]
+}

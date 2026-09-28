@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+cookies.txt
+dismissed_downloads.json
+downloads_state.json

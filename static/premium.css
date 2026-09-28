@@ -1,0 +1,180 @@
+/* YT-NEXUS AETHER v7 — Premium layer */
+
+.logo-v {
+  background: linear-gradient(135deg, rgba(0,229,160,.18), rgba(79,158,255,.12)) !important;
+  color: var(--a4) !important;
+  border: 1px solid rgba(0,229,160,.25);
+}
+
+/* Disk bar in header */
+.disk-chip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px; border-radius: 999px;
+  background: rgba(79,158,255,.06); border: 1px solid var(--border);
+  font-size: 10px; font-family: 'Space Mono', monospace; color: var(--t2);
+  max-width: 180px; cursor: default;
+}
+.disk-chip .disk-bar {
+  width: 48px; height: 4px; border-radius: 2px;
+  background: rgba(255,255,255,.08); overflow: hidden;
+}
+.disk-chip .disk-bar > i {
+  display: block; height: 100%; border-radius: 2px;
+  background: var(--g-blue);
+}
+.disk-chip.warn .disk-bar > i { background: var(--g-hot); }
+.disk-chip.crit .disk-bar > i { background: var(--a3); }
+
+/* Clipboard watch indicator */
+.clip-watch {
+  width: 28px; height: 28px; border-radius: 8px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--t3); display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: .15s;
+}
+.clip-watch.on {
+  color: var(--a4); border-color: rgba(0,229,160,.35);
+  background: rgba(0,229,160,.1);
+  box-shadow: 0 0 12px rgba(0,229,160,.15);
+}
+.clip-watch svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
+
+/* Dashboard extra stat cards (queue, watchlater, scheduled) */
+.lib-stats {
+  display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.lib-stat {
+  padding: 10px 14px; border-radius: 12px;
+  background: rgba(79,158,255,.06); border: 1px solid var(--border);
+  min-width: 100px;
+}
+.lib-stat b {
+  display: block; font-size: 16px; color: var(--a1);
+  font-family: 'Space Mono', monospace;
+}
+.lib-stat span { font-size: 10px; color: var(--t3); text-transform: uppercase; letter-spacing: .6px; }
+
+/* Queue */
+.queue-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--card2);
+  margin-bottom: 6px;
+}
+.queue-pos {
+  width: 28px; height: 28px; border-radius: 8px;
+  background: rgba(79,158,255,.12); color: var(--a1);
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700;
+}
+
+/* Watch later */
+.wl-item {
+  display: flex; gap: 12px; align-items: center;
+  padding: 10px; border-radius: 12px; border: 1px solid var(--border);
+  background: var(--card2); margin-bottom: 8px;
+}
+.wl-item img {
+  width: 96px; height: 54px; object-fit: cover; border-radius: 8px;
+  background: var(--deep); flex-shrink: 0;
+}
+.wl-body { flex: 1; min-width: 0; }
+.wl-title { font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wl-meta { font-size: 10px; color: var(--t3); font-family: 'Space Mono', monospace; margin-top: 3px; }
+
+/* Schedule */
+.sch-form {
+  display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px;
+  margin-bottom: 14px; align-items: end;
+}
+@media (max-width: 720px) {
+  .sch-form { grid-template-columns: 1fr; }
+}
+.sch-form label {
+  display: block; font-size: 9.5px; color: var(--t3);
+  text-transform: uppercase; letter-spacing: .6px;
+  font-family: 'Space Mono', monospace; margin-bottom: 4px;
+}
+.sch-form input, .sch-form select {
+  width: 100%; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--card);
+  color: var(--t1); font-family: 'Syne', sans-serif; font-size: 12.5px;
+}
+
+/* Premium option toggles on single download */
+.premium-opts {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px; margin-top: 10px;
+}
+.prem-toggle {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 10px;
+  border: 1px solid var(--border); background: rgba(0,0,0,.2);
+  font-size: 11.5px; font-weight: 600; color: var(--t2); cursor: pointer;
+  user-select: none;
+}
+.prem-toggle input { accent-color: var(--a1); }
+.prem-toggle:has(input:checked) {
+  border-color: rgba(79,158,255,.35);
+  background: rgba(79,158,255,.08);
+  color: var(--t1);
+}
+
+/* Profile chips */
+.profile-bar {
+  display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px;
+}
+.profile-chip {
+  padding: 6px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 650;
+  border: 1px solid var(--border); background: var(--card2); color: var(--t2);
+  cursor: pointer; transition: .12s; font-family: 'Syne', sans-serif;
+}
+.profile-chip:hover {
+  border-color: rgba(0,212,255,.4); color: var(--a2);
+  background: rgba(0,212,255,.08);
+}
+.profile-chip.active {
+  border-color: rgba(0,229,160,.4); color: var(--a4);
+  background: rgba(0,229,160,.1);
+}
+
+/* Notification toast enhancement already exists — pulse on badge */
+.tab-badge.pulse {
+  animation: badgePulse 1.2s ease-in-out infinite;
+}
+@keyframes badgePulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(255,61,107,.5); }
+  50% { box-shadow: 0 0 0 6px rgba(255,61,107,0); }
+}
+
+/* Floating smart FAB */
+.smart-fab {
+  position: fixed; right: 18px; bottom: 18px; z-index: 80;
+  width: 48px; height: 48px; border-radius: 14px;
+  background: var(--g-blue); border: none; color: #fff;
+  font-size: 18px; font-weight: 800; cursor: pointer;
+  box-shadow: 0 8px 28px rgba(79,158,255,.4);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .15s;
+}
+.smart-fab:hover { transform: scale(1.06); }
+.smart-fab-menu {
+  position: fixed; right: 18px; bottom: 76px; z-index: 80;
+  display: none; flex-direction: column; gap: 6px;
+  min-width: 200px;
+}
+.smart-fab-menu.open { display: flex; }
+.smart-fab-menu button {
+  text-align: left; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border-hi); background: var(--card2);
+  color: var(--t1); font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: 'Syne', sans-serif;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+.smart-fab-menu button:hover { border-color: var(--a1); color: var(--a1); }
+
+/* Empty state compact */
+.v7-empty {
+  text-align: center; padding: 40px 16px; color: var(--t3); font-size: 13px;
+}
+.v7-empty .big { font-size: 28px; margin-bottom: 8px; opacity: .6; }
