@@ -32,8 +32,14 @@ app = Flask(__name__, static_folder='static')
 CORS(app)
 
 # ─── CONFIG ──────────────────────────────────────────────────
-DEFAULT_DOWNLOAD_DIR = Path.home() / 'Downloads' / 'YT-NEXUS'
-SETTINGS_FILE = Path.home() / '.yt-nexus-v4-settings.json'
+RENDER_ENV = os.getenv('RENDER') == 'true'
+
+if RENDER_ENV:
+    DEFAULT_DOWNLOAD_DIR = Path('/tmp/yt-nexus-downloads')
+    SETTINGS_FILE = Path('/tmp/.yt-nexus-v4-settings.json')
+else:
+    DEFAULT_DOWNLOAD_DIR = Path.home() / 'Downloads' / 'YT-NEXUS'
+    SETTINGS_FILE = Path.home() / '.yt-nexus-v4-settings.json'
 
 def load_settings():
     try:
@@ -338,6 +344,33 @@ def check_dependencies():
 def get_ydl_path():
     """Trouve le chemin de yt-dlp"""
     return shutil.which('yt-dlp') or 'yt-dlp'
+
+def generate_youtube_cookies():
+    """Générer des cookies YouTube de base pour contourner les blocages"""
+    try:
+        import uuid
+        cookies_file = Path(__file__).parent / 'cookies.txt'
+
+        # Format Netscape standard pour yt-dlp
+        cookies_content = """# Netscape HTTP Cookie File
+# Auto-generated YouTube cookies for Render.com
+.youtube.com	TRUE	/	TRUE	0	CONSENT	YES+cb
+.youtube.com	TRUE	/	TRUE	0	VISITOR_INFO1_LIVE	{}
+.youtube.com	TRUE	/	TRUE	0	YSC	{}
+.youtube.com	TRUE	/	TRUE	0	__Secure-3PSIDCC	{}
+""".format(
+            ''.join(str(uuid.uuid4()).split('-')[:5])[:24],
+            ''.join(str(uuid.uuid4()).split('-')[:4])[:10],
+            ''.join(str(uuid.uuid4()).split('-')[:6])[:32]
+        )
+
+        if not cookies_file.exists() or cookies_file.stat().st_size < 100:
+            cookies_file.write_text(cookies_content)
+            print("✅ Cookies YouTube de base générés")
+            return True
+    except Exception as e:
+        print(f"⚠️ Erreur génération cookies: {e}")
+    return False
 
 # ─── LANGUAGE MAP ────────────────────────────────────────────
 LANG_NAMES = {
@@ -1099,12 +1132,20 @@ def build_ydl_cmd(url, opts, download_dir=None, filename_template=None):
     
     ydl = get_ydl_path()
     cmd = [ydl]
-    
+
     # Ajouter les cookies si présents
     cookies_file = Path(__file__).parent / 'cookies.txt'
     if cookies_file.exists() and cookies_file.stat().st_size > 100:
         cmd += ['--cookies', str(cookies_file)]
-    
+
+    # Options YouTube pour Render/Internet (évite les blocages d'authentification)
+    cmd += [
+        '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15',
+        '--extractor-args', 'youtube:skip_unavailable_videos=true',
+        '--extractor-args', 'youtube:player_client=ios',
+        '--socket-timeout', '30'
+    ]
+
     dl_type = opts.get('type', 'video').lower()
     quality = str(opts.get('quality', 'best')).lower()
     fmt = opts.get('format', 'mp4').lower()
@@ -1275,6 +1316,7 @@ def format_error(stderr_output, returncode):
     
     # Erreurs connues avec messages conviviaux
     error_map = [
+        ('Sign in to confirm you\'re not a bot', '🤖 YouTube bloque les requêtes serveur — Attendez 10-30 minutes et réessayez, ou uploader les cookies YouTube via les paramètres'),
         ('Video unavailable', '❌ Vidéo non disponible dans votre région'),
         ('Private video', '🔒 Vidéo privée — accès refusé'),
         ('This video is private', '🔒 Vidéo privée — accès refusé'),
@@ -1575,48 +1617,118 @@ def update_ytdlp():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/upload-cookies', methods=['POST'])
+def upload_cookies():
+    """Uploader des cookies pour YouTube"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'Aucun fichier fourni'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'Fichier vide'}), 400
+
+    if not file.filename.endswith(('.txt', '.cookies')):
+        return jsonify({'error': 'Format invalide — utilisez .txt ou .cookies'}), 400
+
+    try:
+        cookies_path = Path(__file__).parent / 'cookies.txt'
+        file.save(str(cookies_path))
+        file_size = cookies_path.stat().st_size
+        return jsonify({
+            'success': True,
+            'message': f'Cookies uploadés ({file_size} bytes)',
+            'size': file_size
+        })
+    except Exception as e:
+        return jsonify({'error': f'Erreur upload: {str(e)}'}), 500
+
+def _get_ydl_info_with_retry(url):
+    """Essayer de récupérer les infos vidéo avec plusieurs stratégies"""
+    ydl = get_ydl_path()
+    cookies_file = Path(__file__).parent / 'cookies.txt'
+    has_cookies = cookies_file.exists() and cookies_file.stat().st_size > 100
+
+    # Stratégies d'authentification YouTube à essayer
+    strategies = [
+        {
+            'name': 'Avec cookies (si disponibles)',
+            'args': ['--extractor-args', 'youtube:player_client=ios'] if has_cookies else None
+        },
+        {
+            'name': 'Client mobile iOS',
+            'args': ['--extractor-args', 'youtube:player_client=ios']
+        },
+        {
+            'name': 'Client mobile Android',
+            'args': ['--extractor-args', 'youtube:player_client=android']
+        },
+        {
+            'name': 'Client web standard',
+            'args': ['--extractor-args', 'youtube:player_client=web']
+        },
+        {
+            'name': 'Sans extraction d\'arguments',
+            'args': []
+        }
+    ]
+
+    last_error = None
+    for strategy in strategies:
+        if strategy['args'] is None:
+            continue
+
+        cmd = [
+            ydl,
+            '--dump-json',
+            '--no-playlist',
+            '--no-warnings',
+            '--socket-timeout', '25',
+            '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+        ]
+
+        # Ajouter les cookies si disponibles
+        if has_cookies:
+            cmd += ['--cookies', str(cookies_file)]
+
+        # Ajouter les arguments spécifiques à la stratégie
+        if strategy['args']:
+            cmd.extend(strategy['args'])
+
+        cmd.append(url)
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+
+            if result.returncode == 0 and result.stdout.strip():
+                return json.loads(result.stdout), None
+
+            last_error = result.stderr.strip()
+
+        except subprocess.TimeoutExpired:
+            last_error = 'Timeout lors de la requête'
+        except Exception as e:
+            last_error = str(e)
+
+    return None, last_error
+
 @app.route('/api/info', methods=['POST'])
 def get_video_info():
     data = request.get_json()
     url = clean_url(data.get('url', ''))
     if not url or not is_valid_url(url):
         return jsonify({'error': '🔗 URL invalide'}), 400
-    
+
     # Vérifier le cache d'abord
     cached_info = get_cached_video_info(url)
     if cached_info:
         return jsonify(cached_info)
-    
-    ydl = get_ydl_path()
-    cookies_file = Path(__file__).parent / 'cookies.txt'
-    
-    cmd = [ydl, '--dump-json', '--no-playlist', '--no-warnings', '--socket-timeout', '20']
-    if cookies_file.exists() and cookies_file.stat().st_size > 100:
-        cmd += ['--cookies', str(cookies_file)]
-    cmd.append(url)
-    
+
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
-        
-        if result.returncode != 0:
-            err = result.stderr.strip()
-            return jsonify({'error': format_error(err, result.returncode)}), 400
-        
-        if not result.stdout.strip():
-            return jsonify({'error': '❌ Aucune information reçue — URL invalide ou contenu indisponible'}), 400
-        
-        info = json.loads(result.stdout)
-        formats = info.get('formats', [])
-        duration_secs = info.get('duration', 0) or 0
-        
-        if result.returncode != 0:
-            err = result.stderr.strip()
-            return jsonify({'error': format_error(err, result.returncode)}), 400
-        
-        if not result.stdout.strip():
-            return jsonify({'error': '❌ Aucune information reçue — URL invalide ou contenu indisponible'}), 400
-        
-        info = json.loads(result.stdout)
+        info, error = _get_ydl_info_with_retry(url)
+
+        if info is None:
+            return jsonify({'error': format_error(error, 1)}), 400
+
         formats = info.get('formats', [])
         duration_secs = info.get('duration', 0) or 0
         
@@ -2041,7 +2153,7 @@ def start_direct_download():
                 downloads_progress[download_id]['status'] = 'failed'  # Récupérable avec retry
                 downloads_progress[download_id]['error'] = 'Échec du téléchargement direct'
 
-        except Exception:
+        except Exception as e:
             active_procs.pop(download_id, None)
             downloads_progress[download_id]['status'] = 'failed'  # Récupérable avec retry
 
@@ -2977,7 +3089,7 @@ def get_playlist_info():
                         'thumbnail': f'https://img.youtube.com/vi/{vid_id}/mqdefault.jpg' if vid_id else '',
                         'url': item.get('url') or item.get('webpage_url') or f'https://www.youtube.com/watch?v={vid_id}'
                     })
-            except Exception:
+            except Exception as e:
                 pass  # Fallback ci-dessous
 
         # Fallback: --dump-json ligne par ligne si dump-single-json n'a pas donné d'entries
@@ -3629,7 +3741,10 @@ def v7_stats():
 if __name__ == '__main__':
     dl_dir = get_download_dir()
     deps = check_dependencies()
-    
+
+    # Générer les cookies YouTube de base si nécessaire
+    generate_youtube_cookies()
+
     # Charger l'état des téléchargements depuis la session précédente
     load_download_state()
     _ensure_schedule_worker()
@@ -3638,7 +3753,7 @@ if __name__ == '__main__':
     print(f"  🚀 YT-NEXUS AETHER v{APP_VERSION} ULTRA — Backend démarré!")
     print(f"{'='*65}")
     print(f"  📁 Téléchargements → {dl_dir}")
-    print("  🌐 Interface       → http://localhost:5050")
+    print(f"  🌐 Interface       → http://localhost:5050")
     print(f"  🔧 yt-dlp          → {'✅ ' + deps['yt_dlp']['version'] if deps['yt_dlp']['ok'] else '❌ Non installé'}")
     print(f"  🎬 ffmpeg          → {'✅ ' + deps['ffmpeg']['version'] if deps['ffmpeg']['ok'] else '❌ Non installé (qualité réduite)'}")
     print(f"{'='*65}\n")
@@ -3669,4 +3784,5 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, cleanup_handler)
     signal.signal(signal.SIGTERM, cleanup_handler)
     
-    app.run(host='0.0.0.0', port=5050, debug=False, threaded=True)
+    port = int(os.getenv('PORT', 5050))
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
