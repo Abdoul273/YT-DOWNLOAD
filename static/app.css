@@ -773,3 +773,8 @@ dialog .tete h3 { font-size: 0.98rem; font-weight: 700; flex: 1; overflow: hidde
   .ligne-histo .heure { display: none; }
   .ligne-histo .boutons-tache { grid-column: 1 / -1; justify-content: flex-end; opacity: 1; }
 }
+
+/* date de publication */
+.date-video { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 3px 9px; border-radius: 99px; font-size: .75rem; font-weight: 700; color: var(--cyan); background: color-mix(in srgb, var(--cyan) 12%, transparent); border: 1px solid color-mix(in srgb, var(--cyan) 22%, transparent); }
+.date-video svg { width: 13px; height: 13px; }
+.puce-meta.date-video { margin-top: 0; font-size: .8rem; padding: 5px 11px; }

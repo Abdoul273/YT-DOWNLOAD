@@ -47,6 +47,18 @@ const duree = (s) => {
 const restant = (s) => (s == null ? "" : s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)}`);
 const vues = (n) => (n == null ? "" : n >= 1e9 ? `${(n / 1e9).toFixed(1).replace(".", ",")} Md vues` : n >= 1e6 ? `${(n / 1e6).toFixed(1).replace(".", ",")} M vues` : n >= 1e3 ? `${Math.round(n / 1e3)} k vues` : `${n} vues`);
 const dateYT = (d) => (d && d.length === 8 ? new Date(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : "");
+const relatif = new Intl.RelativeTimeFormat("fr", { numeric: "auto" });
+// « il y a 3 jours », « il y a 2 ans »…
+const ilYa = (ts) => {
+  if (!ts) return "";
+  const s = Date.now() / 1000 - ts;
+  for (const [u, n] of [["year", 31536000], ["month", 2592000], ["week", 604800], ["day", 86400], ["hour", 3600], ["minute", 60]]) {
+    if (Math.abs(s) >= n) return relatif.format(-Math.floor(s / n), u);
+  }
+  return "à l'instant";
+};
+const dateLongue = (ts) => (ts ? new Date(ts * 1000).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" }) : "");
+const tsYT = (d) => (d && d.length === 8 ? new Date(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}T12:00`).getTime() / 1000 : null);
 const quand = (t) => (t ? new Date(t * 1000).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
 const estUrl = (s) => /^(https?:\/\/|www\.|youtu\.?be|m\.youtube)/i.test(s.trim()) || /^[\w-]+\.[a-z]{2,}\/\S+/i.test(s.trim());
 const base = (c) => (c || "").toLowerCase().split("-")[0];
@@ -373,7 +385,7 @@ function carteVideo(v) {
         ${v.chaine ? h`<div class="chaine"><span class="avatar">${(v.chaine || "?").trim()[0].toUpperCase()}</span>${v.chaine}</div>` : ""}
         <div class="puces-meta">
           ${v.vues ? h`<span class="puce-meta">${brut(I.vues)}${vues(v.vues)}</span>` : ""}
-          ${v.date ? h`<span class="puce-meta">${brut(I.calendrier)}${dateYT(v.date)}</span>` : ""}
+          ${v.date ? h`<span class="puce-meta date-video" title="${dateYT(v.date)}">${brut(I.calendrier)}${dateYT(v.date)} · ${ilYa(tsYT(v.date))}</span>` : ""}
           ${nbLangues > 1 ? h`<span class="puce-meta">${brut(I.langue)}${nbLangues} langues</span>` : ""}
           ${v.plateforme && v.plateforme !== "Youtube" ? h`<span class="puce-meta">${v.plateforme}</span>` : ""}
         </div>
@@ -539,7 +551,7 @@ function cartePlaylist(p) {
         <span class="n">${i + 1}</span>
         ${e.miniature ? h`<img src="${e.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : h`<span class="squelette"></span>`}
         <span style="min-width:0"><span class="t">${e.attente ? h`<span class="squelette" style="display:block;height:14px;width:70%"></span>` : e.titre}</span>${e.chaine && p.type === "lot" ? h`<span class="d" style="display:block;margin-top:3px">${e.chaine}</span>` : ""}${e.ko ? h`<span class="ko">Aperçu indisponible, téléchargeable quand même</span>` : ""}</span>
-        <span class="d">${duree(e.duree)}</span>
+        <span class="d" style="text-align:right">${duree(e.duree)}${e.date ? h`<br><span title="${dateLongue(e.date)}">${ilYa(e.date)}</span>` : ""}</span>
       </label>`)}
     </div>
     <div class="barre-action">
@@ -558,7 +570,7 @@ function grilleRecherche(r) {
         <span class="survol"><span class="rond-lecture">${brut(I.chercher)}</span></span>
         ${e.duree ? h`<span class="duree">${duree(e.duree)}</span>` : e.direct ? h`<span class="duree" style="background:var(--rouge)">DIRECT</span>` : ""}</div>
       <div class="corps">
-        <div style="flex:1;min-width:0"><div class="t">${e.titre}</div><div class="s">${e.chaine || ""}${e.vues ? " · " + vues(e.vues) : ""}</div></div>
+        <div style="flex:1;min-width:0"><div class="t">${e.titre}</div><div class="s">${e.chaine || ""}${e.vues ? " · " + vues(e.vues) : ""}</div>${e.date ? h`<div class="date-video" title="Publiée vers le ${dateLongue(e.date)}">${brut(I.calendrier)}${ilYa(e.date)}</div>` : ""}</div>
         <button class="icone-btn accent" data-rapide="${i}" title="Choisir la langue, la qualité et télécharger">${brut(I.dl)}</button>
       </div>
     </article>`)}

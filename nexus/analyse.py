@@ -45,6 +45,8 @@ def options_base(**extra):
     return {
         "quiet": True, "no_warnings": True, "skip_download": True,
         "socket_timeout": 20, "extractor_retries": 3,
+        # date de publication dans les recherches/playlists (« il y a 3 jours »)
+        "extractor_args": {"youtubetab": {"approximate_date": [""]}},
         **config.options_auth(r), **extra,
     }
 
@@ -90,6 +92,14 @@ def _miniature(e):
     return None
 
 
+def _ts(upload_date):
+    """« 20261002 » → horodatage (midi, pour éviter les décalages de fuseau)."""
+    try:
+        return int(time.mktime(time.strptime(upload_date + "12", "%Y%m%d%H")))
+    except (TypeError, ValueError):
+        return None
+
+
 def _entree(e):
     url = e.get("url") or e.get("webpage_url")
     youtube = e.get("ie_key") == "Youtube" or "youtube.com/watch" in (url or "") or "youtu.be/" in (url or "")
@@ -101,6 +111,7 @@ def _entree(e):
         "id": e.get("id"), "titre": e.get("title") or "Sans titre", "url": url,
         "duree": e.get("duration"), "miniature": miniature,
         "chaine": e.get("channel") or e.get("uploader"), "vues": e.get("view_count"),
+        "date": e.get("timestamp") or e.get("release_timestamp") or _ts(e.get("upload_date")),
         "direct": e.get("live_status") == "is_live",
     }
 
