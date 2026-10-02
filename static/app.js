@@ -559,7 +559,7 @@ function grilleRecherche(r) {
         ${e.duree ? h`<span class="duree">${duree(e.duree)}</span>` : e.direct ? h`<span class="duree" style="background:var(--rouge)">DIRECT</span>` : ""}</div>
       <div class="corps">
         <div style="flex:1;min-width:0"><div class="t">${e.titre}</div><div class="s">${e.chaine || ""}${e.vues ? " · " + vues(e.vues) : ""}</div></div>
-        <button class="icone-btn accent" data-rapide="${i}" title="Télécharger directement avec les réglages par défaut">${brut(I.dl)}</button>
+        <button class="icone-btn accent" data-rapide="${i}" title="Choisir la langue, la qualité et télécharger">${brut(I.dl)}</button>
       </div>
     </article>`)}
   </div>`;
@@ -752,11 +752,10 @@ $("#contenu").addEventListener("click", (e) => {
     C().sous_titres = [...s]; return rafraichirResultat();
   }
   if (el.dataset.rapide) {
+    // Ouvre la vidéo dans l'onglet Vidéo pour choisir langue, qualité et format
     e.stopPropagation();
     const x = r.resultats[+el.dataset.rapide];
-    P().choix = choixParDefaut();
-    el.classList.remove("accent");
-    return envoyer([{ url: x.url, titre: x.titre, miniature: x.miniature, chaine: x.chaine, duree: x.duree }]);
+    E.p.video.saisie = x.url; aller("video"); return analyser(x.url, "video");
   }
   if (el.dataset.res) { const x = r.resultats[+el.dataset.res]; E.p.video.saisie = x.url; aller("video"); return analyser(x.url, "video"); }
   const a = el.dataset.action;
