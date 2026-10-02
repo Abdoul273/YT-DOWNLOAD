@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Lance YT-NEXUS (si besoin) et ouvre l'interface en fenêtre d'application.
+cd "$(dirname "$(readlink -f "$0")")"
+PORT="${PORT:-5050}"
+URL="http://localhost:$PORT"
+[[ -n "$1" ]] && URL="$URL/?url=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$1")"
+
+if ! curl -fs -o /dev/null "http://127.0.0.1:$PORT/api/etat"; then
+  mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}"
+  nohup python3 app.py >"${XDG_STATE_HOME:-$HOME/.local/state}/yt-nexus.log" 2>&1 &
+  for _ in $(seq 50); do curl -fs -o /dev/null "http://127.0.0.1:$PORT/api/etat" && break; sleep 0.2; done
+fi
+[[ "$1" == "--serveur" ]] && exit 0
+
+for nav in chromium google-chrome-stable google-chrome brave vivaldi microsoft-edge-stable; do
+  if command -v "$nav" >/dev/null; then exec "$nav" --app="$URL" >/dev/null 2>&1; fi
+done
+exec xdg-open "$URL"

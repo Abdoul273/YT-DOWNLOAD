@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Installe YT-NEXUS : dépendances, commande `yt-nexus`, entrée dans le menu.
+set -e
+cd "$(dirname "$(readlink -f "$0")")"
+command -v ffmpeg >/dev/null || sudo pacman -S --needed --noconfirm ffmpeg
+command -v deno >/dev/null || command -v node >/dev/null || sudo pacman -S --needed --noconfirm deno
+python3 -c "import flask" 2>/dev/null || python3 -m pip install --user --break-system-packages -q "Flask>=3"
+python3 -m pip install --user --break-system-packages -q -U "yt-dlp[default]"
+chmod +x yt-nexus
+mkdir -p ~/.local/bin ~/.local/share/applications
+ln -sf "$PWD/yt-nexus" ~/.local/bin/yt-nexus
+cat > ~/.local/share/applications/yt-nexus.desktop <<DESK
+[Desktop Entry]
+Name=YT-NEXUS
+Comment=Télécharger des vidéos YouTube en français
+Exec=$PWD/yt-nexus %u
+Icon=$PWD/static/icone.svg
+Terminal=false
+Type=Application
+Categories=Network;AudioVideo;
+Keywords=youtube;télécharger;vidéo;
+DESK
+echo "✔ YT-NEXUS installé : lance « yt-nexus » ou cherche-le dans le menu."

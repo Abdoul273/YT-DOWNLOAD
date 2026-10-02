@@ -1,90 +1,42 @@
-# YT-NEXUS AETHER v7.0 ULTRA PREMIUM
+# YT-NEXUS 8
 
-Une application web avancée de téléchargement multimédia utilisant Flask et yt-dlp.
+Téléchargeur YouTube **avec les pistes audio traduites** : quand YouTube propose un doublage (humain ou IA) dans le menu « Piste audio », YT-NEXUS le récupère, le met en piste principale et garde la VO en 2ᵉ piste. Comme 4K Video Downloader, en mieux.
 
-## Fonctionnalités
+## Ce que ça fait
 
-- 🎥 Support multi-plateformes (YouTube, TikTok, Instagram, Twitter/X, Vimeo, etc.)
-- ⚡ Mode Turbo avec fragments multiples
-- 🎵 Téléchargement audio et vidéo
-- 📋 Support des playlists
-- 🎯 Sélection de format et qualité
-- 🌍 Sous-titres multi-langues
-- 📅 Planification des téléchargements
-- 🔒 Aperçu sécurisé des contenus
+- **Doublage FR automatique** : piste française par défaut + VO en bonus, pistes nommées (« Français », « Anglais (VO) »).
+- **Pas de doublage ?** VO + sous-titres français intégrés (traduits automatiquement par YouTube si besoin).
+- Vidéos, **playlists**, **chaînes entières**, plusieurs liens d'un coup, **recherche** YouTube.
+- Choix de la langue, de la qualité (jusqu'à 8K, HDR) avec taille estimée, MP4 / MKV / WebM.
+- Audio seul : MP3, M4A, Opus, FLAC, WAV ou original sans conversion.
+- File d'attente en direct : téléchargements en parallèle, **pause / reprise réelles** (repart des fichiers partiels), nouvelles tentatives automatiques, reprise après redémarrage, téléchargements programmés.
+- Extraits (début/fin), découpage par chapitres, SponsorBlock, sous-titres au choix.
+- Bibliothèque : lecture intégrée, ouvrir, afficher dans le dossier, enregistrer sur un autre appareil.
+- Cookies du navigateur ou `cookies.txt` si YouTube bloque, mise à jour de yt-dlp en un clic.
+- Coller n'importe où (Ctrl+V), glisser-déposer, thème clair/sombre, mobile, installable (PWA).
 
-## Installation locale
+## Installation (Arch / CachyOS)
 
-### Prérequis
-- Python 3.8+
-- FFmpeg (optionnel, pour meilleure qualité)
-- pip
-
-### Étapes
-
-1. Clonez le repository
-```bash
-git clone https://github.com/Abdoul273/YT-DOWNLOAD.git
-cd YT-DOWNLOAD
+```fish
+./install
 ```
 
-2. Créez un environnement virtuel
-```bash
-python -m venv venv
-source venv/bin/activate  # Sur Windows: venv\Scripts\activate
-```
+Puis lance **YT-NEXUS** depuis le menu, ou `yt-nexus` (ou `yt-nexus "https://youtu.be/…"`).
+L'interface est sur http://localhost:5050.
 
-3. Installez les dépendances
-```bash
-pip install -r requirements.txt
-```
+Lancement manuel : `python3 app.py`. Accès depuis le téléphone (même Wi-Fi) : `HOST=0.0.0.0 python3 app.py`.
 
-4. Lancez l'application
-```bash
-python app.py
-```
-
-5. Accédez à `http://localhost:5050` dans votre navigateur
-
-## Déploiement sur Render.com
-
-L'application est configurée pour fonctionner sur Render.com.
-
-### Configuration requise sur Render
-
-1. Créez un nouveau Web Service
-2. Connectez votre repository GitHub
-3. Sélectionnez la branche `main`
-4. Assurez-vous que le `Procfile` est détecté automatiquement
-5. Déployez
-
-L'application utilisera automatiquement le port fourni par Render et stockera les fichiers temporaires dans `/tmp`.
-
-## Structure du projet
+## Organisation
 
 ```
-YT-DOWNLOAD/
-├── app.py              # Application Flask principale
-├── requirements.txt    # Dépendances Python
-├── Procfile           # Configuration Render
-├── .gitignore         # Fichiers à ignorer dans Git
-├── static/
-│   ├── index.html     # Interface utilisateur
-│   ├── premium.css    # Styles
-│   ├── premium.js     # Scripts JavaScript
-│   └── manifest.json  # Manifeste PWA
-└── tests/             # Tests unitaires
+app.py              point d'entrée
+nexus/config.py     réglages (~/.config/yt-nexus), chemins, cookies
+nexus/analyse.py    infos vidéo / playlist / chaîne / recherche (API yt-dlp, cache)
+nexus/formats.py    pistes audio et sélection des formats ← le cœur
+nexus/taches.py     file : parallélisme, pause/reprise, relances, persistance
+nexus/web.py        API HTTP + flux temps réel (SSE)
+static/             interface (HTML/CSS/JS sans framework)
+tests/              tests unitaires (pytest)
 ```
 
-## Variables d'environnement
-
-- `PORT` : Port sur lequel l'application écoute (défaut: 5050)
-- `RENDER` : Automatiquement défini à `true` par Render.com
-
-## Support
-
-Pour les bugs ou demandes de fonctionnalités, ouvrez une issue sur GitHub.
-
-## Licence
-
-MIT
+Données : `~/.local/share/yt-nexus` (file de téléchargement), réglages : `~/.config/yt-nexus`.
