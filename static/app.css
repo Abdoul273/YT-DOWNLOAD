@@ -778,3 +778,20 @@ dialog .tete h3 { font-size: 0.98rem; font-weight: 700; flex: 1; overflow: hidde
 .date-video { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 3px 9px; border-radius: 99px; font-size: .75rem; font-weight: 700; color: var(--cyan); background: color-mix(in srgb, var(--cyan) 12%, transparent); border: 1px solid color-mix(in srgb, var(--cyan) 22%, transparent); }
 .date-video svg { width: 13px; height: 13px; }
 .puce-meta.date-video { margin-top: 0; font-size: .8rem; padding: 5px 11px; }
+
+/* filtres de recherche */
+.barre-filtres { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; max-width: 1240px; margin: 18px auto 0; }
+.barre-filtres .segment { align-items: center; }
+.barre-filtres .ic-tri { width: 16px; height: 16px; margin: 0 6px 0 10px; color: var(--t3); }
+.barre-filtres .segment button { padding: 7px 13px; font-size: .82rem; }
+.barre-filtres .btn .pastille { animation: none; margin-left: 2px; }
+.btn.actif-filtre { border-color: color-mix(in srgb, var(--indigo) 55%, transparent); box-shadow: var(--reflet), 0 0 0 3px color-mix(in srgb, var(--indigo) 18%, transparent); }
+.filtre-actif { padding: 6px 8px 6px 12px; border-color: color-mix(in srgb, var(--cyan) 35%, transparent); background: color-mix(in srgb, var(--cyan) 10%, transparent); color: var(--t1); }
+.filtre-actif svg { width: 13px; height: 13px; opacity: .7; }
+.filtre-actif:hover svg { opacity: 1; color: var(--rouge); }
+.panneau-filtres { margin: 14px auto 0; padding: 20px 22px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; border-radius: 22px; animation: monte .4s var(--doux); }
+@media (max-width: 760px) {
+  .barre-filtres { justify-content: flex-start; }
+  .barre-filtres .segment { width: 100%; flex-wrap: nowrap; overflow-x: auto; }
+  .barre-filtres .ic-tri { display: none; }
+}

@@ -116,6 +116,8 @@ const I = {
   lune: svg('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
   soleil: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
   croix: svg('<path d="M6 6l12 12M18 6 6 18"/>'),
+  filtre: svg('<path d="M3 5h18l-7 8v6l-4 2v-8z"/>'),
+  tri: svg('<path d="M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3"/>'),
   lot: svg('<rect x="3" y="7" width="18" height="14" rx="2"/><path d="M7 3h10M5 5h14"/>'),
   playlist: svg('<path d="M3 6h13M3 11h13M3 16h8M17 13v8l5-4z"/>'),
   exporter: svg('<path d="M12 15V3m0 0L8 7m4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>'),
@@ -132,7 +134,7 @@ const E = {
   etat: null,
   taches: new Map(),
   rev: 0,
-  p: { video: nouvellePage(), recherche: nouvellePage(), lot: nouvellePage(), playlist: nouvellePage() },
+  p: { video: nouvellePage(), recherche: { ...nouvellePage(), filtres: {}, panneau: false }, lot: nouvellePage(), playlist: nouvellePage() },
   filtre: "tout",
   fichiers: null,
   ff: { q: "", type: "tout", tri: "date", dossier: "" },
@@ -259,8 +261,47 @@ function vueRecherche() {
   return h`
   ${teteSource(I.chercher, "g2", "Cherche sur <em>YouTube</em>", "Trouve une vidéo, clique pour choisir la langue et la qualité, ou télécharge-la directement.")}
   <div class="${occupe() ? "" : "anim"}" style="--i:3;${occupe() ? "" : "max-width:860px;margin:30px auto 0"}">${formSaisie("Que veux-tu regarder ?", "Rechercher")}</div>
+  ${barreFiltres()}
   ${occupe() ? "" : h`<div class="exemples anim" style="--i:4">${["documentaire espace", "MrBeast", "recette facile", "musique lofi", "tuto Linux"].map((x) => h`<button data-exemple="${x}">${x}</button>`)}</div>`}
   <div class="resultat" id="resultat">${zoneResultat()}</div>`;
+}
+
+// ── filtres de recherche (appliqués par YouTube) ─────────────────────
+const GROUPES_FILTRES = {
+  tri: ["Trier par", [["pertinence", "Pertinence"], ["date", "Plus récentes"], ["vues", "Plus vues"], ["note", "Mieux notées"]]],
+  date: ["Mise en ligne", [["", "N'importe quand"], ["heure", "Dernière heure"], ["jour", "Aujourd'hui"], ["semaine", "Cette semaine"], ["mois", "Ce mois-ci"], ["annee", "Cette année"]]],
+  duree: ["Durée", [["", "Toutes"], ["courte", "Moins de 4 min"], ["moyenne", "4 à 20 min"], ["longue", "Plus de 20 min"]]],
+};
+const OPTIONS_FILTRES = [["hd", "HD"], ["k4", "4K"], ["sous_titres", "Sous-titres"]];
+const filtresActifs = (f) => [
+  ...["date", "duree"].filter((k) => f[k]).map((k) => [k, GROUPES_FILTRES[k][1].find(([v]) => v === f[k])?.[1]]),
+  ...OPTIONS_FILTRES.filter(([k]) => f[k]),
+];
+function barreFiltres() {
+  const pg = E.p.recherche, f = pg.filtres;
+  const actifs = filtresActifs(f);
+  const tri = f.tri || "pertinence";
+  return h`<div class="barre-filtres ${occupe() ? "" : "anim"}" style="--i:4">
+    <div class="segment tris">${brut(I.tri.replace("<svg", '<svg class="ic-tri"'))}${GROUPES_FILTRES.tri[1].map(([v, l]) => h`<button data-rf="tri" data-rv="${v}" aria-pressed="${tri === v}">${l}</button>`)}</div>
+    <button class="btn petit ${pg.panneau || actifs.length ? "actif-filtre" : ""}" data-panneau-filtres>${brut(I.filtre)} Filtres${actifs.length ? h`<span class="pastille">${actifs.length}</span>` : ""}</button>
+    ${actifs.map(([k, l]) => h`<button class="puce filtre-actif" data-retirer-filtre="${k}">${l} ${brut(I.croix)}</button>`)}
+    ${actifs.length ? h`<button class="btn petit fantome" data-retirer-filtre="tout">Tout effacer</button>` : ""}
+  </div>
+  ${pg.panneau ? h`<div class="verre panneau-filtres">
+    ${["date", "duree"].map((g) => h`<div><div class="sous-titre-bloc">${GROUPES_FILTRES[g][0]}</div>
+      <div class="puces">${GROUPES_FILTRES[g][1].map(([v, l]) => h`<button class="puce" data-rf="${g}" data-rv="${v}" aria-pressed="${(f[g] || "") === v}">${l}</button>`)}</div></div>`)}
+    <div><div class="sous-titre-bloc">Qualité et options</div>
+      <div class="puces">${OPTIONS_FILTRES.map(([k, l]) => h`<button class="puce" data-rf="${k}" data-rv="bascule" aria-pressed="${!!f[k]}">${l}</button>`)}</div></div>
+  </div>` : ""}`;
+}
+function changerFiltre(groupe, valeur) {
+  const pg = E.p.recherche;
+  if (groupe === "tout") pg.filtres = { tri: pg.filtres.tri };
+  else if (valeur === "bascule") pg.filtres[groupe] = !pg.filtres[groupe];
+  else if (valeur === "" && OPTIONS_FILTRES.some(([k]) => k === groupe)) pg.filtres[groupe] = false;
+  else pg.filtres[groupe] = valeur;
+  if (pg.saisie.trim() && (pg.resultat || pg.erreur)) rechercher(pg.saisie.trim());
+  else rendre();
 }
 
 function vueLot() {
@@ -562,8 +603,8 @@ function cartePlaylist(p) {
 }
 
 function grilleRecherche(r) {
-  if (!r.resultats.length) return h`<div class="vide"><div class="halo">${brut(I.chercher)}</div><h3>Aucun résultat</h3><p>Essaie d'autres mots-clés.</p></div>`;
-  return h`<div class="titre-section"><h2>Résultats</h2><span class="muet">pour « ${r.requete} »</span></div>
+  if (!r.resultats.length) return h`<div class="vide"><div class="halo">${brut(I.chercher)}</div><h3>Aucun résultat</h3><p>${filtresActifs(E.p.recherche.filtres).length ? "Essaie d'assouplir les filtres." : "Essaie d'autres mots-clés."}</p></div>`;
+  return h`<div class="titre-section"><h2>Résultats</h2><span class="muet">${r.resultats.length} vidéos pour « ${r.requete} »</span></div>
   <div class="grille-videos">${r.resultats.map((e, i) => h`
     <article class="verre carte-video anim" style="--i:${Math.min(i, 12)}" data-res="${i}" tabindex="0">
       <div class="vignette"><img src="${e.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />
@@ -699,7 +740,7 @@ async function rechercher(q) {
   Object.assign(pg, { chargement: `Recherche « ${q} »…`, erreur: null, resultat: null });
   afficherPage("recherche");
   try {
-    const r = await api("/recherche", { methode: "POST", corps: { q } });
+    const r = await api("/recherche", { methode: "POST", corps: { q, filtres: pg.filtres } });
     pg.resultat = { type: "recherche", requete: q, resultats: r.resultats };
   } catch (e) { pg.erreur = e.message; }
   pg.chargement = null; afficherPage("recherche");
@@ -748,6 +789,11 @@ async function envoyer(elements, bouton) {
 // Interactions de la vue Télécharger (délégation)
 $("#contenu").addEventListener("click", (e) => {
   if (!SOURCES.includes(E.vue)) return;
+  const rf = e.target.closest("[data-rf]");
+  if (rf) return changerFiltre(rf.dataset.rf, rf.dataset.rv);
+  const rt = e.target.closest("[data-retirer-filtre]");
+  if (rt) return changerFiltre(rt.dataset.retirerFiltre, rt.dataset.retirerFiltre === "tout" ? null : "");
+  if (e.target.closest("[data-panneau-filtres]")) { E.p.recherche.panneau = !E.p.recherche.panneau; return rendre(); }
   const ex = e.target.closest("[data-exemple]");
   if (ex) { P().saisie = ex.dataset.exemple; return rechercher(ex.dataset.exemple); }
   const el = e.target.closest("[data-type],[data-piste],[data-qualite],[data-st],[data-action],[data-res],[data-rapide],[data-conteneur],[data-format-audio]");

@@ -1,9 +1,10 @@
 """Récupération des infos (vidéo, playlist, chaîne, recherche) via l'API yt-dlp."""
+import base64
 import copy
 import re
 import threading
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import yt_dlp
 
@@ -187,6 +188,44 @@ def analyser(url):
     return resume_video(brut)
 
 
-def rechercher(requete, nombre=24):
-    brut = _extraire(f"ytsearch{nombre}:{requete}", extract_flat="in_playlist")
-    return [_entree(e) for e in brut.get("entries") or [] if e and e.get("id")]
+# Filtres de recherche YouTube (paramètre « sp », protobuf encodé en base64)
+TRIS = {"pertinence": 0, "note": 1, "date": 2, "vues": 3}
+DATES = {"heure": (1, 3600), "jour": (2, 86400), "semaine": (3, 7 * 86400), "mois": (4, 31 * 86400), "annee": (5, 366 * 86400)}
+DUREES = {"courte": 1, "longue": 2, "moyenne": 3}
+
+
+def _param_sp(f):
+    filtre = b""
+    if f.get("date") in DATES:
+        filtre += bytes([0x08, DATES[f["date"]][0]])
+    filtre += bytes([0x10, 1])  # vidéos seulement
+    if f.get("duree") in DUREES:
+        filtre += bytes([0x18, DUREES[f["duree"]]])
+    if f.get("hd"):
+        filtre += bytes([0x20, 1])
+    if f.get("sous_titres"):
+        filtre += bytes([0x28, 1])
+    if f.get("k4"):
+        filtre += bytes([0x70, 1])
+    tri = TRIS.get(f.get("tri"), 0)
+    brut = (bytes([0x08, tri]) if tri else b"") + bytes([0x12, len(filtre)]) + filtre
+    return base64.b64encode(brut).decode()
+
+
+def rechercher(requete, filtres=None, nombre=30):
+    f = filtres or {}
+    if not any(f.get(k) for k in ("tri", "date", "duree", "hd", "k4", "sous_titres")) or f.get("tri") == "pertinence" and not any(f.get(k) for k in ("date", "duree", "hd", "k4", "sous_titres")):
+        brut = _extraire(f"ytsearch{nombre}:{requete}", extract_flat="in_playlist")
+    else:
+        url = f"https://www.youtube.com/results?{urlencode({'search_query': requete, 'sp': _param_sp(f)})}"
+        brut = _extraire(url, extract_flat="in_playlist", playlistend=nombre)
+    res = [_entree(e) for e in brut.get("entries") or [] if e and e.get("id")]
+    # YouTube glisse parfois des vidéos hors période : on les écarte (date approximative → marge)
+    if f.get("date") in DATES:
+        limite = time.time() - DATES[f["date"]][1] * 1.5 - 3600
+        res = [e for e in res if not e["date"] or e["date"] >= limite]
+    if f.get("tri") == "vues":
+        res.sort(key=lambda e: e["vues"] or 0, reverse=True)
+    elif f.get("tri") == "date":
+        res.sort(key=lambda e: e["date"] or 0, reverse=True)
+    return res

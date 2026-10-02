@@ -125,7 +125,8 @@ def rechercher():
     if not q:
         return _erreur("Recherche vide.")
     try:
-        return jsonify({"resultats": analyse.rechercher(q)})
+        filtres = {k: v for k, v in (_corps().get("filtres") or {}).items() if v}
+        return jsonify({"resultats": analyse.rechercher(q, filtres)})
     except analyse.ErreurAnalyse as e:
         return _erreur(str(e), 422)
 
