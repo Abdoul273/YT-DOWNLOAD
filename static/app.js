@@ -104,26 +104,34 @@ const I = {
   lune: svg('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
   soleil: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
   croix: svg('<path d="M6 6l12 12M18 6 6 18"/>'),
+  lot: svg('<rect x="3" y="7" width="18" height="14" rx="2"/><path d="M7 3h10M5 5h14"/>'),
+  playlist: svg('<path d="M3 6h13M3 11h13M3 16h8M17 13v8l5-4z"/>'),
+  exporter: svg('<path d="M12 15V3m0 0L8 7m4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>'),
+  pouls: svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>'),
+  fichier: svg('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>'),
+  cookie: svg('<path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5"/><path d="M8.5 8.5v.01M16 15.5v.01M12 12v.01M11 17v.01M7 14v.01"/>'),
 };
 
 // ── état ─────────────────────────────────────────────────────────────
+const nouvellePage = () => ({ saisie: "", chargement: null, erreur: null, resultat: null, choix: {}, selection: new Set(), toutesLangues: false, filtreLangue: "" });
+const SOURCES = ["video", "recherche", "lot", "playlist"];
 const E = {
-  vue: "telecharger",
+  vue: "video",
   etat: null,
   taches: new Map(),
   rev: 0,
-  saisie: "",
-  chargement: null,
-  erreur: null,
-  resultat: null,
-  choix: {},
-  selection: new Set(),
-  toutesLangues: false,
-  filtreLangue: "",
+  p: { video: nouvellePage(), recherche: nouvellePage(), lot: nouvellePage(), playlist: nouvellePage() },
   filtre: "tout",
-  recherche_biblio: "",
+  fichiers: null,
+  ff: { q: "", type: "tout", tri: "date", dossier: "" },
+  hq: { q: "", filtre: "tout" },
+  diag: null,
+  test: null,
   envoi: false,
 };
+// État de la page source affichée (ou de celle demandée)
+const P = (v = E.vue) => E.p[SOURCES.includes(v) ? v : "video"];
+const C = () => P().choix;
 const R = () => E.etat?.reglages || {};
 
 const LANGUES = [
@@ -149,31 +157,40 @@ function choixParDefaut() {
 }
 
 // ── navigation ───────────────────────────────────────────────────────
-const VUES = ["telecharger", "file", "bibliotheque", "reglages"];
+const VUES = ["video", "recherche", "lot", "playlist", "en-cours", "fichiers", "historique", "diagnostics", "parametres"];
+const ALIAS = { telecharger: "video", file: "en-cours", bibliotheque: "fichiers", reglages: "parametres" };
 function aller(vue, { histo = true } = {}) {
-  if (!VUES.includes(vue)) vue = "telecharger";
+  vue = ALIAS[vue] || vue;
+  if (!VUES.includes(vue)) vue = "video";
+  const meme = E.vue === vue;
   E.vue = vue;
-  if (histo && location.hash.slice(1) !== vue) history.pushState(null, "", vue === "telecharger" ? "/" : `#${vue}`);
+  if (histo && location.hash.slice(1) !== vue) history.pushState(null, "", vue === "video" ? "/" : `#${vue}`);
   $$("#nav button").forEach((b) => (b.dataset.vue === vue ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
-  placerIndicateur();
   rendre();
-  window.scrollTo({ top: 0, behavior: "instant" });
-  if (vue === "reglages" || vue === "bibliotheque") chargerEtat().then(() => E.vue === vue && vue === "bibliotheque" && rendre());
+  requestAnimationFrame(placerIndicateur);
+  if (!meme) window.scrollTo({ top: 0, behavior: "instant" });
+  if (vue === "parametres") chargerEtat();
+  if (vue === "fichiers") chargerFichiers();
+  if (vue === "diagnostics") chargerDiagnostics();
 }
 function placerIndicateur() {
   const b = $(`#nav button[data-vue="${E.vue}"]`), ind = $("#nav .indic");
   if (!b || !ind) return;
   ind.style.width = `${b.offsetWidth}px`;
   ind.style.transform = `translateX(${b.offsetLeft}px)`;
+  if (window.innerWidth <= 760) b.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
 }
 window.addEventListener("resize", placerIndicateur);
-window.addEventListener("popstate", () => aller(location.hash.slice(1) || "telecharger", { histo: false }));
+window.addEventListener("popstate", () => aller(location.hash.slice(1) || "video", { histo: false }));
 $("#nav").addEventListener("click", (e) => { const b = e.target.closest("button[data-vue]"); if (b) aller(b.dataset.vue); });
 
 function rendre() {
-  const vues = { telecharger: vueTelecharger, file: vueFile, bibliotheque: vueBibliotheque, reglages: vueReglages };
+  const vues = {
+    video: vueVideo, recherche: vueRecherche, lot: vueLot, playlist: vuePlaylist, "en-cours": vueFile,
+    fichiers: vueFichiers, historique: vueHistorique, diagnostics: vueDiagnostics, parametres: vueReglages,
+  };
   $("#contenu").innerHTML = `<section class="vue">${html(vues[E.vue]())}</section>`;
-  if (E.vue === "telecharger") apresTelecharger();
+  if (SOURCES.includes(E.vue)) apresSource();
 }
 
 // ── thème ────────────────────────────────────────────────────────────
@@ -187,36 +204,85 @@ $("#btn-theme").addEventListener("click", () => {
   try { localStorage.setItem("theme", t); } catch {}
 });
 
-// ── vue Télécharger ──────────────────────────────────────────────────
-function vueTelecharger() {
-  const compact = !!(E.resultat || E.chargement || E.erreur);
+// ── pages sources : Vidéo, Recherche, Lot, Playlist ──────────────────
+function formSaisie(placeholder, bouton = "Analyser") {
+  return h`<div class="saisie-cadre">
+      <form class="saisie" id="form-saisie">
+        ${brut(E.vue === "recherche" ? I.chercher : I.lien)}
+        <textarea id="saisie" rows="1" placeholder="${placeholder}" autocomplete="off" spellcheck="false">${P().saisie}</textarea>
+        <button type="button" class="btn fantome" id="btn-coller" title="Coller le presse-papiers">${brut(I.coller)}<span>Coller</span></button>
+        <button type="submit" class="btn principal" id="btn-go"><span>${bouton}</span>${brut(I.fleche)}</button>
+      </form>
+    </div>`;
+}
+const occupe = () => !!(P().resultat || P().chargement || P().erreur);
+
+function teteSource(ic, g, titre, texte) {
+  return h`<div class="tete-source ${occupe() ? "compact" : ""}">
+    <div class="badge-page ${g} anim">${brut(ic)}</div>
+    <h1 class="anim" style="--i:1">${brut(titre)}</h1>
+    <p class="anim" style="--i:2">${texte}</p>
+  </div>`;
+}
+
+function vueVideo() {
+  const compact = occupe();
   return h`
   <div class="heros ${compact ? "compact" : ""}">
     ${compact ? "" : h`
       <div class="surtitre anim"><span>NOUVEAU</span>Doublages YouTube en français, automatiquement</div>
       <h1 class="anim" style="--i:1">Tes vidéos YouTube,<br><em>en français.</em></h1>
       <p class="chapo anim" style="--i:2">Colle un lien : YT-NEXUS récupère la piste audio doublée que YouTube propose, garde la VO en bonus, et s'occupe du reste.</p>`}
-    <div class="saisie-cadre ${compact ? "" : "anim"}" style="--i:3">
-      <form class="saisie" id="form-saisie">
-        ${brut(I.lien)}
-        <textarea id="saisie" rows="1" placeholder="Lien YouTube, playlist, chaîne… ou une recherche" autocomplete="off" spellcheck="false">${E.saisie}</textarea>
-        <button type="button" class="btn fantome" id="btn-coller" title="Coller le presse-papiers">${brut(I.coller)}<span>Coller</span></button>
-        <button type="submit" class="btn principal" id="btn-go"><span>Analyser</span>${brut(I.fleche)}</button>
-      </form>
-    </div>
+    <div class="${compact ? "" : "anim"}" style="--i:3">${formSaisie("Colle un lien YouTube (ou tape une recherche)")}</div>
     ${compact ? "" : h`
       <div class="caracteristiques">
         ${[[I.micro, "Doublage FR auto"], [I.qualite, "Jusqu'à 8K HDR"], [I.liste, "Playlists & chaînes"], [I.eclair, "Pause & reprise"], [I.st, "Sous-titres FR"]].map(([ic, t], i) => h`<span class="anim" style="--i:${i + 4}">${brut(ic)}${t}</span>`)}
       </div>
-      <div class="astuces anim" style="--i:9"><span><kbd>Ctrl</kbd> <kbd>V</kbd> n'importe où pour coller</span><span><kbd>/</kbd> pour chercher</span><span>Glisse-dépose un lien</span></div>`}
+      <div class="astuces anim" style="--i:9"><span><kbd>Ctrl</kbd> <kbd>V</kbd> n'importe où pour coller</span><span><kbd>/</kbd> pour taper un lien</span><span>Glisse-dépose un lien</span></div>`}
   </div>
   <div class="resultat" id="resultat">${zoneResultat()}</div>`;
 }
 
+function vueRecherche() {
+  return h`
+  ${teteSource(I.chercher, "g2", "Cherche sur <em>YouTube</em>", "Trouve une vidéo, clique pour choisir la langue et la qualité, ou télécharge-la directement.")}
+  <div class="${occupe() ? "" : "anim"}" style="--i:3;${occupe() ? "" : "max-width:860px;margin:30px auto 0"}">${formSaisie("Que veux-tu regarder ?", "Rechercher")}</div>
+  ${occupe() ? "" : h`<div class="exemples anim" style="--i:4">${["documentaire espace", "MrBeast", "recette facile", "musique lofi", "tuto Linux"].map((x) => h`<button data-exemple="${x}">${x}</button>`)}</div>`}
+  <div class="resultat" id="resultat">${zoneResultat()}</div>`;
+}
+
+function vueLot() {
+  const liens = extraireLiens(P().saisie);
+  const uniques = [...new Set(liens)];
+  return h`
+  ${P().resultat ? "" : teteSource(I.lot, "g4", "Téléchargement <em>par lot</em>", "Colle autant de liens que tu veux, un par ligne. Ils partent tous dans la file avec les mêmes réglages.")}
+  <div class="verre zone-lot ${P().resultat ? "" : "anim"}" style="--i:3;${P().resultat ? "max-width:none;margin-top:0" : ""}">
+    <textarea id="saisie-lot" placeholder="https://youtu.be/…&#10;https://www.youtube.com/watch?v=…&#10;https://youtube.com/shorts/…" spellcheck="false">${P().saisie}</textarea>
+    <div class="bas">
+      <div class="compteur-liens" id="compteur-liens">${compteurLiens(liens, uniques)}</div>
+      <button class="btn fantome petit" id="btn-coller-lot">${brut(I.coller)} Coller</button>
+      ${P().saisie ? h`<button class="btn fantome petit danger" id="btn-vider-lot">${brut(I.croix)} Vider</button>` : ""}
+      <button class="btn principal" id="btn-preparer" ${uniques.length ? "" : "disabled"}>${brut(I.liste)} Préparer le lot</button>
+    </div>
+  </div>
+  <div class="resultat" id="resultat">${zoneResultat()}</div>`;
+}
+function compteurLiens(liens, uniques) {
+  return h`<span class="puce-meta">${brut(I.lien)}${uniques.length} lien${uniques.length > 1 ? "s" : ""}</span>${liens.length > uniques.length ? h`<span class="puce-meta">${liens.length - uniques.length} doublon${liens.length - uniques.length > 1 ? "s" : ""} ignoré${liens.length - uniques.length > 1 ? "s" : ""}</span>` : ""}`;
+}
+
+function vuePlaylist() {
+  return h`
+  ${teteSource(I.playlist, "g3", "Playlists <em>& chaînes</em>", "Colle le lien d'une playlist ou d'une chaîne YouTube : choisis les vidéos, la langue, et tout part dans la file.")}
+  <div class="${occupe() ? "" : "anim"}" style="--i:3;${occupe() ? "" : "max-width:860px;margin:30px auto 0"}">${formSaisie("Lien de playlist ou de chaîne (youtube.com/@…, /playlist?list=…)")}</div>
+  ${occupe() ? "" : h`<div class="astuces anim" style="--i:4"><span>Chaîne : toutes ses vidéos</span><span>Playlist : chaque vidéo, dans l'ordre</span><span>Un dossier par playlist</span></div>`}
+  <div class="resultat" id="resultat">${zoneResultat()}</div>`;
+}
+
 function zoneResultat() {
-  if (E.chargement) return squelette();
-  if (E.erreur) return h`<div class="alerte err anim">${brut(I.alerte)}<span>${E.erreur}</span></div>`;
-  const r = E.resultat;
+  if (P().chargement) return squelette();
+  if (P().erreur) return h`<div class="alerte err anim">${brut(I.alerte)}<span>${P().erreur}</span></div>`;
+  const r = P().resultat;
   if (!r) return "";
   if (r.type === "video") return carteVideo(r);
   if (r.type === "playlist" || r.type === "lot") return cartePlaylist(r);
@@ -225,15 +291,15 @@ function zoneResultat() {
 }
 
 function squelette() {
-  if (E.chargement.startsWith("Recherche")) {
-    return h`<div class="chargement-texte" style="margin-bottom:18px"><span class="rond"></span>${E.chargement}</div>
+  if (P().chargement.startsWith("Recherche")) {
+    return h`<div class="chargement-texte" style="margin-bottom:18px"><span class="rond"></span>${P().chargement}</div>
     <div class="grille-videos">${[...Array(8)].map((_, i) => h`<div class="verre carte-video anim" style="--i:${i}"><div class="squelette" style="aspect-ratio:16/9;border-radius:0"></div><div class="corps" style="flex-direction:column;gap:8px"><div class="squelette" style="height:14px;width:90%"></div><div class="squelette" style="height:12px;width:50%"></div></div></div>`)}</div>`;
   }
   return h`<div class="video">
     <div class="apercu"><div class="squelette" style="aspect-ratio:16/9;border-radius:20px"></div>
       <div class="apercu-infos" style="display:grid;gap:10px"><div class="squelette" style="height:22px;width:95%"></div><div class="squelette" style="height:22px;width:60%"></div><div class="squelette" style="height:34px;width:45%;border-radius:99px;margin-top:6px"></div></div></div>
     <div class="verre panneau" style="padding:26px;display:grid;gap:18px">
-      <div class="chargement-texte"><span class="rond"></span>${E.chargement}</div>
+      <div class="chargement-texte"><span class="rond"></span>${P().chargement}</div>
       <div class="squelette" style="height:44px;width:260px;border-radius:15px"></div>
       <div class="langues">${[...Array(6)].map(() => h`<div class="squelette" style="height:64px;border-radius:16px"></div>`)}</div>
       <div class="qualites">${[...Array(6)].map(() => h`<div class="squelette" style="height:70px;border-radius:16px"></div>`)}</div>
@@ -242,7 +308,7 @@ function squelette() {
 
 function pisteChoisie(v) {
   // null = langue préférée des réglages (avec repli VO + sous-titres côté serveur)
-  return E.choix.langue_audio ?? (v.piste_voulue || v.originale);
+  return C().langue_audio ?? (v.piste_voulue || v.originale);
 }
 const estChoisie = (p, choisie) => p.code === choisie || (p.originale && choisie === "original");
 
@@ -266,20 +332,20 @@ function blocLangues(v, choisie) {
   const sel = v.pistes.find((p) => estChoisie(p, choisie));
   if (sel && !montrees.includes(sel)) montrees.push(sel);
   const autres = v.pistes.filter((p) => !montrees.includes(p));
-  const f = E.filtreLangue.toLowerCase();
+  const f = P().filtreLangue.toLowerCase();
   const filtrees = autres.filter((p) => !f || nomPiste(p).toLowerCase().includes(f) || p.code.toLowerCase().includes(f));
   return h`
     <div class="langues">${montrees.map((p, i) => carteLangue(p, choisie, i))}</div>
     ${autres.length ? h`
-      <div class="plus-langues"><button class="btn petit fantome" data-action="toutes-langues">${brut(I.langue)} ${E.toutesLangues ? "Masquer" : "Voir"} les ${autres.length} autres langues ${brut(I.chev)}</button></div>
-      ${E.toutesLangues ? h`<div class="toutes-langues">
-        <div class="avec-icone">${brut(I.chercher)}<input class="entree" id="filtre-langue" placeholder="Chercher une langue…" value="${E.filtreLangue}" /></div>
+      <div class="plus-langues"><button class="btn petit fantome" data-action="toutes-langues">${brut(I.langue)} ${P().toutesLangues ? "Masquer" : "Voir"} les ${autres.length} autres langues ${brut(I.chev)}</button></div>
+      ${P().toutesLangues ? h`<div class="toutes-langues">
+        <div class="avec-icone">${brut(I.chercher)}<input class="entree" id="filtre-langue" placeholder="Chercher une langue…" value="${P().filtreLangue}" /></div>
         <div class="puces">${filtrees.map((p) => h`<button class="puce" data-piste="${p.code}" aria-pressed="${estChoisie(p, choisie)}">${p.drapeau} ${nomPiste(p)}${p.genre === "doublage IA" ? h` <span class="tag ia">IA</span>` : ""}</button>`)}</div>
       </div>` : ""}` : ""}`;
 }
 
 function carteVideo(v) {
-  const c = E.choix;
+  const c = C();
   const choisie = pisteChoisie(v);
   const estOriginale = choisie === v.originale || choisie === "original";
   const pref = R().langue_audio || "fr";
@@ -329,7 +395,7 @@ function carteVideo(v) {
       ${nbLangues > 1 || manque ? h`
       <div class="etape">
         ${tete(I.langue, "Langue audio", nbLangues > 1 ? `${nbLangues} pistes sur YouTube` : "")}
-        ${manque && E.choix.langue_audio == null ? h`<div class="alerte info" style="margin-bottom:14px">${brut(I.info)}<span>Pas de doublage <b>${nomLangue(pref).toLowerCase()}</b> sur YouTube pour cette vidéo.${R().sous_titres_secours && c.type === "video" ? (v.sous_titres.auto || v.sous_titres.manuels.length ? " Elle sera téléchargée en VO avec les sous-titres intégrés." : " Pas de sous-titres non plus.") : ""}</span></div>` : ""}
+        ${manque && C().langue_audio == null ? h`<div class="alerte info" style="margin-bottom:14px">${brut(I.info)}<span>Pas de doublage <b>${nomLangue(pref).toLowerCase()}</b> sur YouTube pour cette vidéo.${R().sous_titres_secours && c.type === "video" ? (v.sous_titres.auto || v.sous_titres.manuels.length ? " Elle sera téléchargée en VO avec les sous-titres intégrés." : " Pas de sous-titres non plus.") : ""}</span></div>` : ""}
         ${nbLangues > 1 ? blocLangues(v, choisie) : ""}
         ${!estOriginale && c.type === "video" ? h`
         <label class="option" style="margin-top:14px">
@@ -380,13 +446,13 @@ function carteVideo(v) {
 }
 
 function fichierFinal(v, { q, pisteSel, vo, manque }) {
-  const c = E.choix;
+  const c = C();
   const lignes = [];
   if (c.type === "video") lignes.push([I.video, `Vidéo ${q?.libelle || ""}`.trim(), (c.conteneur || "mp4").toUpperCase(), ""]);
   if (pisteSel) lignes.push([I.audio, `${pisteSel.drapeau} ${nomPiste(pisteSel)}`, c.type === "audio" ? (c.format_audio || "mp3").toUpperCase() : "Piste 1 · par défaut", "fr"]);
   if (vo) { const o = v.pistes.find((p) => p.originale); lignes.push([I.audio, `${o?.drapeau || "🎙️"} ${o ? nomPiste(o) : "VO"}`, "Piste 2 · VO", ""]); }
   const st = [...c.sous_titres];
-  if (manque && E.choix.langue_audio == null && c.type === "video" && R().sous_titres_secours && (v.sous_titres.auto || v.sous_titres.manuels.length)) st.unshift(R().langue_audio || "fr");
+  if (manque && C().langue_audio == null && c.type === "video" && R().sous_titres_secours && (v.sous_titres.auto || v.sous_titres.manuels.length)) st.unshift(R().langue_audio || "fr");
   if (st.length && c.type === "video") lignes.push([I.st, `Sous-titres ${[...new Set(st)].map((x) => x.toUpperCase()).join(", ")}`, c.sous_titres_fichier ? "fichiers .srt" : "intégrés", ""]);
   if (c.sponsorblock) lignes.push([I.bouclier, "Sans sponsors", "SponsorBlock", ""]);
   if (c.debut || c.fin) lignes.push([I.ciseaux, `Extrait ${c.debut || "0:00"} → ${c.fin || "fin"}`, "", ""]);
@@ -397,7 +463,7 @@ function fichierFinal(v, { q, pisteSel, vo, manque }) {
 }
 
 function selecteurFormat() {
-  const c = E.choix;
+  const c = C();
   if (c.type === "audio") {
     return h`<div class="segment">
       ${[["mp3", "MP3"], ["m4a", "M4A"], ["opus", "Opus"], ["flac", "FLAC"], ["wav", "WAV"], ["original", "Original"]].map(([k, l]) => h`<button data-format-audio="${k}" aria-pressed="${c.format_audio === k}">${l}</button>`)}
@@ -413,7 +479,7 @@ function selecteurFormat() {
 }
 
 function optionsAvancees(chapitres) {
-  const c = E.choix;
+  const c = C();
   return h`
   <div><div class="sous-titre-bloc">Extrait et programmation</div>
     <div class="grille">
@@ -429,10 +495,10 @@ function optionsAvancees(chapitres) {
 }
 
 function cartePlaylist(p) {
-  const c = E.choix;
-  const n = E.selection.size;
+  const c = C();
+  const n = P().selection.size;
   const langue = c.langue_audio ?? R().langue_audio ?? "fr";
-  const dureeTotale = [...E.selection].reduce((s, i) => s + (p.entrees[i]?.duree || 0), 0);
+  const dureeTotale = [...P().selection].reduce((s, i) => s + (p.entrees[i]?.duree || 0), 0);
   return h`
   <div class="verre panneau anim">
     <div class="tete-playlist">
@@ -469,10 +535,10 @@ function cartePlaylist(p) {
     <div class="liste-entrees" id="liste-entrees">
       ${p.entrees.map((e, i) => h`
       <label class="entree-pl">
-        <input type="checkbox" class="case" data-sel="${i}" ${E.selection.has(i) ? "checked" : ""} />
+        <input type="checkbox" class="case" data-sel="${i}" ${P().selection.has(i) ? "checked" : ""} />
         <span class="n">${i + 1}</span>
         ${e.miniature ? h`<img src="${e.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : h`<span class="squelette"></span>`}
-        <span class="t">${e.titre}</span>
+        <span style="min-width:0"><span class="t">${e.attente ? h`<span class="squelette" style="display:block;height:14px;width:70%"></span>` : e.titre}</span>${e.chaine && p.type === "lot" ? h`<span class="d" style="display:block;margin-top:3px">${e.chaine}</span>` : ""}${e.ko ? h`<span class="ko">Aperçu indisponible, téléchargeable quand même</span>` : ""}</span>
         <span class="d">${duree(e.duree)}</span>
       </label>`)}
     </div>
@@ -502,9 +568,6 @@ function grilleRecherche(r) {
 function rafraichirResultat() {
   const z = $("#resultat");
   if (!z) return rendre();
-  const heros = $(".heros");
-  const compact = !!(E.resultat || E.chargement || E.erreur);
-  if (heros && heros.classList.contains("compact") !== compact) return rendre();
   const ouvert = $("details.avance", z)?.open;
   const defil = $("#liste-entrees", z)?.scrollTop;
   const focus = document.activeElement?.id;
@@ -515,17 +578,17 @@ function rafraichirResultat() {
   if (defil) $("#liste-entrees", z).scrollTop = defil;
   if (focus === "filtre-langue") { const f = $("#filtre-langue"); f?.focus(); f?.setSelectionRange(f.value.length, f.value.length); }
 }
-function afficherResultat() {
-  const z = $("#resultat");
-  if (!z || $(".heros")?.classList.contains("compact") !== !!(E.resultat || E.chargement || E.erreur)) return rendre();
-  z.innerHTML = html(zoneResultat());
+// Ré-affiche la page `page` si elle est visible (l'en-tête change selon qu'il y a un résultat ou non)
+function afficherPage(page) {
+  if (E.vue === page) rendre();
 }
 
-function apresTelecharger() {
+function apresSource() {
+  if (E.vue === "lot") return apresLot();
   const ta = $("#saisie");
   const ajuster = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; };
   ajuster();
-  ta.addEventListener("input", () => { E.saisie = ta.value; ajuster(); $("#btn-go span").textContent = libelleGo(); });
+  ta.addEventListener("input", () => { P().saisie = ta.value; ajuster(); $("#btn-go span").textContent = libelleGo(); });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); lancerSaisie(); } });
   $("#btn-go span").textContent = libelleGo();
   $("#form-saisie").addEventListener("submit", (e) => { e.preventDefault(); lancerSaisie(); });
@@ -533,58 +596,122 @@ function apresTelecharger() {
     try {
       const t = (await navigator.clipboard.readText()).trim();
       if (!t) return toast("Le presse-papiers est vide.");
-      E.saisie = t; ta.value = t; ajuster(); lancerSaisie();
+      router(t, E.vue);
     } catch { ta.focus(); toast("Fais Ctrl+V dans le champ (accès au presse-papiers refusé)."); }
   });
-  if (!E.resultat && !E.chargement) ta.focus({ preventScroll: true });
+  if (!occupe()) ta.focus({ preventScroll: true });
+}
+
+function apresLot() {
+  const ta = $("#saisie-lot");
+  ta.addEventListener("input", () => {
+    P().saisie = ta.value;
+    const liens = extraireLiens(ta.value), uniques = [...new Set(liens)];
+    $("#compteur-liens").innerHTML = html(compteurLiens(liens, uniques));
+    $("#btn-preparer").disabled = !uniques.length;
+  });
+  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); preparerLot(); } });
+  $("#btn-preparer").addEventListener("click", preparerLot);
+  $("#btn-vider-lot")?.addEventListener("click", () => { E.p.lot = nouvellePage(); rendre(); });
+  $("#btn-coller-lot").addEventListener("click", async () => {
+    try {
+      const t = (await navigator.clipboard.readText()).trim();
+      if (!t) return toast("Le presse-papiers est vide.");
+      P().saisie = (P().saisie ? P().saisie.trimEnd() + "\n" : "") + t;
+      rendre();
+    } catch { ta.focus(); toast("Fais Ctrl+V dans le champ (accès au presse-papiers refusé)."); }
+  });
+  if (!P().resultat) ta.focus({ preventScroll: true });
 }
 
 const libelleGo = () => {
-  const lignes = E.saisie.split(/\s*\n\s*/).filter(Boolean);
+  if (E.vue === "recherche") return "Rechercher";
+  const lignes = P().saisie.split(/\s+/).filter(Boolean);
   if (!lignes.length) return "Analyser";
-  if (lignes.length > 1 && lignes.every(estUrl)) return `${lignes.length} liens`;
+  if (lignes.filter(estUrl).length > 1) return `${lignes.filter(estUrl).length} liens`;
   return estUrl(lignes[0]) ? "Analyser" : "Rechercher";
 };
 
-async function lancerSaisie(texte = E.saisie) {
-  const liens = texte.split(/\s+/).map((s) => s.trim()).filter(estUrl);
-  if (!texte.trim()) return $("#saisie")?.focus();
-  E.erreur = null; E.resultat = null; E.toutesLangues = false; E.filtreLangue = "";
-  if (liens.length > 1) {
-    E.choix = choixParDefaut();
-    const entrees = [...new Set(liens)].map((u) => ({ url: u, titre: u }));
-    E.resultat = { type: "lot", titre: `${entrees.length} liens`, nombre: entrees.length, entrees };
-    E.selection = new Set(entrees.map((_, i) => i));
-    return afficherResultat();
+const extraireLiens = (texte) => (texte || "").split(/\s+/).map((x) => x.trim()).filter(estUrl);
+const estPlaylist = (u) => (/[?&]list=/.test(u) && !/[?&]v=/.test(u)) || /\/playlist\b/.test(u) || /youtube\.com\/(@|channel\/|c\/|user\/)/i.test(u);
+
+// Envoie un texte dans le bon onglet : plusieurs liens → Lot, playlist/chaîne → Playlist,
+// lien → Vidéo, texte → Recherche.
+function router(texte, depuis = E.vue) {
+  texte = (texte || "").trim();
+  if (!texte) return;
+  const liens = extraireLiens(texte);
+  if (liens.length > 1 || (depuis === "lot" && liens.length)) {
+    E.p.lot.saisie = depuis === "lot" && E.p.lot.saisie ? `${E.p.lot.saisie.trimEnd()}\n${liens.join("\n")}` : liens.join("\n");
+    E.p.lot.resultat = null;
+    aller("lot");
+    return preparerLot();
   }
-  if (liens.length === 1) return analyser(liens[0]);
-  return rechercher(texte.trim());
+  if (liens.length === 1) {
+    const page = estPlaylist(liens[0]) ? "playlist" : "video";
+    E.p[page].saisie = liens[0];
+    if (E.vue !== page) aller(page);
+    return analyser(liens[0], page);
+  }
+  E.p.recherche.saisie = texte;
+  if (E.vue !== "recherche") aller("recherche");
+  return rechercher(texte);
 }
 
-async function analyser(url) {
-  E.chargement = "Analyse : pistes audio, qualités, sous-titres…"; E.erreur = null; E.resultat = null;
-  if (E.vue !== "telecharger") aller("telecharger"); else afficherResultat();
-  try {
-    const r = await api("/analyse", { methode: "POST", corps: { url } });
-    E.choix = choixParDefaut();
-    E.resultat = r;
-    if (r.type === "playlist") E.selection = new Set(r.entrees.map((_, i) => i));
-  } catch (e) { E.erreur = e.message; }
-  E.chargement = null;
-  afficherResultat();
+async function lancerSaisie() {
+  const texte = P().saisie;
+  if (!texte.trim()) return $("#saisie")?.focus();
+  if (E.vue === "recherche" && !extraireLiens(texte).length) return rechercher(texte.trim());
+  return router(texte, E.vue);
+}
+
+async function analyser(url, page = "video") {
+  const pg = E.p[page];
+  Object.assign(pg, { chargement: page === "playlist" ? "Lecture de la playlist…" : "Analyse : pistes audio, qualités, sous-titres…", erreur: null, resultat: null, toutesLangues: false, filtreLangue: "" });
+  afficherPage(page);
+  let r;
+  try { r = await api("/analyse", { methode: "POST", corps: { url } }); }
+  catch (e) { pg.erreur = e.message; pg.chargement = null; return afficherPage(page); }
+  pg.chargement = null;
+  // Le lien n'était pas du type attendu : on bascule vers le bon onglet.
+  const cible = r.type === "playlist" ? "playlist" : "video";
+  const dest = E.p[cible];
+  if (cible !== page) { pg.saisie = ""; dest.saisie = url; }
+  Object.assign(dest, { resultat: r, choix: choixParDefaut(), erreur: null, chargement: null, toutesLangues: false, filtreLangue: "",
+    selection: new Set(r.type === "playlist" ? r.entrees.map((_, i) => i) : []) });
+  if (cible !== page && E.vue === page) aller(cible); else afficherPage(cible);
 }
 
 async function rechercher(q) {
-  E.chargement = `Recherche « ${q} »…`; afficherResultat();
+  const pg = E.p.recherche;
+  Object.assign(pg, { chargement: `Recherche « ${q} »…`, erreur: null, resultat: null });
+  afficherPage("recherche");
   try {
     const r = await api("/recherche", { methode: "POST", corps: { q } });
-    E.resultat = { type: "recherche", requete: q, resultats: r.resultats };
-  } catch (e) { E.erreur = e.message; }
-  E.chargement = null; afficherResultat();
+    pg.resultat = { type: "recherche", requete: q, resultats: r.resultats };
+  } catch (e) { pg.erreur = e.message; }
+  pg.chargement = null; afficherPage("recherche");
+}
+
+async function preparerLot() {
+  const pg = E.p.lot;
+  const uniques = [...new Set(extraireLiens(pg.saisie))];
+  if (!uniques.length) return toast("Aucun lien valide.", "err");
+  const entrees = uniques.map((u) => ({ url: u, titre: u, attente: true }));
+  Object.assign(pg, { resultat: { type: "lot", titre: `${entrees.length} lien${entrees.length > 1 ? "s" : ""}`, nombre: entrees.length, entrees },
+    choix: choixParDefaut(), selection: new Set(entrees.map((_, i) => i)), erreur: null });
+  afficherPage("lot");
+  try {
+    const { apercus } = await api("/apercus", { methode: "POST", corps: { urls: uniques } });
+    if (pg.resultat?.entrees !== entrees) return;
+    apercus.forEach((a, i) => Object.assign(entrees[i], a.ok ? { titre: a.titre, chaine: a.chaine, miniature: a.miniature, attente: false } : { attente: false, ko: true }));
+    pg.resultat.miniature = entrees.find((e) => e.miniature)?.miniature;
+    if (E.vue === "lot") rafraichirResultat();
+  } catch { entrees.forEach((e) => (e.attente = false)); }
 }
 
 function optionsEnvoi() {
-  const c = { ...E.choix };
+  const c = { ...C() };
   if (c.programme) c.programme = Math.floor(new Date(c.programme).getTime() / 1000);
   else delete c.programme;
   if (c.langue_audio == null) delete c.langue_audio;
@@ -599,7 +726,7 @@ async function envoyer(elements, bouton) {
     const r = await api("/telechargements", { methode: "POST", corps: { elements, options: optionsEnvoi() } });
     r.taches.forEach(fusionner);
     const n = r.taches.length;
-    toast(n > 1 ? `${n} téléchargements ajoutés à la file` : E.choix.programme ? "Téléchargement programmé" : "C'est parti ! Suis-le dans la file.", "ok");
+    toast(n > 1 ? `${n} téléchargements ajoutés à la file` : C().programme ? "Téléchargement programmé" : "C'est parti ! Suis-le dans la file.", "ok");
     majPastille();
     if (bouton) { bouton.innerHTML = `${I.ok} Ajouté`; setTimeout(() => { E.envoi = false; rafraichirResultat(); }, 1400); return; }
   } catch (e) { toast(e.message, "err"); }
@@ -608,56 +735,59 @@ async function envoyer(elements, bouton) {
 
 // Interactions de la vue Télécharger (délégation)
 $("#contenu").addEventListener("click", (e) => {
-  if (E.vue !== "telecharger") return;
+  if (!SOURCES.includes(E.vue)) return;
+  const ex = e.target.closest("[data-exemple]");
+  if (ex) { P().saisie = ex.dataset.exemple; return rechercher(ex.dataset.exemple); }
   const el = e.target.closest("[data-type],[data-piste],[data-qualite],[data-st],[data-action],[data-res],[data-rapide],[data-conteneur],[data-format-audio]");
   if (!el) return;
-  const r = E.resultat;
-  if (el.dataset.type) { E.choix.type = el.dataset.type; return rafraichirResultat(); }
-  if (el.dataset.piste) { E.choix.langue_audio = el.dataset.piste; return rafraichirResultat(); }
-  if (el.dataset.qualite) { E.choix.qualite = el.dataset.qualite; return rafraichirResultat(); }
-  if (el.dataset.conteneur) { E.choix.conteneur = el.dataset.conteneur; return rafraichirResultat(); }
-  if (el.dataset.formatAudio) { E.choix.format_audio = el.dataset.formatAudio; return rafraichirResultat(); }
+  const r = P().resultat;
+  if (el.dataset.type) { C().type = el.dataset.type; return rafraichirResultat(); }
+  if (el.dataset.piste) { C().langue_audio = el.dataset.piste; return rafraichirResultat(); }
+  if (el.dataset.qualite) { C().qualite = el.dataset.qualite; return rafraichirResultat(); }
+  if (el.dataset.conteneur) { C().conteneur = el.dataset.conteneur; return rafraichirResultat(); }
+  if (el.dataset.formatAudio) { C().format_audio = el.dataset.formatAudio; return rafraichirResultat(); }
   if (el.dataset.st) {
-    const s = new Set(E.choix.sous_titres);
+    const s = new Set(C().sous_titres);
     s.has(el.dataset.st) ? s.delete(el.dataset.st) : s.add(el.dataset.st);
-    E.choix.sous_titres = [...s]; return rafraichirResultat();
+    C().sous_titres = [...s]; return rafraichirResultat();
   }
   if (el.dataset.rapide) {
     e.stopPropagation();
     const x = r.resultats[+el.dataset.rapide];
-    E.choix = choixParDefaut();
+    P().choix = choixParDefaut();
     el.classList.remove("accent");
     return envoyer([{ url: x.url, titre: x.titre, miniature: x.miniature, chaine: x.chaine, duree: x.duree }]);
   }
-  if (el.dataset.res) { const x = r.resultats[+el.dataset.res]; E.saisie = x.url; return analyser(x.url).then(() => window.scrollTo({ top: 0, behavior: "smooth" })); }
+  if (el.dataset.res) { const x = r.resultats[+el.dataset.res]; E.p.video.saisie = x.url; aller("video"); return analyser(x.url, "video"); }
   const a = el.dataset.action;
-  if (a === "toutes-langues") { E.toutesLangues = !E.toutesLangues; return rafraichirResultat(); }
-  if (a === "ouvrir-playlist") { E.saisie = r.playlist; return analyser(r.playlist); }
+  if (a === "toutes-langues") { P().toutesLangues = !P().toutesLangues; return rafraichirResultat(); }
+  if (a === "ouvrir-playlist") { E.p.playlist.saisie = r.playlist; aller("playlist"); return analyser(r.playlist, "playlist"); }
   if (a === "telecharger") return envoyer([{ url: r.url, titre: r.titre, miniature: r.miniature, chaine: r.chaine, duree: r.duree }], el);
   if (a === "telecharger-selection") {
     const groupe = r.type === "playlist" ? r.titre : null;
-    return envoyer([...E.selection].sort((x, y) => x - y).map((i) => ({ ...r.entrees[i], groupe })), el);
+    return envoyer([...P().selection].sort((x, y) => x - y).map((i) => ({ ...r.entrees[i], groupe })), el);
   }
 });
 $("#contenu").addEventListener("keydown", (e) => {
-  if (E.vue === "telecharger" && e.key === "Enter" && e.target.dataset?.res) e.target.click();
+  if (E.vue === "recherche" && e.key === "Enter" && e.target.dataset?.res) e.target.click();
 });
 $("#contenu").addEventListener("change", (e) => {
   const el = e.target;
-  if (E.vue === "telecharger") {
-    if (el.id === "tout-cocher") { E.selection = el.checked ? new Set(E.resultat.entrees.map((_, i) => i)) : new Set(); return rafraichirResultat(); }
-    if (el.dataset.sel) { el.checked ? E.selection.add(+el.dataset.sel) : E.selection.delete(+el.dataset.sel); return rafraichirResultat(); }
+  if (SOURCES.includes(E.vue)) {
+    if (el.id === "tout-cocher") { P().selection = el.checked ? new Set(P().resultat.entrees.map((_, i) => i)) : new Set(); return rafraichirResultat(); }
+    if (el.dataset.sel) { el.checked ? P().selection.add(+el.dataset.sel) : P().selection.delete(+el.dataset.sel); return rafraichirResultat(); }
     if (el.dataset.opt) {
-      E.choix[el.dataset.opt] = el.type === "checkbox" ? el.checked : el.value;
+      C()[el.dataset.opt] = el.type === "checkbox" ? el.checked : el.value;
       if (el.type === "checkbox" || el.tagName === "SELECT" || el.dataset.opt === "programme") rafraichirResultat();
     }
-  } else if (E.vue === "reglages") changerReglage(el);
+  } else if (E.vue === "parametres") changerReglage(el);
 });
 $("#contenu").addEventListener("input", (e) => {
   const el = e.target;
-  if (E.vue === "telecharger" && el.id === "filtre-langue") { E.filtreLangue = el.value; return rafraichirResultat(); }
-  if (E.vue === "telecharger" && el.dataset.opt && el.tagName === "INPUT" && el.type !== "checkbox") E.choix[el.dataset.opt] = el.value;
-  if (E.vue === "bibliotheque" && el.id === "recherche-biblio") { E.recherche_biblio = el.value; rendreListeBiblio(); }
+  if (SOURCES.includes(E.vue) && el.id === "filtre-langue") { P().filtreLangue = el.value; return rafraichirResultat(); }
+  if (SOURCES.includes(E.vue) && el.dataset.opt && el.tagName === "INPUT" && el.type !== "checkbox") C()[el.dataset.opt] = el.value;
+  if (E.vue === "fichiers" && el.id === "recherche-fichiers") { E.ff.q = el.value; rendreListeFichiers(); }
+  if (E.vue === "historique" && el.id === "recherche-histo") { E.hq.q = el.value; rendreListeHisto(); }
 });
 
 // ── vue File ─────────────────────────────────────────────────────────
@@ -681,7 +811,7 @@ function vueFile() {
   const liste = toutes.filter(FILTRES[E.filtre][0]);
   return h`
   <div class="tete-page anim">
-    <h2>File de téléchargement</h2><span class="compte">${toutes.length}</span>
+    <h2>En cours</h2><span class="compte">${toutes.length}</span>
     <div class="actions">
       <button class="btn petit fantome" data-global="pause_tout">${brut(I.pause)} Tout en pause</button>
       <button class="btn petit fantome" data-global="reprendre_tout">${brut(I.lecture)} Tout reprendre</button>
@@ -691,7 +821,7 @@ function vueFile() {
   </div>
   <div class="onglets anim" style="--i:1">${Object.entries(FILTRES).map(([k, [f, l]]) => h`<button data-filtre="${k}" aria-pressed="${E.filtre === k}">${l}<span class="n">${toutes.filter(f).length}</span></button>`)}</div>
   <div class="taches" id="liste-taches">
-    ${liste.length ? liste.map((t, i) => carteTache(t, i)) : h`<div class="vide anim"><div class="halo">${brut(I.vide)}</div><h3>Rien en cours</h3><p>Colle un lien pour lancer un téléchargement. Les vidéos terminées t'attendent dans la Bibliothèque.</p><button class="btn principal" data-aller="telecharger">${brut(I.dl)} Télécharger une vidéo</button></div>`}
+    ${liste.length ? liste.map((t, i) => carteTache(t, i)) : h`<div class="vide anim"><div class="halo">${brut(I.vide)}</div><h3>Rien en cours</h3><p>Colle un lien pour lancer un téléchargement. Les vidéos terminées t'attendent dans Fichiers et l'Historique.</p><button class="btn principal" data-aller="video">${brut(I.dl)} Télécharger une vidéo</button></div>`}
   </div>`;
 }
 
@@ -712,6 +842,7 @@ function boutonsTache(t) {
   if (ACTIFS.has(t.statut) || ["en_attente", "programme"].includes(t.statut)) r.push(b("pause", I.pause, "Mettre en pause"));
   if (t.statut === "pause") r.push(b("reprendre", I.lecture, "Reprendre", "accent"));
   if (["erreur", "annule"].includes(t.statut)) r.push(b("relancer", I.relancer, "Réessayer", "accent"));
+  if (t.statut === "termine" && t.fichier) r.push(b("lire", I.lecture, "Lire"), ...(E.etat?.local !== false ? [b("dossier", I.dossier, "Afficher dans le dossier")] : []));
   if (!["termine", "annule", "erreur"].includes(t.statut)) r.push(b("annuler", I.stop, "Annuler", "danger"));
   r.push(b("supprimer", I.poubelle, "Retirer de la liste", "danger"));
   return r;
@@ -782,6 +913,7 @@ $("#contenu").addEventListener("click", async (e) => {
   try {
     if (["pause", "reprendre", "annuler", "relancer"].includes(act)) await api(`/telechargements/${t.id}/${act}`, { methode: "POST" });
     else if (act === "lire") lire(t);
+    else if (act === "retelecharger") { E.p.video.saisie = t.url; aller("video"); analyser(t.url, "video"); }
     else if (act === "ouvrir" || act === "dossier") await api(`/ouvrir/${t.id}`, { methode: "POST", corps: { dossier: act === "dossier" } });
     else if (act === "enregistrer") { const a = document.createElement("a"); a.href = `/api/fichier/${t.id}?enregistrer=1`; a.click(); }
     else if (act === "supprimer") {
@@ -819,56 +951,250 @@ function lire(t) {
 $("#lecteur").addEventListener("close", () => { const v = $("#lecteur-video"); v.pause(); v.removeAttribute("src"); v.load(); });
 $("#lecteur").addEventListener("click", (e) => { if (e.target.closest("[data-fermer]") || e.target === e.currentTarget) $("#lecteur").close(); });
 
-// ── vue Bibliothèque ─────────────────────────────────────────────────
-function vueBibliotheque() {
-  const termines = [...E.taches.values()].filter((t) => t.statut === "termine");
-  const total = termines.reduce((s, t) => s + (t.taille_fichier || 0), 0);
+// ── vue Fichiers (dossier de téléchargement) ─────────────────────────
+async function chargerFichiers() {
+  try {
+    const d = await api("/fichiers");
+    E.fichiers = d.fichiers;
+    if (E.vue === "fichiers") rendre();
+  } catch (e) { toast(e.message, "err"); }
+}
+const fichiersFiltres = () => {
+  const { q, type, tri, dossier } = E.ff;
+  const l = (E.fichiers || []).filter((f) => (type === "tout" || f.type === type) && (!dossier || f.dossier === dossier) && (!q || `${f.titre} ${f.nom} ${f.dossier}`.toLowerCase().includes(q.toLowerCase())));
+  return l.sort((a, b) => (tri === "taille" ? b.taille - a.taille : tri === "nom" ? a.titre.localeCompare(b.titre, "fr") : b.date - a.date));
+};
+function vueFichiers() {
+  const tous = E.fichiers;
+  const total = (tous || []).reduce((s, f) => s + f.taille, 0);
   const d = E.etat?.disque;
+  const dossiers = [...new Set((tous || []).map((f) => f.dossier).filter(Boolean))].sort();
   return h`
   <div class="tete-page anim">
-    <h2>Bibliothèque</h2><span class="compte">${termines.length}</span>
+    <h2>Fichiers</h2><span class="compte">${tous ? tous.length : ""}</span>
     <div class="actions">
+      <button class="btn petit fantome" data-recharger-fichiers>${brut(I.relancer)} Actualiser</button>
       ${E.etat?.local !== false ? h`<button class="btn petit" data-ouvrir-dossier>${brut(I.dossier)} Ouvrir le dossier</button>` : ""}
-      <button class="btn petit fantome danger" data-global="vider_termines">${brut(I.poubelle)} Vider la liste</button>
     </div>
   </div>
   <div class="stats">
-    <div class="verre stat anim" style="--i:1"><span class="ic g1">${brut(I.biblio)}</span><div><div class="v">${termines.length}</div><div class="l">fichiers téléchargés</div></div></div>
-    <div class="verre stat anim" style="--i:2"><span class="ic g2">${brut(I.disque)}</span><div><div class="v">${taille(total)}</div><div class="l">au total</div></div></div>
+    <div class="verre stat anim" style="--i:1"><span class="ic g1">${brut(I.fichier)}</span><div><div class="v">${tous ? tous.length : "…"}</div><div class="l">fichiers · ${(tous || []).filter((f) => f.type === "video").length} vidéos, ${(tous || []).filter((f) => f.type === "audio").length} audios</div></div></div>
+    <div class="verre stat anim" style="--i:2"><span class="ic g2">${brut(I.disque)}</span><div><div class="v">${taille(total)}</div><div class="l">dans ${E.etat?.dossier ? E.etat.dossier.split("/").slice(-2).join("/") : "le dossier"}</div></div></div>
     ${d ? h`<div class="verre stat anim" style="--i:3"><span class="ic g3">${brut(I.dossier)}</span><div style="flex:1"><div class="v">${taille(d.libre)}</div><div class="l">libres sur le disque</div><div class="jauge"><i style="width:${((1 - d.libre / d.total) * 100).toFixed(1)}%"></i></div></div></div>` : ""}
   </div>
-  <div class="avec-icone anim" style="--i:4;margin-bottom:20px">${brut(I.chercher)}<input class="entree" id="recherche-biblio" placeholder="Rechercher dans la bibliothèque…" value="${E.recherche_biblio}" style="height:50px;border-radius:16px" /></div>
-  <div class="biblio" id="liste-biblio">${listeBiblio()}</div>`;
+  <div class="outils-fichiers anim" style="--i:4">
+    <div class="avec-icone">${brut(I.chercher)}<input class="entree" id="recherche-fichiers" placeholder="Rechercher un fichier…" value="${E.ff.q}" /></div>
+    <div class="segment">${[["tout", "Tout"], ["video", "Vidéos"], ["audio", "Audio"]].map(([k, l]) => h`<button data-ff-type="${k}" aria-pressed="${E.ff.type === k}">${l}</button>`)}</div>
+    <select class="entree" id="tri-fichiers">${[["date", "Plus récents"], ["taille", "Plus lourds"], ["nom", "Nom (A → Z)"]].map(([k, l]) => h`<option value="${k}" ${E.ff.tri === k ? "selected" : ""}>${l}</option>`)}</select>
+  </div>
+  ${dossiers.length ? h`<div class="dossiers anim" style="--i:5"><button class="puce" data-ff-dossier="" aria-pressed="${!E.ff.dossier}">${brut(I.dossier)} Tous</button>${dossiers.map((x) => h`<button class="puce" data-ff-dossier="${x}" aria-pressed="${E.ff.dossier === x}">${brut(I.liste)} ${x}</button>`)}</div>` : ""}
+  <div id="liste-fichiers">${listeFichiers()}</div>`;
 }
-function carteBiblio(t, i) {
-  const b = (action, icone, titre, cls = "") => h`<button class="icone-btn ${cls}" data-t="${t.id}" data-act="${action}" title="${titre}" aria-label="${titre}">${brut(icone)}</button>`;
+function listeFichiers() {
+  if (!E.fichiers) return h`<div class="grille-videos">${[...Array(6)].map((_, i) => h`<div class="verre carte-video anim" style="--i:${i}"><div class="squelette" style="aspect-ratio:16/9;border-radius:0"></div><div class="corps" style="flex-direction:column;gap:8px"><div class="squelette" style="height:14px;width:85%"></div><div class="squelette" style="height:12px;width:45%"></div></div></div>`)}</div>`;
+  const l = fichiersFiltres();
+  if (!l.length) return h`<div class="vide anim"><div class="halo">${brut(I.dossier)}</div><h3>${E.fichiers.length ? "Aucun fichier ne correspond" : "Le dossier est vide"}</h3><p>${E.fichiers.length ? "Change la recherche ou les filtres." : "Tes vidéos et musiques téléchargées apparaîtront ici."}</p>${E.fichiers.length ? "" : h`<button class="btn principal" data-aller="video">${brut(I.dl)} Télécharger une vidéo</button>`}</div>`;
   const local = E.etat?.local !== false;
-  return h`<article class="verre carte-video anim" style="--i:${Math.min(i, 12)}" data-t="${t.id}" data-act="lire">
-    <div class="vignette">${t.miniature ? h`<img src="${t.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : ""}
-      <span class="survol"><span class="rond-lecture">${brut(I.lecture)}</span></span>
-      ${t.options?.type === "audio" ? h`<span class="badge-audio">${(t.options.format_audio || "mp3").toUpperCase()}</span>` : ""}
-      ${t.duree ? h`<span class="duree">${duree(t.duree)}</span>` : ""}</div>
-    <div class="corps">
-      <div class="t" title="${t.titre}">${t.titre}</div>
-      <div class="s">${taille(t.taille_fichier)} · ${quand(t.fin)}</div>
-      ${t.pistes ? h`<div class="infos-carte"><span class="info-chip">${t.pistes}</span></div>` : ""}
-      ${t.message ? h`<div class="msg">${brut(I.info)}${t.message}</div>` : ""}
-      <div class="actions-carte">
-        ${local ? h`${b("ouvrir", I.ouvrir, "Ouvrir avec le lecteur")}${b("dossier", I.dossier, "Afficher dans le dossier")}` : ""}
-        ${b("enregistrer", I.enregistrer, "Enregistrer sur cet appareil")}
-        <span class="espace"></span>
-        ${b("supprimer", I.poubelle, "Retirer ou supprimer", "danger")}
+  const b = (f, action, icone, titre, cls = "") => h`<button class="icone-btn ${cls}" data-f="${f.chemin}" data-fact="${action}" title="${titre}" aria-label="${titre}">${brut(icone)}</button>`;
+  return h`<div class="grille-videos biblio">${l.map((f, i) => h`
+    <article class="verre carte-video anim" style="--i:${Math.min(i, 12)}" data-f="${f.chemin}" data-fact="lire">
+      <div class="vignette ${f.miniature ? "" : `placeholder ${f.type}`}">
+        ${f.miniature ? h`<img src="${f.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : brut(f.type === "audio" ? I.audio : I.video)}
+        <span class="survol"><span class="rond-lecture">${brut(I.lecture)}</span></span>
+        <span class="ext">${f.ext}</span>
+        ${f.duree ? h`<span class="duree">${duree(f.duree)}</span>` : ""}
       </div>
+      <div class="corps">
+        <div class="t" title="${f.titre}">${f.titre}</div>
+        <div class="s">${taille(f.taille)} · ${quand(f.date)}</div>
+        ${f.pistes || f.dossier ? h`<div class="infos-carte">${f.pistes ? h`<span class="info-chip">${f.pistes}</span>` : ""}${f.dossier ? h`<span class="info-chip">${brut(I.dossier.replace("<svg", '<svg style="width:12px;height:12px"'))}${f.dossier}</span>` : ""}</div>` : ""}
+        <div class="actions-carte">
+          ${local ? h`${b(f, "ouvrir", I.ouvrir, "Ouvrir avec le lecteur")}${b(f, "dossier", I.dossier, "Afficher dans le dossier")}` : ""}
+          ${b(f, "enregistrer", I.enregistrer, "Enregistrer sur cet appareil")}
+          <span class="espace"></span>
+          ${b(f, "supprimer", I.poubelle, "Supprimer le fichier", "danger")}
+        </div>
+      </div>
+    </article>`)}</div>`;
+}
+function rendreListeFichiers() { const z = $("#liste-fichiers"); if (z) z.innerHTML = html(listeFichiers()); }
+function lireChemin(chemin, titre) {
+  const d = $("#lecteur"), v = $("#lecteur-video");
+  $("#lecteur-titre").textContent = titre;
+  v.src = `/api/fichiers/lire?chemin=${encodeURIComponent(chemin)}`;
+  d.showModal(); v.play().catch(() => {});
+}
+$("#contenu").addEventListener("click", async (e) => {
+  if (E.vue !== "fichiers") return;
+  if (e.target.closest("[data-recharger-fichiers]")) { E.fichiers = null; rendreListeFichiers(); return chargerFichiers(); }
+  const ty = e.target.closest("[data-ff-type]");
+  if (ty) { E.ff.type = ty.dataset.ffType; return rendre(); }
+  const dos = e.target.closest("[data-ff-dossier]");
+  if (dos) { E.ff.dossier = dos.dataset.ffDossier; return rendre(); }
+  const b = e.target.closest("[data-fact]");
+  if (!b) return;
+  e.stopPropagation();
+  const f = (E.fichiers || []).find((x) => x.chemin === b.dataset.f);
+  if (!f) return;
+  try {
+    const act = b.dataset.fact;
+    if (act === "lire") lireChemin(f.chemin, f.titre);
+    else if (act === "ouvrir" || act === "dossier") await api("/fichiers/ouvrir", { methode: "POST", corps: { chemin: f.chemin, dossier: act === "dossier" } });
+    else if (act === "enregistrer") { const a = document.createElement("a"); a.href = `/api/fichiers/lire?chemin=${encodeURIComponent(f.chemin)}&enregistrer=1`; a.click(); }
+    else if (act === "supprimer") {
+      const rep = await choisir(`Supprimer « ${f.titre} » ?`, `${taille(f.taille)} seront libérés. Cette action est définitive.`, [["oui", "Supprimer le fichier"]]);
+      if (rep !== "oui") return;
+      await api(`/fichiers?chemin=${encodeURIComponent(f.chemin)}`, { methode: "DELETE" });
+      E.fichiers = E.fichiers.filter((x) => x.chemin !== f.chemin);
+      toast("Fichier supprimé", "ok"); rendre(); chargerEtat();
+    }
+  } catch (err) { toast(err.message, "err"); }
+});
+$("#contenu").addEventListener("change", (e) => {
+  if (E.vue === "fichiers" && e.target.id === "tri-fichiers") { E.ff.tri = e.target.value; rendreListeFichiers(); }
+});
+
+// ── vue Historique ───────────────────────────────────────────────────
+const tachesHisto = () => [...E.taches.values()].filter((t) => ["termine", "erreur", "annule"].includes(t.statut)).sort((a, b) => (b.fin || b.cree) - (a.fin || a.cree));
+const FILTRES_HISTO = { tout: [() => true, "Tout"], ok: [(t) => t.statut === "termine", "Réussis"], ko: [(t) => t.statut !== "termine", "Échecs"] };
+function vueHistorique() {
+  const toutes = tachesHisto();
+  return h`
+  <div class="tete-page anim">
+    <h2>Historique</h2><span class="compte">${toutes.length}</span>
+    <div class="actions">
+      <button class="btn petit fantome" data-exporter="json">${brut(I.exporter)} JSON</button>
+      <button class="btn petit fantome" data-exporter="csv">${brut(I.exporter)} CSV</button>
+      <button class="btn petit fantome danger" data-vider-histo>${brut(I.poubelle)} Vider l'historique</button>
     </div>
-  </article>`;
+  </div>
+  <div class="outils-fichiers anim" style="--i:1">
+    <div class="avec-icone">${brut(I.chercher)}<input class="entree" id="recherche-histo" placeholder="Rechercher dans l'historique…" value="${E.hq.q}" /></div>
+    <div class="onglets" style="margin:0">${Object.entries(FILTRES_HISTO).map(([k, [f, l]]) => h`<button data-hfiltre="${k}" aria-pressed="${E.hq.filtre === k}">${l}<span class="n">${toutes.filter(f).length}</span></button>`)}</div>
+  </div>
+  <div id="liste-histo">${listeHisto()}</div>`;
 }
-function listeBiblio() {
-  const q = E.recherche_biblio.toLowerCase();
-  const l = [...E.taches.values()].filter((t) => t.statut === "termine" && (!q || `${t.titre} ${t.chaine} ${t.groupe}`.toLowerCase().includes(q))).sort((a, b) => (b.fin || 0) - (a.fin || 0));
-  if (!l.length) return h`<div class="vide anim"><div class="halo">${brut(I.biblio)}</div><h3>${q ? "Aucun résultat" : "Ta bibliothèque est vide"}</h3><p>${q ? "Essaie un autre mot." : "Tes vidéos terminées apparaîtront ici, prêtes à être regardées."}</p>${q ? "" : h`<button class="btn principal" data-aller="telecharger">${brut(I.dl)} Télécharger une vidéo</button>`}</div>`;
-  return h`<div class="grille-videos">${l.map((t, i) => carteBiblio(t, i))}</div>`;
+function jourDe(t) {
+  const d = new Date((t.fin || t.cree) * 1000), auj = new Date();
+  const j = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((j(auj) - j(d)) / 864e5);
+  if (diff === 0) return "Aujourd'hui";
+  if (diff === 1) return "Hier";
+  if (diff < 7) return d.toLocaleDateString("fr-FR", { weekday: "long" });
+  return d.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
 }
-function rendreListeBiblio() { const z = $("#liste-biblio"); if (z) z.innerHTML = html(listeBiblio()); }
+function listeHisto() {
+  const q = E.hq.q.toLowerCase();
+  const l = tachesHisto().filter(FILTRES_HISTO[E.hq.filtre][0]).filter((t) => !q || `${t.titre} ${t.chaine} ${t.groupe} ${t.url}`.toLowerCase().includes(q));
+  if (!l.length) return h`<div class="vide anim"><div class="halo">${brut(I.horloge)}</div><h3>${q ? "Aucun résultat" : "Pas encore d'historique"}</h3><p>${q ? "Essaie un autre mot." : "Chaque téléchargement terminé ou échoué sera noté ici, jour par jour."}</p></div>`;
+  const jours = new Map();
+  for (const t of l) { const k = jourDe(t); if (!jours.has(k)) jours.set(k, []); jours.get(k).push(t); }
+  let i = 0;
+  return h`${[...jours].map(([jour, ts]) => h`
+    <div class="jour"><div class="jour-titre">${jour} · ${ts.length}</div>
+      <div class="histo">${ts.map((t) => {
+        const b = (action, icone, titre, cls = "") => h`<button class="icone-btn ${cls}" data-t="${t.id}" data-act="${action}" title="${titre}" aria-label="${titre}">${brut(icone)}</button>`;
+        const fini = t.statut === "termine" && t.fichier;
+        return h`<article class="verre ligne-histo anim" style="--i:${Math.min(i++, 12)}">
+          <div class="vignette">${t.miniature ? h`<img src="${t.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : ""}</div>
+          <div style="min-width:0">
+            <h4 title="${t.titre}">${t.titre}</h4>
+            <div class="sous-ligne">
+              <span class="statut ${t.statut}"><span class="point"></span>${LIBELLES[t.statut]}</span>
+              ${t.pistes ? h`<span class="info-chip">${t.pistes}</span>` : ""}
+              ${t.taille_fichier ? h`<span class="discret mono">${taille(t.taille_fichier)}</span>` : ""}
+              ${t.erreur ? h`<span style="color:var(--rouge)">${t.erreur}</span>` : ""}
+            </div>
+          </div>
+          <span class="heure">${new Date((t.fin || t.cree) * 1000).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>
+          <div class="boutons-tache">
+            ${fini ? b("lire", I.lecture, "Lire") : ""}
+            ${fini && E.etat?.local !== false ? b("dossier", I.dossier, "Afficher dans le dossier") : ""}
+            ${b("retelecharger", I.relancer, "Télécharger à nouveau (choisir langue, qualité…)", fini ? "" : "accent")}
+            ${b("supprimer", I.poubelle, "Retirer de l'historique", "danger")}
+          </div>
+        </article>`;
+      })}</div>
+    </div>`)}`;
+}
+function rendreListeHisto() { const z = $("#liste-histo"); if (z) z.innerHTML = html(listeHisto()); }
+function exporter(format) {
+  const l = tachesHisto().map((t) => ({ titre: t.titre, url: t.url, statut: LIBELLES[t.statut], pistes: t.pistes, taille: t.taille_fichier, fichier: t.fichier, date: new Date((t.fin || t.cree) * 1000).toISOString(), erreur: t.erreur }));
+  const contenu = format === "json" ? JSON.stringify(l, null, 2)
+    : [Object.keys(l[0] || { titre: "" }).join(";"), ...l.map((x) => Object.values(x).map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(";"))].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([format === "csv" ? "﻿" + contenu : contenu], { type: format === "json" ? "application/json" : "text/csv" }));
+  a.download = `yt-nexus-historique.${format}`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+$("#contenu").addEventListener("click", async (e) => {
+  if (E.vue !== "historique") return;
+  const f = e.target.closest("[data-hfiltre]");
+  if (f) { E.hq.filtre = f.dataset.hfiltre; return rendre(); }
+  const x = e.target.closest("[data-exporter]");
+  if (x) return exporter(x.dataset.exporter);
+  if (e.target.closest("[data-vider-histo]")) {
+    const rep = await choisir("Vider l'historique ?", "Les fichiers téléchargés restent sur ton disque.", [["oui", "Vider"]]);
+    if (rep !== "oui") return;
+    await api("/telechargements/tout/vider_termines", { methode: "POST" });
+    await api("/telechargements/tout/vider_echecs", { methode: "POST" });
+    toast("Historique vidé", "ok");
+  }
+});
+
+// ── vue Diagnostics ──────────────────────────────────────────────────
+async function chargerDiagnostics() {
+  try {
+    const [, d] = await Promise.all([chargerEtat(), api("/diagnostics")]);
+    E.diag = d;
+    if (E.vue === "diagnostics") rendre();
+  } catch (e) { toast(e.message, "err"); }
+}
+function vueDiagnostics() {
+  const e = E.etat || {}, d = E.diag, r = R();
+  const carte = (ic, g, l, v, etat, i) => h`<div class="verre carte-diag anim" style="--i:${i}"><span class="ic ${g}">${brut(ic)}</span><div style="min-width:0"><div class="l">${l}</div><div class="v">${v ?? "…"}</div>${etat ? h`<div class="etat ${etat[0] ? "ok-c" : "ko-c"}"><span class="point"></span>${etat[1]}</div>` : ""}</div></div>`;
+  const solveur = e.ejs && e.deno;
+  const cookies = r.cookies_navigateur ? `Navigateur : ${r.cookies_navigateur}` : e.cookies_fichier ? "Fichier cookies.txt" : "Aucun";
+  const t = E.test;
+  return h`
+  <div class="tete-page anim"><h2>Diagnostics</h2><span class="compte">${solveur && e.ffmpeg ? "tout est prêt" : "à vérifier"}</span>
+    <div class="actions"><button class="btn petit fantome" data-recharger-diag>${brut(I.relancer)} Actualiser</button></div></div>
+  <div class="verre test-yt anim" style="--i:1">
+    <span class="ic g2" style="width:52px;height:52px;border-radius:16px;display:grid;place-items:center;color:#fff">${brut(I.pouls)}</span>
+    <div class="texte"><h3>Tester la connexion à YouTube</h3><p>Analyse une vidéo de test pour vérifier que YouTube répond et que rien ne bloque.</p></div>
+    <button class="btn principal" data-test-yt ${t === "en_cours" ? "disabled" : ""}>${t === "en_cours" ? brut('<span class="rond mini"></span> Test en cours…') : h`${brut(I.lecture)} Lancer le test`}</button>
+    ${t && t !== "en_cours" ? h`<div class="resultat-test"><div class="alerte ${t.ok ? "info" : "err"}">${brut(t.ok ? I.ok : I.alerte)}<span>${t.ok ? h`<b>YouTube répond.</b> ${t.formats} formats trouvés en ${t.duree} s : les téléchargements devraient fonctionner.` : h`<b>Échec en ${t.duree} s :</b> ${t.message}`}</span></div></div>` : ""}
+  </div>
+  <div class="grille-diag">
+    ${carte(I.dl, "g1", "YT-NEXUS", e.version, null, 2)}
+    ${carte(I.eclair, "g2", "yt-dlp", e.ytdlp, [!!e.ytdlp, e.ytdlp ? "installé" : "absent"], 3)}
+    ${carte(I.bouclier, "g3", "Solveur YouTube (JS)", d?.deno?.split(" (")[0] || (e.deno ? "présent" : "absent"), [solveur, solveur ? `yt-dlp-ejs ${e.ejs}` : "deno ou yt-dlp-ejs manquant"], 4)}
+    ${carte(I.video, "g4", "ffmpeg", d?.ffmpeg?.replace(/^ffmpeg version /, "").split(" ")[0] || (e.ffmpeg ? "présent" : "absent"), [e.ffmpeg, e.ffmpeg ? "fusion des pistes OK" : "indispensable"], 5)}
+    ${carte(I.systeme, "g5", "Système", d ? `${d.systeme}` : null, d ? [true, `Python ${d.python} · Flask ${d.flask}`] : null, 6)}
+    ${carte(I.cookie, "g1", "Compte YouTube", cookies, [true, r.cookies_navigateur || e.cookies_fichier ? "cookies actifs" : "non requis en général"], 7)}
+    ${carte(I.dossier, "g2", "Dossier", e.dossier ? `…/${e.dossier.split("/").slice(-2).join("/")}` : null, [true, "créé automatiquement"], 8)}
+    ${e.disque ? h`<div class="verre carte-diag anim" style="--i:9"><span class="ic g3">${brut(I.disque)}</span><div style="flex:1"><div class="l">Espace disque</div><div class="v">${taille(e.disque.libre)} libres</div><div class="jauge"><i style="width:${((1 - e.disque.libre / e.disque.total) * 100).toFixed(1)}%"></i></div><div class="discret petit" style="margin-top:6px">sur ${taille(e.disque.total)}</div></div></div>` : ""}
+  </div>
+  <section class="verre section anim" style="--i:10">
+    <div class="section-tete"><span class="ic g4">${brut(I.relancer)}</span><div><h3>Mettre à jour yt-dlp</h3><p>YouTube change souvent : si les téléchargements se mettent à échouer, c'est la première chose à faire.</p></div>
+      <button class="btn petit" id="maj-ytdlp" style="margin-left:auto">${brut(I.relancer)} Mettre à jour</button></div>
+    <div class="rangee"><div class="texte"><span id="maj-etat">Version actuelle : ${e.ytdlp || "?"}</span></div></div>
+  </section>
+  ${!e.ffmpeg ? h`<div class="alerte err" style="margin-top:18px">${brut(I.alerte)}<span>ffmpeg est indispensable pour assembler vidéo et pistes audio : <code>sudo pacman -S ffmpeg</code></span></div>` : ""}
+  <section class="verre section anim" style="--i:11;margin-top:18px">
+    <div class="section-tete"><span class="ic g5">${brut(I.alerte)}</span><div><h3>Dernières erreurs</h3><p>${d?.erreurs?.length ? "Les échecs récents, pour comprendre ce qui coince." : "Aucune erreur récente."}</p></div></div>
+    ${d?.erreurs?.length ? h`<div class="liste-erreurs">${d.erreurs.map((x) => h`<div><b>${x.titre}</b><span>${x.erreur}</span><div class="discret petit" style="margin-top:3px">${quand(x.fin)}</div></div>`)}</div>` : ""}
+  </section>`;
+}
+$("#contenu").addEventListener("click", async (e) => {
+  if (E.vue !== "diagnostics") return;
+  if (e.target.closest("[data-recharger-diag]")) { E.test = null; return chargerDiagnostics(); }
+  if (e.target.closest("[data-test-yt]")) {
+    E.test = "en_cours"; rendre();
+    try { E.test = await api("/test-youtube", { methode: "POST" }); } catch (err) { E.test = { ok: false, message: err.message, duree: "?" }; }
+    if (E.vue === "diagnostics") rendre();
+  }
+});
 
 // ── vue Réglages ─────────────────────────────────────────────────────
 function vueReglages() {
@@ -878,9 +1204,9 @@ function vueReglages() {
   const sel = (k, titre, aide, opts) => rangee(titre, aide, h`<select class="entree" data-reglage="${k}">${opts.map(([v, t]) => h`<option value="${v}" ${String(r[k]) === String(v) ? "selected" : ""}>${t}</option>`)}</select>`);
   const txt = (k, titre, aide, ph = "") => rangee(titre, aide, h`<input class="entree" data-reglage="${k}" value="${r[k] ?? ""}" placeholder="${ph}" />`);
   const section = (id, icone, g, titre, desc, contenu, i) => h`<section class="verre section anim" style="--i:${i}" id="${id}"><div class="section-tete"><span class="ic ${g}">${brut(icone)}</span><div><h3>${titre}</h3><p>${desc}</p></div></div>${contenu}</section>`;
-  const menu = [["s-langue", I.langue, "Langue"], ["s-dl", I.dl, "Téléchargement"], ["s-reseau", I.reseau, "Réseau"], ["s-compte", I.compte, "Compte YouTube"], ["s-systeme", I.systeme, "Système"]];
+  const menu = [["s-langue", I.langue, "Langue"], ["s-dl", I.dl, "Téléchargement"], ["s-reseau", I.reseau, "Réseau"], ["s-compte", I.compte, "Compte YouTube"]];
   return h`
-  <div class="tete-page anim"><h2>Réglages</h2><span class="compte">enregistrés automatiquement</span></div>
+  <div class="tete-page anim"><h2>Paramètres</h2><span class="compte">enregistrés automatiquement</span></div>
   <div class="reglages">
     <nav class="verre menu-reglages anim" style="--i:1">${menu.map(([id, ic, l]) => h`<a href="#${id}" data-ancre="${id}">${brut(ic)}${l}</a>`)}</nav>
     <div class="sections">
@@ -910,16 +1236,6 @@ function vueReglages() {
         ${rangee("Fichier cookies.txt", e.cookies_fichier ? "Importé ✓" : "Alternative au navigateur", h`
           <label class="btn petit">${brut(I.enregistrer)} Importer<input type="file" accept=".txt" id="fichier-cookies" hidden /></label>
           ${e.cookies_fichier ? h`<button class="btn petit fantome danger" id="suppr-cookies">Supprimer</button>` : ""}`)}`, 5)}
-      ${section("s-systeme", I.systeme, "g5", "Système", "État des outils utilisés par YT-NEXUS.", h`
-        <div class="diag">
-          <div>YT-NEXUS<b>${e.version || "?"}</b></div>
-          <div>yt-dlp<b>${e.ytdlp || "absent"}</b></div>
-          <div>Solveur YouTube<b class="${e.ejs && e.deno ? "ok-c" : "ko-c"}">${e.ejs && e.deno ? "● OK" : "● manquant"}</b></div>
-          <div>ffmpeg<b class="${e.ffmpeg ? "ok-c" : "ko-c"}">${e.ffmpeg ? "● OK" : "● absent"}</b></div>
-          ${e.disque ? h`<div>Espace libre<b>${taille(e.disque.libre)}</b></div>` : ""}
-        </div>
-        ${!e.ffmpeg ? h`<div style="padding:0 24px 16px"><div class="alerte err">${brut(I.alerte)}<span>ffmpeg est indispensable pour assembler vidéo et pistes audio : <code>sudo pacman -S ffmpeg</code></span></div></div>` : ""}
-        ${rangee("Mettre à jour yt-dlp", h`<span id="maj-etat">À faire si YouTube se met à refuser les téléchargements.</span>`, h`<button class="btn petit" id="maj-ytdlp">${brut(I.relancer)} Mettre à jour</button>`)}`, 6)}
     </div>
   </div>`;
 }
@@ -938,7 +1254,7 @@ function changerReglage(el) {
     } catch (err) { toast(err.message, "err"); rendre(); }
   }, el.tagName === "INPUT" && el.type !== "checkbox" ? 600 : 0);
 }
-$("#contenu").addEventListener("input", (e) => { if (E.vue === "reglages" && e.target.tagName === "INPUT" && e.target.type !== "checkbox" && e.target.type !== "file") changerReglage(e.target); });
+$("#contenu").addEventListener("input", (e) => { if (E.vue === "parametres" && e.target.tagName === "INPUT" && e.target.type !== "checkbox" && e.target.type !== "file") changerReglage(e.target); });
 $("#contenu").addEventListener("change", async (e) => {
   if (e.target.id !== "fichier-cookies") return;
   const f = e.target.files[0];
@@ -948,7 +1264,7 @@ $("#contenu").addEventListener("change", async (e) => {
   catch (err) { toast(err.message, "err"); }
 });
 $("#contenu").addEventListener("click", async (e) => {
-  if (E.vue !== "reglages") return;
+  if (E.vue !== "parametres" && E.vue !== "diagnostics") return;
   const ancre = e.target.closest("[data-ancre]");
   if (ancre) { e.preventDefault(); return document.getElementById(ancre.dataset.ancre)?.scrollIntoView({ behavior: "smooth" }); }
   if (e.target.closest("#suppr-cookies")) { await api("/cookies", { methode: "DELETE" }); await chargerEtat(); return rendre(); }
@@ -979,7 +1295,7 @@ function termine(t) {
   toast(`Terminé : ${t.titre}`, "ok");
   if (R().notifications && document.hidden && "Notification" in window && Notification.permission === "granted") {
     const n = new Notification("Téléchargement terminé", { body: t.titre, icon: "/static/icone.svg" });
-    n.onclick = () => { window.focus(); aller("bibliotheque"); };
+    n.onclick = () => { window.focus(); aller("fichiers"); };
   }
 }
 
@@ -987,6 +1303,9 @@ function majPastille() {
   const actifs = [...E.taches.values()].filter((t) => ACTIFS.has(t.statut) || ["en_attente", "programme"].includes(t.statut));
   const p = $("#pastille");
   p.hidden = !actifs.length; p.textContent = actifs.length;
+  const echecs = [...E.taches.values()].filter((t) => t.statut === "erreur").length;
+  const ph = $("#pastille-hist");
+  ph.hidden = !echecs; ph.textContent = echecs; ph.title = `${echecs} échec(s)`;
   const vitesse = actifs.reduce((s, t) => s + (t.statut === "telechargement" ? t.vitesse || 0 : 0), 0);
   $("#debit").hidden = !vitesse;
   $("#debit-v").textContent = vitesse ? `${taille(vitesse)}/s` : "";
@@ -997,19 +1316,21 @@ function majPastille() {
 }
 
 function appliquer(maj) {
-  let structure = false;
+  let structure = false, nouveauFichier = false;
   for (const t of maj.taches || []) {
     const ancien = fusionner(t);
-    if (E.vue === "file") {
+    if (t.statut === "termine" && ancien && ancien.statut !== "termine") nouveauFichier = true;
+    if (E.vue === "en-cours") {
       const visible = t.statut !== "termine" && FILTRES[E.filtre][0](t);
       const avant = ancien && ancien.statut !== "termine" && FILTRES[E.filtre][0](ancien);
       if (visible ? !majCarte(t, ancien) : avant) structure = true;
-    } else if (E.vue === "bibliotheque" && (t.statut === "termine" || ancien?.statut === "termine")) structure = true;
+    } else if (E.vue === "historique" && (["termine", "erreur", "annule"].includes(t.statut) || ["termine", "erreur", "annule"].includes(ancien?.statut))) structure = true;
   }
   for (const id of maj.supprimees || []) if (E.taches.delete(id)) structure = true;
-  if (structure && (E.vue === "file" || E.vue === "bibliotheque")) {
+  if (nouveauFichier && E.vue === "fichiers") chargerFichiers();
+  if (structure && (E.vue === "en-cours" || E.vue === "historique")) {
     const defil = window.scrollY;
-    if (E.vue === "bibliotheque") rendreListeBiblio(); else rendre();
+    if (E.vue === "historique") rendreListeHisto(); else rendre();
     $$("#contenu .anim").forEach((el) => el.classList.remove("anim"));
     window.scrollTo(0, defil);
   }
@@ -1036,7 +1357,7 @@ async function chargerTaches() {
   E.taches = new Map(d.taches.map((t) => [t.id, t]));
   E.rev = d.rev;
   majPastille();
-  if (E.vue === "file" || E.vue === "bibliotheque") rendre();
+  if (E.vue === "en-cours" || E.vue === "historique") rendre();
 }
 async function chargerEtat() {
   try { E.etat = await api("/etat"); } catch (e) { toast(e.message, "err"); }
@@ -1044,10 +1365,7 @@ async function chargerEtat() {
 
 // ── coller / glisser-déposer / raccourcis ────────────────────────────
 function depuisDehors(t) {
-  E.saisie = t;
-  if (E.vue !== "telecharger") aller("telecharger");
-  const ta = $("#saisie"); if (ta) ta.value = t;
-  lancerSaisie(t);
+  router(t, SOURCES.includes(E.vue) ? E.vue : "video");
 }
 document.addEventListener("paste", (e) => {
   if (e.target.closest?.("input, textarea, [contenteditable]")) return;
@@ -1067,8 +1385,8 @@ document.addEventListener("drop", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "/" && !e.target.closest("input, textarea, select")) {
-    e.preventDefault(); if (E.vue !== "telecharger") aller("telecharger");
-    $("#saisie").focus(); $("#saisie").select();
+    e.preventDefault(); if (!SOURCES.includes(E.vue)) aller("video");
+    const champ = $("#saisie") || $("#saisie-lot"); champ?.focus(); champ?.select?.();
   }
 });
 
@@ -1076,13 +1394,13 @@ document.addEventListener("keydown", (e) => {
 (async () => {
   majBoutonTheme();
   await chargerEtat();
-  E.choix = choixParDefaut();
+  for (const v of SOURCES) E.p[v].choix = choixParDefaut();
   const p = new URLSearchParams(location.search);
   const partage = [p.get("url"), p.get("texte"), p.get("titre")].filter(Boolean).join(" ");
   const lien = partage.match(/https?:\/\/\S+/)?.[0];
-  aller(location.hash.slice(1) || "telecharger", { histo: false });
+  aller(location.hash.slice(1) || "video", { histo: false });
   await chargerTaches().catch((e) => toast(e.message, "err"));
   ecouter();
   if (document.fonts) document.fonts.ready.then(placerIndicateur);
-  if (lien) { history.replaceState(null, "", "/"); E.saisie = lien; analyser(lien); }
+  if (lien) { history.replaceState(null, "", "/"); router(lien, "video"); }
 })();

@@ -92,11 +92,14 @@ def _miniature(e):
 
 def _entree(e):
     url = e.get("url") or e.get("webpage_url")
-    if url and not url.startswith("http") and e.get("ie_key") == "Youtube":
+    youtube = e.get("ie_key") == "Youtube" or "youtube.com/watch" in (url or "") or "youtu.be/" in (url or "")
+    if url and not url.startswith("http") and youtube:
         url = f"https://www.youtube.com/watch?v={e['id']}"
+    # Miniature légère et toujours présente pour YouTube (320×180)
+    miniature = f"https://i.ytimg.com/vi/{e['id']}/mqdefault.jpg" if youtube and e.get("id") else _miniature(e)
     return {
         "id": e.get("id"), "titre": e.get("title") or "Sans titre", "url": url,
-        "duree": e.get("duration"), "miniature": _miniature(e),
+        "duree": e.get("duration"), "miniature": miniature,
         "chaine": e.get("channel") or e.get("uploader"), "vues": e.get("view_count"),
         "direct": e.get("live_status") == "is_live",
     }
