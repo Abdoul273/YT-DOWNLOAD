@@ -11,7 +11,15 @@ NOMS = {
     "fi": "Finnois", "cs": "Tchèque", "sk": "Slovaque", "ro": "Roumain", "hu": "Hongrois",
     "el": "Grec", "bg": "Bulgare", "sr": "Serbe", "hr": "Croate", "sw": "Swahili",
     "wo": "Wolof", "ff": "Peul", "ha": "Haoussa", "yo": "Yoruba", "am": "Amharique",
-    "fil": "Filipino", "ca": "Catalan",
+    "fil": "Filipino", "ca": "Catalan", "iw": "Hébreu", "in": "Indonésien", "jw": "Javanais",
+    "jv": "Javanais", "ne": "Népalais", "si": "Cingalais", "km": "Khmer", "my": "Birman", "lo": "Lao",
+    "ka": "Géorgien", "hy": "Arménien", "az": "Azéri", "kk": "Kazakh", "uz": "Ouzbek", "mn": "Mongol",
+    "lt": "Lituanien", "lv": "Letton", "et": "Estonien", "sl": "Slovène", "is": "Islandais",
+    "ga": "Irlandais", "cy": "Gallois", "eu": "Basque", "gl": "Galicien", "af": "Afrikaans",
+    "zu": "Zoulou", "xh": "Xhosa", "so": "Somali", "gu": "Gujarati", "kn": "Kannada", "or": "Odia",
+    "as": "Assamais", "be": "Biélorusse", "mk": "Macédonien", "sq": "Albanais", "bs": "Bosniaque",
+    "ps": "Pachto", "ku": "Kurde", "tl": "Tagalog", "ig": "Igbo", "rw": "Kinyarwanda", "mg": "Malgache",
+    "ln": "Lingala", "bm": "Bambara", "ti": "Tigrigna", "lb": "Luxembourgeois", "mt": "Maltais",
 }
 
 DRAPEAUX = {
@@ -22,7 +30,11 @@ DRAPEAUX = {
     "th": "🇹🇭", "ja": "🇯🇵", "ko": "🇰🇷", "zh": "🇨🇳", "zh-hans": "🇨🇳", "zh-hant": "🇹🇼",
     "sv": "🇸🇪", "no": "🇳🇴", "da": "🇩🇰", "fi": "🇫🇮", "cs": "🇨🇿", "sk": "🇸🇰", "ro": "🇷🇴",
     "hu": "🇭🇺", "el": "🇬🇷", "bg": "🇧🇬", "sr": "🇷🇸", "hr": "🇭🇷", "sw": "🇰🇪", "wo": "🇸🇳",
-    "ff": "🇬🇳", "ha": "🇳🇬", "yo": "🇳🇬", "am": "🇪🇹", "fil": "🇵🇭", "ca": "🇪🇸",
+    "ff": "🇬🇳", "ha": "🇳🇬", "yo": "🇳🇬", "am": "🇪🇹", "fil": "🇵🇭", "ca": "🇪🇸", "iw": "🇮🇱",
+    "in": "🇮🇩", "ne": "🇳🇵", "si": "🇱🇰", "km": "🇰🇭", "my": "🇲🇲", "ka": "🇬🇪", "hy": "🇦🇲",
+    "az": "🇦🇿", "kk": "🇰🇿", "uz": "🇺🇿", "mn": "🇲🇳", "lt": "🇱🇹", "lv": "🇱🇻", "et": "🇪🇪",
+    "sl": "🇸🇮", "is": "🇮🇸", "ga": "🇮🇪", "af": "🇿🇦", "zu": "🇿🇦", "so": "🇸🇴", "be": "🇧🇾",
+    "mk": "🇲🇰", "sq": "🇦🇱", "tl": "🇵🇭", "mg": "🇲🇬", "bm": "🇲🇱", "ln": "🇨🇩", "rw": "🇷🇼",
 }
 
 

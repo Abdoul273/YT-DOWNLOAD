@@ -4,8 +4,8 @@
   "description": "Télécharge les vidéos YouTube avec la piste audio en français.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#02040e",
-  "theme_color": "#02040e",
+  "background_color": "#05060d",
+  "theme_color": "#05060d",
   "icons": [{ "src": "/static/icone.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }],
   "share_target": { "action": "/", "method": "GET", "params": { "title": "titre", "text": "texte", "url": "url" } }
 }

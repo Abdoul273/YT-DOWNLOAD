@@ -8,7 +8,7 @@ deuxième piste si demandé.
 from . import langues
 
 HAUTEURS = [4320, 2160, 1440, 1080, 720, 480, 360, 240, 144]
-LIBELLES = {4320: "8K", 2160: "4K", 1440: "2K", 1080: "Full HD", 720: "HD"}
+LIBELLES = {4320: "8K", 2160: "4K", 1440: "2K", 1080: "FHD", 720: "HD"}
 
 
 def _est_audio(f):
