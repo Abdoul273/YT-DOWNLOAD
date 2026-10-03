@@ -240,3 +240,30 @@ Future<List<Entree>> rechercher(String requete, Filtres f, {int nombre = 30}) as
   if (f.tri == 'date') res.sort((a, b) => (b.date ?? 0).compareTo(a.date ?? 0));
   return res;
 }
+
+/// Flux lisible directement pour l'aperçu : un format vidéo+audio (≤ 720p),
+/// sinon le manifeste HLS. Renvoie null si rien n'est lisible sans fusion.
+({String url, Map<String, String> entetes, bool hls})? sourceApercu(Json info) {
+  final formats = ((info['formats'] as List?) ?? []).whereType<Map>().where((f) => f['url'] is String).toList();
+  bool avecSon(Map f) => f['acodec'] != null && f['acodec'] != 'none';
+  bool avecImage(Map f) => f['vcodec'] != null && f['vcodec'] != 'none';
+  int hauteur(Map f) => ((f['height'] ?? 0) as num).toInt();
+  Map<String, String> entetes(Map f) =>
+      ((f['http_headers'] ?? info['http_headers'] ?? {}) as Map).map((k, v) => MapEntry('$k', '$v'));
+
+  for (final hls in [false, true]) {
+    final muxes = formats
+        .where((f) => avecSon(f) && avecImage(f) && hauteur(f) <= 720)
+        .where((f) => '${f['protocol']}'.startsWith('m3u8') == hls && !'${f['protocol']}'.contains('dash'))
+        .toList()
+      ..sort((a, b) => hauteur(b).compareTo(hauteur(a)));
+    if (muxes.isNotEmpty) {
+      final f = muxes.first;
+      return (url: (hls ? (f['manifest_url'] ?? f['url']) : f['url']) as String, entetes: entetes(f), hls: hls);
+    }
+  }
+  if (info['manifest_url'] is String && '${info['manifest_url']}'.contains('m3u8')) {
+    return (url: info['manifest_url'] as String, entetes: entetes(info), hls: true);
+  }
+  return null;
+}

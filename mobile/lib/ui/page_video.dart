@@ -10,6 +10,7 @@ import '../moteur/formats.dart' show Qualite;
 import '../moteur/langues.dart' as langues;
 import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
+import 'apercu.dart';
 import 'etat.dart';
 import 'theme.dart';
 
@@ -325,7 +326,7 @@ class _VueVideoState extends State<_VueVideo> {
       Verre(
         padding: const EdgeInsets.all(12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Miniature(v.miniature, largeur: double.infinity, rayon: 16, texteDuree: formaterDuree(v.duree)),
+          Apercu(v),
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 12, 4, 4),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
