@@ -152,7 +152,7 @@ class _PageRechercheState extends State<PageRecherche> {
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 Icon(Icons.travel_explore_rounded, size: 52, color: c.t3),
                 const SizedBox(height: 10),
-                Text('Cherche une vidéo : ▶ pour l'aperçu,\ntouche-la pour choisir la piste et la qualité.',
+                Text("Cherche une vidéo : ▶ pour l'aperçu,\ntouche-la pour choisir la piste et la qualité.",
                     textAlign: TextAlign.center, style: TextStyle(color: c.t3)),
                 const SizedBox(height: 80),
               ]),
