@@ -16,7 +16,11 @@ import 'theme.dart';
 
 class Apercu extends StatefulWidget {
   final analyse.ResumeVideo v;
-  const Apercu(this.v, {super.key});
+  /// Lance la lecture dès l'affichage.
+  final bool auto;
+  /// Onglet qui affiche l'aperçu : la lecture se met en pause quand on le quitte.
+  final int ongletParent;
+  const Apercu(this.v, {super.key, this.auto = false, this.ongletParent = 0});
   @override
   State<Apercu> createState() => _ApercuState();
 }
@@ -31,6 +35,7 @@ class _ApercuState extends State<Apercu> {
   void initState() {
     super.initState();
     onglet.addListener(_ongletChange);
+    if (widget.auto && !widget.v.direct) WidgetsBinding.instance.addPostFrameCallback((_) => _lancer());
   }
 
   @override
@@ -42,7 +47,7 @@ class _ApercuState extends State<Apercu> {
   }
 
   void _ongletChange() {
-    if (onglet.value != 0) _ctrl?.pause();
+    if (onglet.value != widget.ongletParent) _ctrl?.pause();
   }
 
   Future<void> _lancer() async {

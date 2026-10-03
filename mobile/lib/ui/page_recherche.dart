@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../moteur/analyse.dart' as analyse;
 import '../moteur/taches.dart';
+import 'apercu.dart';
 import 'etat.dart';
 import 'theme.dart';
 
@@ -151,7 +152,7 @@ class _PageRechercheState extends State<PageRecherche> {
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 Icon(Icons.travel_explore_rounded, size: 52, color: c.t3),
                 const SizedBox(height: 10),
-                Text('Cherche une vidéo, puis touche-la\npour choisir la piste et la qualité.',
+                Text('Cherche une vidéo : ▶ pour l'aperçu,\ntouche-la pour choisir la piste et la qualité.',
                     textAlign: TextAlign.center, style: TextStyle(color: c.t3)),
                 const SizedBox(height: 80),
               ]),
@@ -190,7 +191,19 @@ class _Resultat extends StatelessWidget {
       rayon: 20,
       onTap: e.url == null ? null : () => ouvrirLien(e.url!),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Miniature(e.miniature, largeur: 138, texteDuree: e.direct ? 'DIRECT' : formaterDuree(e.duree)),
+        GestureDetector(
+          onTap: e.url == null || e.direct ? null : () => _FeuilleApercu.ouvrir(context, e),
+          child: Stack(alignment: Alignment.center, children: [
+            Miniature(e.miniature, largeur: 138, texteDuree: e.direct ? 'DIRECT' : formaterDuree(e.duree)),
+            if (e.url != null && !e.direct)
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(color: Colors.black.withAlpha(150), shape: BoxShape.circle),
+                child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 24),
+              ),
+          ]),
+        ),
         const SizedBox(width: 12),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -206,6 +219,77 @@ class _Resultat extends StatelessWidget {
           ]),
         ),
         Icon(Icons.chevron_right_rounded, color: c.t3),
+      ]),
+    );
+  }
+}
+
+/// Aperçu d'un résultat sans quitter la recherche.
+class _FeuilleApercu extends StatefulWidget {
+  final analyse.Entree e;
+  const _FeuilleApercu(this.e);
+
+  static void ouvrir(BuildContext context, analyse.Entree e) => showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: context.c.fond,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+        builder: (_) => _FeuilleApercu(e),
+      );
+
+  @override
+  State<_FeuilleApercu> createState() => _FeuilleApercuState();
+}
+
+class _FeuilleApercuState extends State<_FeuilleApercu> {
+  late final Future<analyse.ResumeVideo> _video =
+      analyse.infoComplete(widget.e.url!).then(analyse.resumeVideo);
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final e = widget.e;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + MediaQuery.paddingOf(context).bottom),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Center(
+          child: Container(
+              width: 40, height: 4, decoration: BoxDecoration(color: c.t3, borderRadius: BorderRadius.circular(2))),
+        ),
+        const SizedBox(height: 14),
+        FutureBuilder(
+          future: _video,
+          builder: (context, s) {
+            if (s.hasData) return Apercu(s.data!, auto: true, ongletParent: 1);
+            return Stack(alignment: Alignment.center, children: [
+              Miniature(e.miniature, largeur: double.infinity, rayon: 16),
+              if (s.hasError)
+                Container(
+                  margin: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(color: Colors.black.withAlpha(180), borderRadius: BorderRadius.circular(12)),
+                  child: Text('${s.error}', style: const TextStyle(color: Colors.white, fontSize: 12.5)),
+                )
+              else
+                const CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+            ]);
+          },
+        ),
+        const SizedBox(height: 12),
+        Text(e.titre,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontWeight: FontWeight.w700, color: c.t1, fontSize: 15, height: 1.3)),
+        if (e.chaine != null) ...[
+          const SizedBox(height: 4),
+          Text(e.chaine!, style: TextStyle(color: c.t2, fontSize: 12.5)),
+        ],
+        const SizedBox(height: 16),
+        BoutonGrad('Choisir la qualité et télécharger', icone: Icons.download_rounded, onTap: () {
+          Navigator.of(context).pop();
+          ouvrirLien(e.url!);
+        }),
       ]),
     );
   }
