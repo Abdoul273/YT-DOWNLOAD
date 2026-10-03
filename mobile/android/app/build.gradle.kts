@@ -27,9 +27,12 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        ndk {
-            // yt-dlp embarqué (Python + ffmpeg) : seulement les architectures utiles
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        // yt-dlp embarqué (Python + ffmpeg) : seulement les architectures utiles.
+        // Avec --split-per-abi, Flutter pose ses propres splits.abi, incompatibles avec ndk.abiFilters.
+        if (!project.hasProperty("split-per-abi")) {
+            ndk {
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            }
         }
     }
 
