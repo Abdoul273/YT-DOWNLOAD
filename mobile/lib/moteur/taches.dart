@@ -462,7 +462,8 @@ class Gestionnaire extends ChangeNotifier {
       ..eta = null
       ..tailleFichier = t.fichiers.fold(0, (a, f) => a + f.taille)
       ..fin = _maintenant()
-      ..erreur = '';
+      ..erreur = ''
+      ..message = '';
     _maj(t, sauver: true);
     try {
       File('${Natif.dossierCache}/infos/${t.id}.json').deleteSync();
@@ -563,7 +564,9 @@ class Gestionnaire extends ChangeNotifier {
       ..duree = (info['duration'] as num?)?.toInt() ?? t.duree
       ..pistes = desc
       ..total = t.parties.fold(0, (a, p) => a + p.$2);
-    if (t.tentatives == 1 || msg.isNotEmpty) t.message = msg;
+    // Toujours remplacer : sinon « Accès refusé (403). Nouvelle tentative… » de la tentative
+    // précédente reste affiché alors que la reprise télécharge normalement.
+    t.message = msg;
     _maj(t);
 
     final cmd = _commande(t, sel, tri, cheminInfo, piste ?? originale, deux ? originale : null, secours, langue);
