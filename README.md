@@ -26,6 +26,10 @@ L'interface est sur http://localhost:5050.
 
 Lancement manuel : `python3 app.py`. Accès depuis le téléphone (même Wi-Fi) : `HOST=0.0.0.0 python3 app.py`.
 
+## App Android
+
+Version mobile autonome (yt-dlp embarqué) dans [`mobile/`](mobile/README.md).
+
 ## Organisation
 
 ```
