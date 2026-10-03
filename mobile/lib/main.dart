@@ -27,7 +27,10 @@ class App extends StatefulWidget {
 }
 
 class _AppState extends State<App> {
-  late final Future<void> _demarrage = _demarrer();
+  late Future<void> _demarrage = _demarrer();
+  bool _ecoutePartages = false;
+
+  void _reessayer() => setState(() => _demarrage = _demarrer());
 
   Future<void> _demarrer() async {
     await Natif.init();
@@ -36,7 +39,10 @@ class _AppState extends State<App> {
     Natif.demanderNotifications();
     final partage = await Natif.partageInitial();
     if (partage != null) ouvrirLien(partage);
-    Natif.partages.listen(ouvrirLien);
+    if (!_ecoutePartages) {
+      _ecoutePartages = true;
+      Natif.partages.listen(ouvrirLien);
+    }
     _majAuto();
   }
 
@@ -68,7 +74,7 @@ class _AppState extends State<App> {
             child: FutureBuilder(
               future: _demarrage,
               builder: (context, s) {
-                if (s.hasError) return _Demarrage(erreur: '${s.error}');
+                if (s.hasError) return _Demarrage(erreur: '${s.error}', reessayer: _reessayer);
                 if (s.connectionState != ConnectionState.done) return const _Demarrage();
                 return const Accueil();
               },
@@ -82,7 +88,8 @@ class _AppState extends State<App> {
 
 class _Demarrage extends StatelessWidget {
   final String? erreur;
-  const _Demarrage({this.erreur});
+  final VoidCallback? reessayer;
+  const _Demarrage({this.erreur, this.reessayer});
   @override
   Widget build(BuildContext context) {
     final c = context.c;
@@ -101,8 +108,11 @@ class _Demarrage extends StatelessWidget {
                 Text('Préparation du moteur…', style: TextStyle(color: c.t2)),
                 const SizedBox(height: 4),
                 Text('Le premier lancement prend quelques secondes', style: TextStyle(color: c.t3, fontSize: 12)),
-              ] else
+              ] else ...[
                 Text('Impossible de démarrer yt-dlp :\n$erreur', textAlign: TextAlign.center, style: TextStyle(color: c.rouge)),
+                const SizedBox(height: 20),
+                FilledButton.icon(onPressed: reessayer, icon: const Icon(Icons.refresh), label: const Text('Réessayer')),
+              ],
             ]),
           ),
         ),

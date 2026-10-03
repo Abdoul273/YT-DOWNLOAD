@@ -48,6 +48,11 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // R8 renommait/supprimait des classes de youtubedl-android (commons-compress, Jackson)
+            // utilisées par réflexion : l'extraction de Python plantait et l'app se fermait au lancement.
+            isMinifyEnabled = false
+            isShrinkResources = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 }

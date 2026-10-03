@@ -72,9 +72,11 @@ class MainActivity : FlutterActivity() {
 
     private fun enFond(res: MethodChannel.Result, travail: () -> Any?) {
         pool.execute {
+            // Throwable et pas Exception : une Error (ExceptionInInitializerError, UnsatisfiedLinkError…)
+            // levée dans un thread du pool tuerait toute l'app au lieu d'être renvoyée à Flutter.
             try {
                 repondre(res, travail())
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 echouer(res, e.message ?: e.toString())
             }
         }
@@ -156,10 +158,22 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun demarrerMoteur() {
+        YoutubeDL.getInstance().init(applicationContext)
+        FFmpeg.getInstance().init(applicationContext)
+    }
+
     private fun initialiser(): Map<String, Any?> {
         if (!pret) {
-            YoutubeDL.getInstance().init(applicationContext)
-            FFmpeg.getInstance().init(applicationContext)
+            try {
+                demarrerMoteur()
+            } catch (e: Throwable) {
+                // Moteur extrait à moitié (app tuée pendant le 1er lancement, mise à jour ratée…) :
+                // on efface Python/ffmpeg/yt-dlp extraits et on recommence, sans que
+                // l'utilisateur ait à vider le cache lui-même.
+                File(noBackupFilesDir, "youtubedl-android").deleteRecursively()
+                demarrerMoteur()
+            }
             pret = true
         }
         return mapOf(
@@ -190,7 +204,7 @@ class MainActivity : FlutterActivity() {
                 repondre(res, mapOf("code" to -1, "annule" to true, "sortie" to "", "erreur" to ""))
             } catch (e: YoutubeDLException) {
                 repondre(res, mapOf("code" to 1, "sortie" to "", "erreur" to (e.message ?: "")))
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 repondre(res, mapOf("code" to 1, "sortie" to "", "erreur" to (e.message ?: e.toString())))
             }
         }
