@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../moteur/analyse.dart' as analyse;
 import '../moteur/formats.dart' show Qualite;
+import '../moteur/gouts.dart';
 import '../moteur/langues.dart' as langues;
 import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
@@ -80,6 +81,9 @@ class _PageVideoState extends State<PageVideo> {
     try {
       final r = await analyse.analyser(liens.isNotEmpty ? liens.first : texte);
       if (jeton == _jeton) setState(() => _resultat = r);
+      if (r is analyse.ResumeVideo) {
+        gouts.signal('analyse', url: r.url, titre: r.titre, chaine: r.chaine, chaineId: r.info['channel_id'] as String?);
+      }
     } catch (e) {
       if (jeton == _jeton) setState(() => _erreur = '$e');
     } finally {
@@ -311,6 +315,7 @@ class _VueVideoState extends State<_VueVideo> {
       'debut': _debut.text,
       'fin': _fin.text,
     });
+    gouts.signal('telechargement', url: v.url, titre: v.titre, chaine: v.chaine, chaineId: v.info['channel_id'] as String?);
     toast(context, 'Ajouté à la file');
     onglet.value = 2;
   }

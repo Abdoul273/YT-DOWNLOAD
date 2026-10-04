@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import '../moteur/analyse.dart' as analyse;
+import '../moteur/gouts.dart';
 import '../moteur/natif.dart';
 import '../moteur/taches.dart' show formaterDuree;
 import 'etat.dart';
@@ -77,6 +78,8 @@ class _ApercuState extends State<Apercu> {
         });
         await ctrl.play();
         _programmerMasquage();
+        final v = widget.v;
+        gouts.signal('apercu', url: v.url, titre: v.titre, chaine: v.chaine, chaineId: v.info['channel_id'] as String?);
         return;
       } catch (e) {
         if (frais || e is String) {

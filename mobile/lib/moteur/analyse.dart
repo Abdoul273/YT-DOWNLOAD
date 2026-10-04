@@ -78,11 +78,20 @@ int? _ts(String? uploadDate) {
 
 /// Une vidéo d'une liste (recherche, playlist, chaîne).
 class Entree {
-  final String? id, url, miniature, chaine;
+  final String? id, url, miniature, chaine, chaineId;
   final String titre;
   final int? duree, vues, date;
   final bool direct;
-  Entree(this.id, this.titre, this.url, this.duree, this.miniature, this.chaine, this.vues, this.date, this.direct);
+  Entree(this.id, this.titre, this.url, this.duree, this.miniature, this.chaine, this.vues, this.date, this.direct,
+      {this.chaineId});
+
+  Json versJson() => {
+        'id': id, 'titre': titre, 'url': url, 'duree': duree, 'miniature': miniature, 'chaine': chaine,
+        'vues': vues, 'date': date, 'direct': direct, 'chaine_id': chaineId,
+      };
+  factory Entree.depuis(Map d) => Entree(d['id'], d['titre'] ?? 'Sans titre', d['url'], d['duree'], d['miniature'],
+      d['chaine'], d['vues'], d['date'], d['direct'] == true,
+      chaineId: d['chaine_id']);
 }
 
 Entree _entree(Json e) {
@@ -96,7 +105,17 @@ Entree _entree(Json e) {
     (e['channel'] ?? e['uploader']) as String?, (e['view_count'] as num?)?.toInt(),
     ((e['timestamp'] ?? e['release_timestamp']) as num?)?.toInt() ?? _ts(e['upload_date'] as String?),
     e['live_status'] == 'is_live',
+    chaineId: e['channel_id'] as String?,
   );
+}
+
+/// Vidéos d'une liste (mix, chaîne, page) sans les détails, limitées à [max].
+Future<List<Entree>> listeVideos(String url, {int max = 25}) async {
+  final brut = await _extraire(url, ['--flat-playlist', '--playlist-end', '$max']);
+  return [
+    for (final e in ((brut['entries'] as List?) ?? []).whereType<Map>())
+      if (e['id'] != null && e['ie_key'] != 'YoutubeTab') _entree(e.cast<String, dynamic>())
+  ];
 }
 
 String normaliserUrl(String url) {
