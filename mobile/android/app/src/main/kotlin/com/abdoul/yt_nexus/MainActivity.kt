@@ -8,7 +8,10 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.provider.Settings
+import android.view.WindowManager
 import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
@@ -139,6 +142,45 @@ class MainActivity : FlutterActivity() {
                 )
                 res.success(null)
             }
+            "luminosite" -> {
+                // -1 : rend la main au réglage du système
+                val v = appel.argument<Double>("valeur")
+                val attrs = window.attributes
+                if (v != null) {
+                    attrs.screenBrightness = if (v < 0) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                    else v.toFloat().coerceIn(0.01f, 1f)
+                    window.attributes = attrs
+                }
+                val actuelle = window.attributes.screenBrightness
+                res.success(
+                    if (actuelle >= 0) actuelle.toDouble()
+                    else try {
+                        Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255.0
+                    } catch (e: Exception) {
+                        0.5
+                    },
+                )
+            }
+            "lireTexte" -> enFond(res) {
+                contentResolver.openInputStream(Uri.parse(appel.argument<String>("uri")!!))?.use {
+                    it.readBytes().toString(Charsets.UTF_8)
+                }
+            }
+            "installerApk" -> {
+                // Android demande une autorisation par app avant d'installer un APK
+                if (!packageManager.canRequestPackageInstalls()) {
+                    lancer(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")), res)
+                    return
+                }
+                val apk = File(appel.argument<String>("chemin")!!)
+                val uri = FileProvider.getUriForFile(this, "$packageName.fichiers", apk)
+                val i = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                lancer(i, res)
+            }
+            "peutInstaller" -> res.success(packageManager.canRequestPackageInstalls())
             "demanderNotifications" -> {
                 if (android.os.Build.VERSION.SDK_INT >= 33) {
                     requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 7)
@@ -178,6 +220,8 @@ class MainActivity : FlutterActivity() {
         }
         return mapOf(
             "version" to YoutubeDL.getInstance().versionName(applicationContext),
+            "versionApp" to packageManager.getPackageInfo(packageName, 0).versionName,
+            "abi" to (android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: ""),
             "fichiers" to filesDir.absolutePath,
             "cache" to cacheDir.absolutePath,
             "travail" to (getExternalFilesDir("travail") ?: File(filesDir, "travail")).absolutePath,

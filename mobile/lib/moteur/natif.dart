@@ -32,6 +32,7 @@ class Natif {
 
   static late String dossierFichiers, dossierCache, dossierTravail;
   static String version = '?';
+  static String versionApp = '0.0.0', abi = '';
 
   static Stream<String> get partages => _partages.stream;
 
@@ -49,6 +50,8 @@ class Natif {
     dossierCache = r['cache'];
     dossierTravail = r['travail'];
     version = r['version'] ?? '?';
+    versionApp = r['versionApp'] ?? versionApp;
+    abi = r['abi'] ?? '';
   }
 
   static Future<String?> partageInitial() => _canal.invokeMethod<String>('partageInitial');
@@ -90,5 +93,11 @@ class Natif {
       _canal.invokeMethod('service', {'actif': actif, 'titre': titre, 'texte': texte, 'progression': progression});
   static Future<void> notifier(String titre, String texte) =>
       _canal.invokeMethod('notifier', {'titre': titre, 'texte': texte});
+  /// Luminosité de la fenêtre (0‥1) ; -1 rend la main au système. Sans [valeur], lit seulement.
+  static Future<double> luminosite([double? valeur]) async =>
+      await _canal.invokeMethod<double>('luminosite', {'valeur': valeur}) ?? 0.5;
+  static Future<String?> lireTexte(String uri) => _canal.invokeMethod<String>('lireTexte', {'uri': uri});
+  static Future<bool> peutInstaller() async => await _canal.invokeMethod<bool>('peutInstaller') ?? false;
+  static Future<void> installerApk(String chemin) => _canal.invokeMethod('installerApk', {'chemin': chemin});
   static Future<void> demanderNotifications() => _canal.invokeMethod('demanderNotifications');
 }
