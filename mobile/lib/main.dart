@@ -3,10 +3,12 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'moteur/gouts.dart';
 import 'moteur/natif.dart';
 import 'moteur/reglages.dart';
 import 'moteur/taches.dart';
 import 'ui/etat.dart';
+import 'ui/fenetre_maj.dart';
 import 'ui/page_fichiers.dart';
 import 'ui/page_file.dart';
 import 'ui/page_recherche.dart';
@@ -36,6 +38,7 @@ class _AppState extends State<App> {
     await Natif.init();
     await reglages.charger();
     await gestionnaire.demarrer();
+    await gouts.charger();
     Natif.demanderNotifications();
     final partage = await Natif.partageInitial();
     if (partage != null) ouvrirLien(partage);
@@ -188,6 +191,7 @@ class Accueil extends StatelessWidget {
                       );
                     },
                   ),
+                  const BoutonMaj(),
                   IconButton(
                     tooltip: 'Thème',
                     onPressed: () => reglages['theme'] = c.sombre ? 'clair' : 'sombre',

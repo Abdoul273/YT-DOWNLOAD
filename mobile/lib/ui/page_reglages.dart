@@ -4,8 +4,11 @@ library;
 import 'package:flutter/material.dart';
 
 import '../moteur/langues.dart' as langues;
+import '../moteur/gouts.dart';
+import '../moteur/maj.dart';
 import '../moteur/natif.dart';
 import '../moteur/reglages.dart';
+import 'fenetre_maj.dart';
 import 'theme.dart';
 
 class PageReglages extends StatefulWidget {
@@ -193,6 +196,34 @@ class _PageReglagesState extends State<PageReglages> {
                   sous: reglages.aDesCookies ? 'Enregistrés ✓' : 'Aucun — utile si YouTube bloque',
                   fin: Icon(Icons.chevron_right_rounded, color: c.t3),
                   onTap: _cookies,
+                ),
+              ]),
+            ),
+            const SizedBox(height: 12),
+            Verre(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Etiquette('Application'),
+                ListenableBuilder(
+                  listenable: maj,
+                  builder: (context, _) => _Ligne(
+                    titre: 'YT-NEXUS ${Natif.versionApp}',
+                    sous: maj.dispo != null ? 'Version ${maj.dispo!.version} disponible' : 'Rechercher une mise à jour',
+                    fin: Icon(maj.dispo != null ? Icons.new_releases_rounded : Icons.chevron_right_rounded,
+                        color: maj.dispo != null ? c.indigo : c.t3),
+                    onTap: () {
+                      if (maj.dispo == null) maj.verifier(force: true);
+                      ouvrirFenetreMaj(context);
+                    },
+                  ),
+                ),
+                _Ligne(
+                  titre: 'Recommandations',
+                  sous: 'Effacer l’historique de recherche et les goûts appris',
+                  fin: Icon(Icons.delete_sweep_outlined, color: c.t3),
+                  onTap: () {
+                    gouts.effacer();
+                    toast(context, 'Historique effacé');
+                  },
                 ),
               ]),
             ),
