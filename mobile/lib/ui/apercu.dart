@@ -1,5 +1,5 @@
 /// Aperçu d'une vidéo avant téléchargement : lecture en streaming du flux direct
-/// (format vidéo+audio ≤ 720p ou HLS) trouvé par yt-dlp lors de l'analyse.
+/// (manifeste HLS adaptatif ou format vidéo+audio) trouvé par yt-dlp lors de l'analyse.
 library;
 
 import 'dart:async';
@@ -56,43 +56,64 @@ class _ApercuState extends State<Apercu> {
       _charge = true;
       _erreur = null;
     });
-    // Les liens directs expirent : en cas d'échec on réessaie avec des infos fraîches
-    for (final frais in [false, true]) {
+    // Les liens directs expirent : en cas d'échec on réessaie avec des infos fraîches,
+    // puis avec d'autres clients YouTube.
+    final url = widget.v.url;
+    final etapes = <Future<Map<String, dynamic>> Function()>[
+      () async => widget.v.info,
+      () => analyse.infoComplete(url, frais: true),
+      () => analyse.infoApercuSecours(url),
+    ];
+    Object? derniere;
+    var aucunFlux = true;
+    for (final etape in etapes) {
       try {
-        final info = frais ? await analyse.infoComplete(widget.v.url, frais: true) : widget.v.info;
-        final src = analyse.sourceApercu(info);
-        if (src == null) throw 'Aucun flux lisible directement pour cette vidéo.';
-        final ctrl = VideoPlayerController.networkUrl(Uri.parse(src.url),
-            httpHeaders: src.entetes, formatHint: src.hls ? VideoFormat.hls : null);
-        await ctrl.initialize();
-        if (!mounted) {
-          ctrl.dispose();
-          return;
+        final sources = analyse.sourcesApercu(await etape());
+        if (sources.isNotEmpty) aucunFlux = false;
+        for (final src in sources) {
+          if (!mounted) return;
+          if (await _essayer(src)) return;
         }
-        ctrl.addListener(() {
-          if (mounted) setState(() {});
-        });
-        setState(() {
-          _ctrl = ctrl;
-          _charge = false;
-        });
-        await ctrl.play();
-        _programmerMasquage();
-        final v = widget.v;
-        gouts.signal('apercu', url: v.url, titre: v.titre, chaine: v.chaine, chaineId: v.info['channel_id'] as String?);
-        return;
       } catch (e) {
-        if (frais || e is String) {
-          if (mounted) {
-            setState(() {
-              _charge = false;
-              _erreur = e is String ? e : 'Lecture impossible (${'$e'.split('\n').first}).';
-            });
-          }
-          return;
-        }
+        derniere = e;
       }
     }
+    if (mounted) {
+      setState(() {
+        _charge = false;
+        _erreur = aucunFlux && derniere == null
+            ? 'Aucun flux lisible directement pour cette vidéo.'
+            : 'Lecture impossible${derniere == null ? '' : ' (${'$derniere'.split('\n').first})'}.';
+      });
+    }
+  }
+
+  /// Ouvre [src] dans le lecteur ; false si le flux ne se lance pas.
+  Future<bool> _essayer(analyse.SourceApercu src) async {
+    final ctrl = VideoPlayerController.networkUrl(Uri.parse(src.url),
+        httpHeaders: src.entetes, formatHint: src.hls ? VideoFormat.hls : null);
+    try {
+      await ctrl.initialize().timeout(const Duration(seconds: 20));
+    } catch (_) {
+      ctrl.dispose();
+      return false;
+    }
+    if (!mounted) {
+      ctrl.dispose();
+      return true;
+    }
+    ctrl.addListener(() {
+      if (mounted) setState(() {});
+    });
+    setState(() {
+      _ctrl = ctrl;
+      _charge = false;
+    });
+    await ctrl.play();
+    _programmerMasquage();
+    final v = widget.v;
+    gouts.signal('apercu', url: v.url, titre: v.titre, chaine: v.chaine, chaineId: v.info['channel_id'] as String?);
+    return true;
   }
 
   void _programmerMasquage() {

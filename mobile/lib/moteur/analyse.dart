@@ -260,29 +260,57 @@ Future<List<Entree>> rechercher(String requete, Filtres f, {int nombre = 30}) as
   return res;
 }
 
-/// Flux lisible directement pour l'aperçu : un format vidéo+audio (≤ 720p),
-/// sinon le manifeste HLS. Renvoie null si rien n'est lisible sans fusion.
-({String url, Map<String, String> entetes, bool hls})? sourceApercu(Json info) {
+typedef SourceApercu = ({String url, Map<String, String> entetes, bool hls});
+
+/// Flux lisibles directement pour l'aperçu, du meilleur au moins bon :
+/// 1. le manifeste HLS maître (adaptatif, jusqu'à 1080p, son inclus : yt-dlp marque
+///    chaque variante « vidéo seule » mais le maître référence les pistes audio) ;
+/// 2. un format vidéo+audio progressif (souvent le 360p n°18) ;
+/// 3. une variante HLS déjà multiplexée.
+/// Liste vide si rien n'est lisible sans fusion.
+List<SourceApercu> sourcesApercu(Json info) {
   final formats = ((info['formats'] as List?) ?? []).whereType<Map>().where((f) => f['url'] is String).toList();
   bool avecSon(Map f) => f['acodec'] != null && f['acodec'] != 'none';
   bool avecImage(Map f) => f['vcodec'] != null && f['vcodec'] != 'none';
+  bool estHls(Map f) => '${f['protocol']}'.startsWith('m3u8');
   int hauteur(Map f) => ((f['height'] ?? 0) as num).toInt();
   Map<String, String> entetes(Map f) =>
       ((f['http_headers'] ?? info['http_headers'] ?? {}) as Map).map((k, v) => MapEntry('$k', '$v'));
 
-  for (final hls in [false, true]) {
-    final muxes = formats
-        .where((f) => avecSon(f) && avecImage(f) && hauteur(f) <= 720)
-        .where((f) => '${f['protocol']}'.startsWith('m3u8') == hls && !'${f['protocol']}'.contains('dash'))
-        .toList()
-      ..sort((a, b) => hauteur(b).compareTo(hauteur(a)));
-    if (muxes.isNotEmpty) {
-      final f = muxes.first;
-      return (url: (hls ? (f['manifest_url'] ?? f['url']) : f['url']) as String, entetes: entetes(f), hls: hls);
-    }
+  final res = <SourceApercu>[];
+  final vus = <String>{};
+  void ajouter(String url, Map f, bool hls) {
+    if (vus.add(url)) res.add((url: url, entetes: entetes(f), hls: hls));
+  }
+
+  // 1. Manifeste maître (préférence aux variantes H.264, décodées partout)
+  final variantes = formats.where((f) => estHls(f) && f['manifest_url'] is String).toList()
+    ..sort((a, b) {
+      int score(Map f) => ('${f['vcodec']}'.startsWith('avc1') ? 1 : 0);
+      return score(b).compareTo(score(a));
+    });
+  for (final f in variantes) {
+    ajouter(f['manifest_url'] as String, f, true);
   }
   if (info['manifest_url'] is String && '${info['manifest_url']}'.contains('m3u8')) {
-    return (url: info['manifest_url'] as String, entetes: entetes(info), hls: true);
+    ajouter(info['manifest_url'] as String, info, true);
   }
-  return null;
+
+  // 2. Progressif vidéo+audio, 3. variante HLS multiplexée
+  for (final hls in [false, true]) {
+    final muxes = formats
+        .where((f) => avecSon(f) && avecImage(f) && hauteur(f) <= 1080)
+        .where((f) => estHls(f) == hls && !'${f['protocol']}'.contains('dash'))
+        .toList()
+      ..sort((a, b) => hauteur(b).compareTo(hauteur(a)));
+    for (final f in muxes.take(2)) {
+      ajouter(f['url'] as String, f, hls);
+    }
+  }
+  return res;
 }
+
+/// Infos de secours pour l'aperçu : clients YouTube qui exposent le HLS et le format 18
+/// quand l'extraction par défaut n'a rien donné de lisible.
+Future<Json> infoApercuSecours(String url) =>
+    _extraire(url, ['--no-playlist', '--extractor-args', 'youtube:player_client=default,android_vr,mweb']);
