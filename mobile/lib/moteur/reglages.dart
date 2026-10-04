@@ -47,6 +47,12 @@ class Reglages extends ChangeNotifier {
     _sauver();
   }
 
+  /// Pour les données internes (positions de lecture…) : pas de reconstruction de l'interface.
+  void ecrireSansPrevenir(String cle, dynamic valeur) {
+    _v[cle] = valeur;
+    _sauver();
+  }
+
   Map<String, dynamic> get tout => Map.unmodifiable(_v);
 
   Future<void> charger() async {

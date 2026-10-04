@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../moteur/natif.dart';
 import '../moteur/taches.dart';
+import 'lecteur.dart';
 import 'theme.dart';
 
 class PageFichiers extends StatefulWidget {
@@ -18,6 +19,22 @@ class _PageFichiersState extends State<PageFichiers> {
   String _type = 'tout'; // tout | video | audio
 
   bool _estAudio(Tache t) => t.fichierPrincipal?.mime.startsWith('audio') ?? t.options['type'] == 'audio';
+
+  bool _lisible(Tache t) {
+    final m = t.fichierPrincipal?.mime ?? '';
+    return m.startsWith('video') || m.startsWith('audio');
+  }
+
+  /// Lecteur intégré, avec les autres fichiers de la liste affichée pour enchaîner.
+  void _lire(List<Tache> liste, Tache t) {
+    final f = t.fichierPrincipal!;
+    if (!_lisible(t)) {
+      Natif.ouvrir(f.uri, f.mime);
+      return;
+    }
+    final lisibles = liste.where(_lisible).toList();
+    ouvrirLecteur(context, lisibles, lisibles.indexOf(t));
+  }
 
   Future<void> _supprimer(Tache t) async {
     final c = context.c;
@@ -129,7 +146,7 @@ class _PageFichiersState extends State<PageFichiers> {
                   return Verre(
                     padding: const EdgeInsets.all(10),
                     rayon: 20,
-                    onTap: () => Natif.ouvrir(f.uri, f.mime),
+                    onTap: () => _lire(liste, t),
                     child: Row(children: [
                       Stack(children: [
                         Miniature(t.miniature, largeur: 112, rayon: 10, texteDuree: formaterDuree(t.duree)),
@@ -170,6 +187,8 @@ class _PageFichiersState extends State<PageFichiers> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                         onSelected: (a) {
                           switch (a) {
+                            case 'lire':
+                              _lire(liste, t);
                             case 'ouvrir':
                               Natif.ouvrir(f.uri, f.mime);
                             case 'partager':
@@ -183,7 +202,8 @@ class _PageFichiersState extends State<PageFichiers> {
                           }
                         },
                         itemBuilder: (_) => [
-                          const PopupMenuItem(value: 'ouvrir', child: Text('Ouvrir')),
+                          if (_lisible(t)) const PopupMenuItem(value: 'lire', child: Text('Lire')),
+                          const PopupMenuItem(value: 'ouvrir', child: Text('Ouvrir avec…')),
                           const PopupMenuItem(value: 'partager', child: Text('Partager')),
                           const PopupMenuItem(value: 'youtube', child: Text('Voir sur YouTube')),
                           const PopupMenuItem(value: 'retirer', child: Text('Retirer de la liste')),
