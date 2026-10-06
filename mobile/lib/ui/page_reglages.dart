@@ -203,6 +203,7 @@ class _PageReglagesState extends State<PageReglages> {
                 ],
                 inter('sous_dossier_playlist', 'Un dossier par playlist', 'Téléchargements/YT-NEXUS/<playlist>'),
                 inter('notifications', 'Notification à la fin', 'Quand un téléchargement est terminé'),
+                inter('presse_papiers_auto', 'Lien copié détecté', 'Propose de télécharger un lien YouTube copié, à l’ouverture de l’app'),
               ]),
             ),
             const SizedBox(height: 12),
