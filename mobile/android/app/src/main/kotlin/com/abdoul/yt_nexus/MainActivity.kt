@@ -1,7 +1,11 @@
 package com.abdoul.yt_nexus
 
 import android.content.ContentValues
+import android.app.PictureInPictureParams
 import android.content.Intent
+import android.content.res.Configuration
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -9,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Rational
 import android.view.WindowManager
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
@@ -35,11 +40,14 @@ class MainActivity : FlutterActivity() {
     private var evenements: EventChannel.EventSink? = null
     private var partageEnAttente: String? = null
     @Volatile private var pret = false
+    private var pipAuto = false
+    private var pipRatio = 16.0 / 9.0
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val messager = flutterEngine.dartExecutor.binaryMessenger
         MethodChannel(messager, "yt_nexus/natif").setMethodCallHandler { appel, res -> traiter(appel, res) }
+        ServiceLecture.ecouteur = { emettre(it) }
         EventChannel(messager, "yt_nexus/evenements").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
                 evenements = sink
@@ -59,6 +67,42 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         textePartage(intent)?.let { emettre(mapOf("type" to "partage", "texte" to it)) }
+    }
+
+    // ── image dans l'image ──────────────────────────────────────────────
+    private fun paramsPip(): PictureInPictureParams.Builder {
+        // Android refuse les rapports extrêmes
+        val r = pipRatio.coerceIn(0.45, 2.3)
+        val b = PictureInPictureParams.Builder().setAspectRatio(Rational((r * 1000).toInt(), 1000))
+        if (android.os.Build.VERSION.SDK_INT >= 31) b.setAutoEnterEnabled(pipAuto)
+        return b
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Android 12+ entre tout seul (setAutoEnterEnabled) ; avant, on le fait ici
+        if (pipAuto && android.os.Build.VERSION.SDK_INT < 31) {
+            try {
+                enterPictureInPictureMode(paramsPip().build())
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(actif: Boolean, config: Configuration) {
+        super.onPictureInPictureModeChanged(actif, config)
+        emettre(mapOf("type" to "pip", "actif" to actif))
+    }
+
+    private fun typeReseau(): String {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val c = cm.getNetworkCapabilities(cm.activeNetwork) ?: return "aucun"
+        return when {
+            c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || c.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ->
+                if (c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) "wifi" else "mobile"
+            c.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobile"
+            else -> "autre"
+        }
     }
 
     private fun textePartage(intent: Intent?): String? {
@@ -142,6 +186,34 @@ class MainActivity : FlutterActivity() {
                 )
                 res.success(null)
             }
+            "media" -> {
+                @Suppress("UNCHECKED_CAST")
+                ServiceLecture.mettreAJour(this, appel.arguments as Map<String, Any?>)
+                res.success(null)
+            }
+            "mediaArreter" -> {
+                ServiceLecture.arreter(this)
+                res.success(null)
+            }
+            "pip" -> {
+                pipRatio = appel.argument<Double>("ratio") ?: pipRatio
+                try {
+                    enterPictureInPictureMode(paramsPip().build())
+                    res.success(true)
+                } catch (e: Exception) {
+                    res.success(false)
+                }
+            }
+            "pipAuto" -> {
+                pipAuto = appel.argument<Boolean>("actif") == true
+                pipRatio = appel.argument<Double>("ratio") ?: pipRatio
+                try {
+                    setPictureInPictureParams(paramsPip().build())
+                } catch (e: Exception) {
+                }
+                res.success(null)
+            }
+            "reseau" -> res.success(typeReseau())
             "luminosite" -> {
                 // -1 : rend la main au réglage du système
                 val v = appel.argument<Double>("valeur")

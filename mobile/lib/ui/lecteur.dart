@@ -3,6 +3,8 @@
 /// Gestes : double appui à gauche/droite = ±10 s, glisser horizontalement = avancer,
 /// glisser verticalement à gauche = luminosité, à droite = volume, appui long = vitesse ×2. Pistes audio (doublage/VO), sous-titres .srt, vitesse,
 /// répétition, verrouillage, enchaînement et reprise là où on s'était arrêté.
+/// La lecture continue en arrière-plan (notification média, écran verrouillé) et
+/// une vidéo passe en image dans l'image quand on quitte l'app.
 library;
 
 import 'dart:async';
@@ -39,7 +41,8 @@ class _LecteurState extends State<Lecteur> {
   late int _index = widget.index;
   String? _erreur;
   bool _controles = true, _verrou = false, _remplir = false, _boucle = false, _sousTitresActifs = true;
-  bool _aSousTitres = false, _signale = false;
+  bool _aSousTitres = false, _signale = false, _pip = false, _enLecture = false;
+  final _abos = <StreamSubscription>[];
   double _vitesse = 1;
   List<VideoAudioTrack> _pistes = [];
   Timer? _masquer;
@@ -64,6 +67,10 @@ class _LecteurState extends State<Lecteur> {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     Natif.luminosite().then((v) => _luminosite = v);
+    _abos.add(Natif.commandesMedia.listen(_commande));
+    _abos.add(Natif.pipEtat.listen((v) {
+      if (mounted) setState(() => _pip = v);
+    }));
     _charger();
   }
 
@@ -73,6 +80,11 @@ class _LecteurState extends State<Lecteur> {
     _masquer?.cancel();
     _finIndication?.cancel();
     _finSaut?.cancel();
+    for (final a in _abos) {
+      a.cancel();
+    }
+    Natif.mediaArreter();
+    Natif.pipAuto(false, 16 / 9);
     _ctrl?.dispose();
     Natif.luminosite(-1);
     SystemChrome.setPreferredOrientations([]);
@@ -85,6 +97,7 @@ class _LecteurState extends State<Lecteur> {
     _memoriserPosition();
     final ancien = _ctrl;
     ancien?.removeListener(_maj);
+    _enLecture = false;
     setState(() {
       _ctrl = null;
       _erreur = null;
@@ -127,6 +140,7 @@ class _LecteurState extends State<Lecteur> {
     setState(() => _ctrl = ctrl);
     _orienter();
     await ctrl.play();
+    _synchro();
     _programmerMasquage();
     try {
       final p = await ctrl.getAudioTracks();
@@ -163,10 +177,65 @@ class _LecteurState extends State<Lecteur> {
         : [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
   }
 
+  /// Notification média + image dans l'image automatique : à appeler quand l'état de lecture change.
+  void _synchro() {
+    final c = _ctrl;
+    if (c == null || !c.value.isInitialized) return;
+    final v = c.value;
+    _enLecture = v.isPlaying;
+    Natif.media(
+      titre: _tache.titre,
+      artiste: _tache.chaine ?? '',
+      image: _tache.miniature,
+      lecture: v.isPlaying,
+      position: v.position.inMilliseconds,
+      duree: v.duration.inMilliseconds,
+      vitesse: _vitesse,
+      prec: _index > 0,
+      suiv: _index < widget.liste.length - 1,
+    );
+    if (!_audio) Natif.pipAuto(v.isPlaying && reglages['pip_auto'] == true, _ratio(c));
+  }
+
+  double _ratio(VideoPlayerController c) {
+    final t = c.value.size;
+    return t.height > 0 ? t.width / t.height : 16 / 9;
+  }
+
+  Future<void> _entrerPip() async {
+    final c = _ctrl;
+    if (c == null) return;
+    if (!await Natif.pip(_ratio(c)) && mounted) toast(context, 'Image dans l’image indisponible', erreur: true);
+  }
+
+  /// Boutons de la notification média.
+  void _commande(({String action, int position}) m) {
+    final c = _ctrl;
+    if (!mounted) return;
+    switch (m.action) {
+      case 'play':
+        c?.play();
+      case 'pause':
+        c?.pause();
+        _memoriserPosition();
+      case 'next':
+        _aller(_index + 1);
+      case 'prev':
+        _aller(_index - 1);
+      case 'seek':
+        c?.seekTo(Duration(milliseconds: m.position)).then((_) => _synchro());
+      case 'stop':
+        c?.pause();
+        _memoriserPosition();
+        Navigator.of(context).pop();
+    }
+  }
+
   void _maj() {
     final c = _ctrl;
     if (!mounted || c == null) return;
     final v = c.value;
+    if (v.isInitialized && v.isPlaying != _enLecture) _synchro();
     if (!_signale && v.duration > Duration.zero &&
         (v.position.inSeconds > 60 || v.position.inMilliseconds > v.duration.inMilliseconds * 0.3)) {
       _signale = true;
@@ -259,7 +328,7 @@ class _LecteurState extends State<Lecteur> {
     var cible = c.value.position + Duration(seconds: 10 * sens);
     if (cible < Duration.zero) cible = Duration.zero;
     if (cible > d) cible = d;
-    c.seekTo(cible);
+    c.seekTo(cible).then((_) => _synchro());
     _indiquer('${_cumulSaut > 0 ? '+' : ''}$_cumulSaut s', sens > 0 ? Icons.fast_forward_rounded : Icons.fast_rewind_rounded);
     _finSaut?.cancel();
     _finSaut = Timer(const Duration(milliseconds: 900), () => _cumulSaut = 0);
@@ -299,6 +368,7 @@ class _LecteurState extends State<Lecteur> {
       ], (v) {
         setState(() => _vitesse = v);
         _ctrl?.setPlaybackSpeed(v);
+        _synchro();
       });
 
   String _nomPiste(VideoAudioTrack p, int i) {
@@ -328,6 +398,8 @@ class _LecteurState extends State<Lecteur> {
   Widget build(BuildContext context) {
     final ctrl = _ctrl;
     final taille = MediaQuery.sizeOf(context);
+    // Fenêtre flottante : l'image seule, sans contrôles
+    if (_pip && ctrl != null) return Scaffold(backgroundColor: Colors.black, body: _image(ctrl));
     return PopScope(
       canPop: !_verrou,
       child: Scaffold(
@@ -394,7 +466,7 @@ class _LecteurState extends State<Lecteur> {
                     onHorizontalDragEnd: _verrou
                         ? null
                         : (_) {
-                            if (_cible != null) ctrl.seekTo(_cible!);
+                            if (_cible != null) ctrl.seekTo(_cible!).then((_) => _synchro());
                             setState(() {
                               _cible = null;
                               _indication = null;
@@ -570,6 +642,12 @@ class _LecteurState extends State<Lecteur> {
                         Text(_tache.chaine!, maxLines: 1, style: const TextStyle(color: Colors.white70, fontSize: 12)),
                     ]),
                   ),
+                  if (!_audio)
+                    IconButton(
+                        color: blanc,
+                        tooltip: 'Image dans l’image',
+                        icon: const Icon(Icons.picture_in_picture_alt_rounded),
+                        onPressed: _entrerPip),
                   if (_pistes.length > 1)
                     IconButton(color: blanc, tooltip: 'Piste audio', icon: const Icon(Icons.translate_rounded), onPressed: _menuPistes),
                   if (_aSousTitres)
@@ -654,7 +732,7 @@ class _LecteurState extends State<Lecteur> {
                       onChangeStart: (_) => _masquer?.cancel(),
                       onChanged: (x) => setState(() => _cible = Duration(milliseconds: x.round())),
                       onChangeEnd: (x) {
-                        ctrl.seekTo(Duration(milliseconds: x.round()));
+                        ctrl.seekTo(Duration(milliseconds: x.round())).then((_) => _synchro());
                         setState(() => _cible = null);
                         _programmerMasquage();
                       },

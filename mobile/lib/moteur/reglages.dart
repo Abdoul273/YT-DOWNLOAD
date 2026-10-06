@@ -28,6 +28,12 @@ const reglagesDefaut = <String, dynamic>{
   'notifications': true,
   'relances': 4, // nouvelles tentatives automatiques
   'wifi_seulement': false,
+  'plage_active': false, // ne télécharger que dans une plage horaire (ex. la nuit)
+  'plage_debut': 23 * 60, // minutes depuis minuit
+  'plage_fin': 7 * 60,
+  'pip_auto': true, // vidéo en image dans l'image en quittant l'app
+  'favoris': <String>[], // ids des fichiers favoris
+  'tri_fichiers': 'recent',
   'theme': 'sombre',
   'maj_auto': true,
   'derniere_maj': 0,

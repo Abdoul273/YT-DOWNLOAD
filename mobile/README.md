@@ -8,7 +8,11 @@ Même logique que la version web : piste doublée française en 1ʳᵉ piste, VO
   Playlists, chaînes et lots de plusieurs liens.
 - **Recherche** YouTube avec tri et filtres.
 - **En cours** : file en direct, pause/reprise réelles, relances automatiques, notification de progression.
-- **Fichiers** : rangés dans `Téléchargements/YT-NEXUS`, ouvrir/partager/supprimer.
+- **Fichiers** : rangés dans `Téléchargements/YT-NEXUS`, ouvrir/partager/supprimer. Tri, favoris, filtre par
+  playlist, sélection multiple (appui long), barre « reprendre » sur les vidéos entamées.
+- **Lecteur** : lecture en arrière-plan avec notification média (écran verrouillé, casque), image dans l'image
+  (bouton ou automatique en quittant l'app).
+- **Téléchargements** : option Wi-Fi uniquement (mise en attente si le Wi-Fi est perdu) et plage horaire (la nuit).
 - **Réglages** : langue, qualité, MP4/MKV/WebM, MP3/M4A/Opus/FLAC, mise à jour de yt-dlp, cookies.
 
 ## Construire

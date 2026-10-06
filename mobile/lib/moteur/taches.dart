@@ -64,7 +64,7 @@ class Tache {
   List<FichierPublie> fichiers = [];
 
   // interne
-  String? arret; // "pause" | "annule"
+  String? arret; // "pause" | "annule" | "reattendre" (Wi-Fi perdu)
   Completer<void>? _reveil;
   List<(String, int, String)> parties = []; // (format_id, taille, libellé)
 
@@ -120,7 +120,8 @@ class Tache {
 class Gestionnaire extends ChangeNotifier {
   final taches = <Tache>[];
   Timer? _minuteur, _sauvegarde;
-  double _derniereNotif = 0;
+  double _derniereNotif = 0, _dernierReseau = 0;
+  String _reseau = 'inconnu';
 
   File get _fichier => File('${Natif.dossierFichiers}/taches.json');
 
@@ -346,11 +347,56 @@ class Gestionnaire extends ChangeNotifier {
   }
 
   // ── exécution ───────────────────────────────────────────────────────
+  /// Dans la plage horaire choisie (ex. 23:00 → 07:00, qui peut passer minuit) ?
+  bool _dansLaPlage() {
+    if (reglages['plage_active'] != true) return true;
+    final d = (reglages['plage_debut'] as num).toInt(), f = (reglages['plage_fin'] as num).toInt();
+    final n = DateTime.now();
+    final h = n.hour * 60 + n.minute;
+    if (d == f) return true;
+    return d < f ? h >= d && h < f : h >= d || h < f;
+  }
+
+  static String heure(int minutes) =>
+      '${(minutes ~/ 60).toString().padLeft(2, '0')}:${(minutes % 60).toString().padLeft(2, '0')}';
+
+  /// Raison pour laquelle aucun téléchargement ne doit tourner maintenant (null = libre).
+  String? get raisonAttente {
+    if (reglages['wifi_seulement'] == true && (_reseau == 'mobile' || _reseau == 'inconnu')) return 'En attente du Wi-Fi';
+    if (!_dansLaPlage()) {
+      return 'En attente de la plage ${heure((reglages['plage_debut'] as num).toInt())}–${heure((reglages['plage_fin'] as num).toInt())}';
+    }
+    return null;
+  }
+
   void _repartir() {
     final max = (reglages['simultanes'] as num).toInt();
     var actives = taches.where((t) => enCours.contains(t.statut)).length;
     final m = _maintenant();
     var change = false;
+    if (reglages['wifi_seulement'] != true) {
+      _reseau = 'inconnu';
+      _dernierReseau = 0;
+    } else if (m - _dernierReseau >= 4) {
+      _dernierReseau = m;
+      Natif.reseau().then((r) => _reseau = r).catchError((_) => _reseau = 'autre');
+    }
+    final raison = raisonAttente;
+    if (raison != null && reglages['wifi_seulement'] == true && _reseau == 'mobile') {
+      // Wi-Fi perdu en cours de route : on met en attente (les fichiers partiels sont gardés)
+      for (final t in taches.where((t) => enCours.contains(t.statut) && t.arret == null)) {
+        t.arret = 'reattendre';
+        _reveiller(t);
+        Natif.arreter(t.id);
+      }
+    }
+    for (final t in taches.where((t) => t.statut == 'en_attente')) {
+      final voulue = raison ?? '';
+      if (t.phase != voulue && (voulue.isNotEmpty || t.phase.startsWith('En attente de'))) {
+        t.phase = voulue;
+        change = true;
+      }
+    }
     for (final t in taches) {
       if (t.statut == 'programme' && (t.programme ?? 0) <= m) {
         t.statut = 'en_attente';
@@ -359,7 +405,7 @@ class Gestionnaire extends ChangeNotifier {
     }
     // Les plus anciennes d'abord (la liste est affichée du plus récent au plus ancien)
     for (final t in taches.reversed) {
-      if (actives >= max) break;
+      if (actives >= max || raison != null) break;
       if (t.statut == 'en_attente') {
         t
           ..statut = 'analyse'
@@ -396,6 +442,15 @@ class Gestionnaire extends ChangeNotifier {
       if (t.arret == 'pause') {
         t
           ..statut = 'pause'
+          ..phase = ''
+          ..vitesse = 0
+          ..eta = null;
+        return _maj(t, sauver: true);
+      }
+      if (t.arret == 'reattendre') {
+        t
+          ..statut = 'en_attente'
+          ..arret = null
           ..phase = ''
           ..vitesse = 0
           ..eta = null;

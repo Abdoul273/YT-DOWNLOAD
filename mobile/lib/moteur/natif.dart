@@ -28,6 +28,8 @@ class Natif {
 
   static final _lignes = <String, void Function(String)>{};
   static final _partages = StreamController<String>.broadcast();
+  static final _commandesMedia = StreamController<({String action, int position})>.broadcast();
+  static final _pip = StreamController<bool>.broadcast();
   static StreamSubscription? _abonnement;
 
   static late String dossierFichiers, dossierCache, dossierTravail;
@@ -36,6 +38,12 @@ class Natif {
 
   static Stream<String> get partages => _partages.stream;
 
+  /// Boutons de la notification média / de l'écran verrouillé : play, pause, next, prev, stop, seek.
+  static Stream<({String action, int position})> get commandesMedia => _commandesMedia.stream;
+
+  /// Entrée / sortie du mode image dans l'image.
+  static Stream<bool> get pipEtat => _pip.stream;
+
   static Future<void> init() async {
     _abonnement ??= _flux.receiveBroadcastStream().listen((e) {
       final m = e as Map;
@@ -43,6 +51,10 @@ class Natif {
         _lignes[m['id']]?.call(m['ligne'] as String);
       } else if (m['type'] == 'partage') {
         _partages.add(m['texte'] as String);
+      } else if (m['type'] == 'media') {
+        _commandesMedia.add((action: m['action'] as String, position: (m['position'] as num?)?.toInt() ?? 0));
+      } else if (m['type'] == 'pip') {
+        _pip.add(m['actif'] == true);
       }
     });
     final r = await _canal.invokeMapMethod<String, dynamic>('init');
@@ -99,5 +111,32 @@ class Natif {
   static Future<String?> lireTexte(String uri) => _canal.invokeMethod<String>('lireTexte', {'uri': uri});
   static Future<bool> peutInstaller() async => await _canal.invokeMethod<bool>('peutInstaller') ?? false;
   static Future<void> installerApk(String chemin) => _canal.invokeMethod('installerApk', {'chemin': chemin});
+  /// Notification média : titre, état de lecture et position (la barre avance seule entre deux envois).
+  static Future<void> media({
+    required String titre,
+    String artiste = '',
+    String? image,
+    required bool lecture,
+    required int position,
+    required int duree,
+    double vitesse = 1,
+    bool prec = false,
+    bool suiv = false,
+  }) =>
+      _canal.invokeMethod('media', {
+        'titre': titre, 'artiste': artiste, 'image': image, 'lecture': lecture,
+        'position': position, 'duree': duree, 'vitesse': vitesse, 'prec': prec, 'suiv': suiv,
+      });
+  static Future<void> mediaArreter() => _canal.invokeMethod('mediaArreter');
+
+  /// Passe en image dans l'image ([ratio] = largeur / hauteur de la vidéo).
+  static Future<bool> pip(double ratio) async => await _canal.invokeMethod<bool>('pip', {'ratio': ratio}) ?? false;
+
+  /// Entrer en image dans l'image tout seul quand on quitte l'app.
+  static Future<void> pipAuto(bool actif, double ratio) => _canal.invokeMethod('pipAuto', {'actif': actif, 'ratio': ratio});
+
+  /// 'wifi' (non facturé) | 'mobile' | 'autre' | 'aucun'
+  static Future<String> reseau() async => await _canal.invokeMethod<String>('reseau') ?? 'autre';
+
   static Future<void> demanderNotifications() => _canal.invokeMethod('demanderNotifications');
 }

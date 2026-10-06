@@ -8,6 +8,7 @@ import '../moteur/gouts.dart';
 import '../moteur/maj.dart';
 import '../moteur/natif.dart';
 import '../moteur/reglages.dart';
+import '../moteur/taches.dart';
 import 'fenetre_maj.dart';
 import 'theme.dart';
 
@@ -31,6 +32,19 @@ class _PageReglagesState extends State<PageReglages> {
     } finally {
       if (mounted) setState(() => _maj = false);
     }
+  }
+
+  Future<void> _choisirHeure(String cle) async {
+    final m = (reglages[cle] as num).toInt();
+    final t = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: m ~/ 60, minute: m % 60),
+      builder: (ctx, w) => MediaQuery(
+        data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
+        child: w!,
+      ),
+    );
+    if (t != null) reglages[cle] = t.hour * 60 + t.minute;
   }
 
   Future<void> _cookies() async {
@@ -167,8 +181,35 @@ class _PageReglagesState extends State<PageReglages> {
                   sous: 'Après une coupure réseau ou un 403',
                   fin: _Compteur(r['relances'], 0, 10, (v) => r['relances'] = v),
                 ),
+                inter('wifi_seulement', 'Wi-Fi uniquement', 'Les téléchargements attendent le Wi-Fi (pas de données mobiles)'),
+                inter('plage_active', 'Plage horaire', 'Ne télécharger que la nuit, par exemple'),
+                if (r['plage_active'] == true) ...[
+                  _Ligne(
+                    titre: 'Début',
+                    sous: 'Les téléchargements démarrent à cette heure',
+                    fin: BoutonVerre(
+                        icone: Icons.schedule_rounded,
+                        texte: Gestionnaire.heure((r['plage_debut'] as num).toInt()),
+                        onTap: () => _choisirHeure('plage_debut')),
+                  ),
+                  _Ligne(
+                    titre: 'Fin',
+                    sous: 'Plus aucun nouveau téléchargement après',
+                    fin: BoutonVerre(
+                        icone: Icons.schedule_rounded,
+                        texte: Gestionnaire.heure((r['plage_fin'] as num).toInt()),
+                        onTap: () => _choisirHeure('plage_fin')),
+                  ),
+                ],
                 inter('sous_dossier_playlist', 'Un dossier par playlist', 'Téléchargements/YT-NEXUS/<playlist>'),
                 inter('notifications', 'Notification à la fin', 'Quand un téléchargement est terminé'),
+              ]),
+            ),
+            const SizedBox(height: 12),
+            Verre(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Etiquette('Lecteur'),
+                inter('pip_auto', 'Image dans l’image', 'Une vidéo en lecture reste en petite fenêtre quand tu quittes l’app'),
               ]),
             ),
             const SizedBox(height: 12),
