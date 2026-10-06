@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Mises à jour de l'app depuis l'app elle-même -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGE_WITHOUT_USER_ACTION" />
 
     <application
         android:label="YT-NEXUS"
@@ -52,6 +53,13 @@
             android:name=".ServiceLecture"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <receiver android:name=".RecepteurInstallation" android:exported="false" />
+        <receiver android:name=".RecepteurMiseAJour" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

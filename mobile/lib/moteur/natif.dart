@@ -30,6 +30,7 @@ class Natif {
   static final _partages = StreamController<String>.broadcast();
   static final _commandesMedia = StreamController<({String action, int position})>.broadcast();
   static final _pip = StreamController<bool>.broadcast();
+  static final _installations = StreamController<String>.broadcast();
   static StreamSubscription? _abonnement;
 
   static late String dossierFichiers, dossierCache, dossierTravail;
@@ -40,6 +41,9 @@ class Natif {
 
   /// Boutons de la notification média / de l'écran verrouillé : play, pause, next, prev, stop, seek.
   static Stream<({String action, int position})> get commandesMedia => _commandesMedia.stream;
+
+  /// Échecs d'installation d'une mise à jour (message lisible).
+  static Stream<String> get installationsEchouees => _installations.stream;
 
   /// Entrée / sortie du mode image dans l'image.
   static Stream<bool> get pipEtat => _pip.stream;
@@ -53,6 +57,8 @@ class Natif {
         _partages.add(m['texte'] as String);
       } else if (m['type'] == 'media') {
         _commandesMedia.add((action: m['action'] as String, position: (m['position'] as num?)?.toInt() ?? 0));
+      } else if (m['type'] == 'install') {
+        _installations.add('${m['message']}');
       } else if (m['type'] == 'pip') {
         _pip.add(m['actif'] == true);
       }

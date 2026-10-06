@@ -1,8 +1,10 @@
 package com.abdoul.yt_nexus
 
 import android.content.ContentValues
+import android.app.PendingIntent
 import android.app.PictureInPictureParams
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -48,6 +50,7 @@ class MainActivity : FlutterActivity() {
         val messager = flutterEngine.dartExecutor.binaryMessenger
         MethodChannel(messager, "yt_nexus/natif").setMethodCallHandler { appel, res -> traiter(appel, res) }
         ServiceLecture.ecouteur = { emettre(it) }
+        RecepteurInstallation.ecouteur = { emettre(it) }
         EventChannel(messager, "yt_nexus/evenements").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
                 evenements = sink
@@ -244,13 +247,7 @@ class MainActivity : FlutterActivity() {
                     lancer(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")), res)
                     return
                 }
-                val apk = File(appel.argument<String>("chemin")!!)
-                val uri = FileProvider.getUriForFile(this, "$packageName.fichiers", apk)
-                val i = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                lancer(i, res)
+                enFond(res) { installer(File(appel.argument<String>("chemin")!!)) }
             }
             "peutInstaller" -> res.success(packageManager.canRequestPackageInstalls())
             "demanderNotifications" -> {
@@ -261,6 +258,30 @@ class MainActivity : FlutterActivity() {
             }
             else -> res.notImplemented()
         }
+    }
+
+    /** Installe l'APK via PackageInstaller : sans confirmation quand Android l'autorise (12+, mises à jour suivantes). */
+    private fun installer(apk: File): Boolean {
+        val pi = packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+        }
+        val id = pi.createSession(params)
+        pi.openSession(id).use { session ->
+            apk.inputStream().use { entree ->
+                session.openWrite("yt-nexus", 0, apk.length()).use { sortie ->
+                    entree.copyTo(sortie)
+                    session.fsync(sortie)
+                }
+            }
+            val retour = PendingIntent.getBroadcast(
+                this, id, Intent(this, RecepteurInstallation::class.java).setPackage(packageName),
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            session.commit(retour.intentSender)
+        }
+        return true
     }
 
     private fun lancer(i: Intent, res: MethodChannel.Result) {

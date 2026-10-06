@@ -79,7 +79,7 @@ class _AppState extends State<App> {
               builder: (context, s) {
                 if (s.hasError) return _Demarrage(erreur: '${s.error}', reessayer: _reessayer);
                 if (s.connectionState != ConnectionState.done) return const _Demarrage();
-                return const Accueil();
+                return const VeilleMaj(child: Accueil());
               },
             ),
           ),

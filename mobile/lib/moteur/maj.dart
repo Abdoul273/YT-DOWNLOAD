@@ -2,6 +2,7 @@
 /// on télécharge l'APK adapté au téléphone et on ouvre l'installateur d'Android.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -35,12 +36,16 @@ class Maj extends ChangeNotifier {
   String? erreur;
   bool verification = false;
 
+  StreamSubscription? _abo;
+  bool _auto = false; // téléchargement automatique déjà tenté pour cette version
+
   File get _apk => File('${Natif.dossierCache}/maj/yt-nexus.apk');
 
-  /// Interroge GitHub (au plus toutes les 6 h, sauf [force]). Renvoie la version disponible.
+  /// Interroge GitHub (au plus toutes les 30 min, sauf [force]). Renvoie la version disponible.
   Future<NouvelleVersion?> verifier({bool force = false}) async {
     final maintenant = DateTime.now().millisecondsSinceEpoch;
-    if (!force && maintenant - ((reglages['derniere_verif_maj'] ?? 0) as num) < 6 * 3600 * 1000) return dispo;
+    if (!force && maintenant - ((reglages['derniere_verif_maj'] ?? 0) as num) < 30 * 60 * 1000) return dispo;
+    if (verification) return dispo;
     verification = true;
     erreur = null;
     notifyListeners();
@@ -65,7 +70,11 @@ class Maj extends ChangeNotifier {
       final a = assets.where((a) => a['name'] == nom).firstOrNull ??
           assets.where((a) => '${a['name']}'.endsWith('.apk')).firstOrNull;
       if (a == null) return dispo = null;
-      return dispo = NouvelleVersion(version, '${d['body'] ?? ''}'.trim(), a['browser_download_url'], (a['size'] ?? 0) as int);
+      final nouvelle = NouvelleVersion(version, '${d['body'] ?? ''}'.trim(), a['browser_download_url'], (a['size'] ?? 0) as int);
+      if (dispo?.version != version) _auto = false;
+      dispo = nouvelle;
+      unawaited(_preparer());
+      return dispo;
     } catch (e) {
       erreur = '$e';
       return dispo;
@@ -76,8 +85,23 @@ class Maj extends ChangeNotifier {
     }
   }
 
-  /// Télécharge l'APK puis ouvre l'installateur Android.
-  Future<void> installer() async {
+  /// Télécharge l'APK dès qu'une version est détectée, sauf sur données mobiles : l'installation sera immédiate.
+  Future<void> _preparer() async {
+    if (_auto || progression != null) return;
+    _auto = true;
+    try {
+      if (await Natif.reseau() == 'mobile') return;
+    } catch (_) {}
+    await installer(ouvrir: false);
+  }
+
+  bool get apkPret {
+    final v = dispo;
+    return v != null && _apk.existsSync() && _apk.lengthSync() == v.taille && reglages['apk_version'] == v.version;
+  }
+
+  /// Télécharge l'APK (si besoin) puis, avec [ouvrir], lance l'installation Android.
+  Future<void> installer({bool ouvrir = true}) async {
     final v = dispo;
     if (v == null || progression != null) return;
     progression = 0;
@@ -86,7 +110,7 @@ class Maj extends ChangeNotifier {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
       await _apk.parent.create(recursive: true);
-      final pret = _apk.existsSync() && _apk.lengthSync() == v.taille && reglages['apk_version'] == v.version;
+      final pret = apkPret;
       if (!pret) {
         final req = await client.getUrl(Uri.parse(v.url));
         req.headers.set(HttpHeaders.userAgentHeader, 'YT-NEXUS/${Natif.versionApp}');
@@ -109,8 +133,13 @@ class Maj extends ChangeNotifier {
         await tmp.rename(_apk.path);
         reglages['apk_version'] = v.version;
       }
+      if (!ouvrir) return;
       progression = 1;
       notifyListeners();
+      _abo ??= Natif.installationsEchouees.listen((m) {
+        erreur = m;
+        notifyListeners();
+      });
       await Natif.installerApk(_apk.path);
     } catch (e) {
       erreur = '$e';

@@ -12,6 +12,8 @@ Même logique que la version web : piste doublée française en 1ʳᵉ piste, VO
   playlist, sélection multiple (appui long), barre « reprendre » sur les vidéos entamées.
 - **Lecteur** : lecture en arrière-plan avec notification média (écran verrouillé, casque), image dans l'image
   (bouton ou automatique en quittant l'app).
+- **Mises à jour** : détectées au lancement et à chaque retour dans l'app, téléchargées automatiquement (Wi-Fi) et
+  installées via un écran obligatoire ; sans confirmation sur Android 12+ après la 1ʳᵉ mise à jour faite depuis l'app.
 - **Téléchargements** : option Wi-Fi uniquement (mise en attente si le Wi-Fi est perdu) et plage horaire (la nuit).
 - **Réglages** : langue, qualité, MP4/MKV/WebM, MP3/M4A/Opus/FLAC, mise à jour de yt-dlp, cookies.
 
