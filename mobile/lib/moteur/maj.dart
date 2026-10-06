@@ -37,7 +37,6 @@ class Maj extends ChangeNotifier {
   bool verification = false;
 
   StreamSubscription? _abo;
-  bool _auto = false; // téléchargement automatique déjà tenté pour cette version
 
   File get _apk => File('${Natif.dossierCache}/maj/yt-nexus.apk');
 
@@ -71,9 +70,7 @@ class Maj extends ChangeNotifier {
           assets.where((a) => '${a['name']}'.endsWith('.apk')).firstOrNull;
       if (a == null) return dispo = null;
       final nouvelle = NouvelleVersion(version, '${d['body'] ?? ''}'.trim(), a['browser_download_url'], (a['size'] ?? 0) as int);
-      if (dispo?.version != version) _auto = false;
       dispo = nouvelle;
-      unawaited(_preparer());
       return dispo;
     } catch (e) {
       erreur = '$e';
@@ -85,23 +82,13 @@ class Maj extends ChangeNotifier {
     }
   }
 
-  /// Télécharge l'APK dès qu'une version est détectée, sauf sur données mobiles : l'installation sera immédiate.
-  Future<void> _preparer() async {
-    if (_auto || progression != null) return;
-    _auto = true;
-    try {
-      if (await Natif.reseau() == 'mobile') return;
-    } catch (_) {}
-    await installer(ouvrir: false);
-  }
-
   bool get apkPret {
     final v = dispo;
     return v != null && _apk.existsSync() && _apk.lengthSync() == v.taille && reglages['apk_version'] == v.version;
   }
 
-  /// Télécharge l'APK (si besoin) puis, avec [ouvrir], lance l'installation Android.
-  Future<void> installer({bool ouvrir = true}) async {
+  /// Télécharge l'APK (si besoin) puis lance l'installation Android.
+  Future<void> installer() async {
     final v = dispo;
     if (v == null || progression != null) return;
     progression = 0;
@@ -133,7 +120,6 @@ class Maj extends ChangeNotifier {
         await tmp.rename(_apk.path);
         reglages['apk_version'] = v.version;
       }
-      if (!ouvrir) return;
       progression = 1;
       notifyListeners();
       _abo ??= Natif.installationsEchouees.listen((m) {

@@ -8,8 +8,9 @@ import '../moteur/natif.dart';
 import '../moteur/taches.dart' show formaterTaille;
 import 'theme.dart';
 
-/// Surveille les nouvelles versions (au lancement et à chaque retour dans l'app) et affiche
-/// l'écran de mise à jour obligatoire : on ne peut pas l'ignorer, l'installation démarre toute seule.
+/// Surveille les nouvelles versions : au lancement et à chaque retour dans l'app, si une mise à jour
+/// existe, une petite fenêtre la présente (infos, taille, « Mettre à jour » / « Annuler »).
+/// Rien n'est téléchargé sans accord : les données mobiles sont comptées.
 class VeilleMaj extends StatefulWidget {
   final Widget child;
   const VeilleMaj({super.key, required this.child});
@@ -18,20 +19,18 @@ class VeilleMaj extends StatefulWidget {
 }
 
 class _VeilleMajState extends State<VeilleMaj> with WidgetsBindingObserver {
-  bool _ouvert = false, _ignore = false;
+  bool _ouvert = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    maj.addListener(_ecouter);
     _controler();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    maj.removeListener(_ecouter);
     super.dispose();
   }
 
@@ -42,66 +41,27 @@ class _VeilleMajState extends State<VeilleMaj> with WidgetsBindingObserver {
 
   Future<void> _controler() async {
     await maj.verifier();
-    _ecouter();
-  }
-
-  void _ecouter() {
-    if (!mounted || _ouvert || _ignore || maj.dispo == null) return;
+    if (!mounted || _ouvert || maj.dispo == null) return;
+    var mobile = false;
+    try {
+      mobile = await Natif.reseau() == 'mobile';
+    } catch (_) {}
+    if (!mounted || _ouvert) return;
     _ouvert = true;
-    Navigator.of(context)
-        .push<String>(PageRouteBuilder(
-          opaque: true,
-          pageBuilder: (_, _, _) => const _EcranMajObligatoire(),
-          transitionsBuilder: (_, a, _, w) => FadeTransition(opacity: a, child: w),
-        ))
-        .then((r) {
-      _ouvert = false;
-      if (r == 'ignorer') _ignore = true;
-    });
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: ctx.c.sombre ? const Color(0xFF10121F) : Colors.white,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: SingleChildScrollView(child: _FenetreMaj(dansDialogue: true, donneesMobiles: mobile)),
+      ),
+    );
+    _ouvert = false;
   }
 
   @override
   Widget build(BuildContext context) => widget.child;
-}
-
-class _EcranMajObligatoire extends StatefulWidget {
-  const _EcranMajObligatoire();
-  @override
-  State<_EcranMajObligatoire> createState() => _EcranMajObligatoireState();
-}
-
-class _EcranMajObligatoireState extends State<_EcranMajObligatoire> {
-  @override
-  void initState() {
-    super.initState();
-    maj.addListener(_ecouter);
-    // Téléchargement puis installation lancés tout de suite, sans rien demander
-    if (maj.dispo != null && maj.erreur == null) maj.installer();
-  }
-
-  @override
-  void dispose() {
-    maj.removeListener(_ecouter);
-    super.dispose();
-  }
-
-  void _ecouter() {
-    if (maj.dispo == null && mounted) Navigator.of(context).pop();
-  }
-
-  @override
-  Widget build(BuildContext context) => PopScope(
-        canPop: maj.dispo == null,
-        child: Scaffold(
-          body: Stack(children: [
-            const Positioned.fill(child: Aurore()),
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: SingleChildScrollView(child: const _FenetreMaj(obligatoire: true)),
-            ),
-          ]),
-        ),
-      );
 }
 
 /// Pastille « Mise à jour » de l'en-tête (état de la mise à jour en cours).
@@ -146,8 +106,8 @@ void ouvrirFenetreMaj(BuildContext context) => showModalBottomSheet(
     );
 
 class _FenetreMaj extends StatelessWidget {
-  final bool obligatoire;
-  const _FenetreMaj({this.obligatoire = false});
+  final bool dansDialogue, donneesMobiles;
+  const _FenetreMaj({this.dansDialogue = false, this.donneesMobiles = false});
 
   @override
   Widget build(BuildContext context) {
@@ -192,14 +152,24 @@ class _FenetreMaj extends StatelessWidget {
             ],
             const SizedBox(height: 14),
             Text(
-              obligatoire
-                  ? 'Cette mise à jour est nécessaire pour continuer. Tes vidéos et réglages sont conservés. '
-                      'Android peut demander de confirmer l’installation (la première fois, autorise YT-NEXUS '
-                      'à installer des applications puis reviens ici) ; les suivantes se font toutes seules.'
-                  : 'Tes vidéos et réglages sont conservés. Android te demandera de confirmer l’installation'
-                      ' (la première fois, autorise YT-NEXUS à installer des applications puis reviens ici).',
+              'Tes vidéos et réglages sont conservés. Android peut demander de confirmer l’installation'
+              ' (la première fois, autorise YT-NEXUS à installer des applications puis reviens ici).',
               style: TextStyle(color: c.t3, fontSize: 12),
             ),
+            if (donneesMobiles && v != null && p == null) ...[
+              const SizedBox(height: 10),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.signal_cellular_alt_rounded, size: 16, color: c.ambre),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Tu es sur données mobiles : le téléchargement'
+                    '${v.taille > 0 ? ' (${formaterTaille(v.taille)})' : ''} les consommera. Tu peux attendre le Wi-Fi.',
+                    style: TextStyle(color: c.ambre, fontSize: 12.5),
+                  ),
+                ),
+              ]),
+            ],
             if (maj.erreur != null) ...[
               const SizedBox(height: 10),
               Text(maj.erreur!, style: TextStyle(color: c.rouge, fontSize: 12.5)),
@@ -214,18 +184,12 @@ class _FenetreMaj extends StatelessWidget {
               Text(p >= 1 ? 'Ouverture de l’installateur…' : 'Téléchargement… ${(p * 100).round()} %',
                   textAlign: TextAlign.center, style: mono(context, taille: 12, couleur: c.t2)),
             ] else if (v != null)
-              BoutonGrad(obligatoire ? 'Installer maintenant' : 'Mettre à jour',
-                  icone: Icons.download_rounded, onTap: maj.installer)
+              BoutonGrad('Mettre à jour', icone: Icons.download_rounded, onTap: maj.installer)
             else
               BoutonGrad('Rechercher une mise à jour',
                   icone: Icons.refresh_rounded, charge: maj.verification, onTap: () => maj.verifier(force: true)),
-            if (p == null && v != null && !obligatoire)
-              TextButton(onPressed: () => Navigator.of(context).pop(), child: Text('Plus tard', style: TextStyle(color: c.t2))),
-            // Échappatoire seulement si l'installation échoue (réseau, signature…) : on ne bloque pas l'app pour toujours
-            if (p == null && v != null && obligatoire && maj.erreur != null)
-              TextButton(
-                  onPressed: () => Navigator.of(context).pop('ignorer'),
-                  child: Text('Continuer sans mettre à jour', style: TextStyle(color: c.t2))),
+            if (p == null && v != null && dansDialogue)
+              TextButton(onPressed: () => Navigator.of(context).pop(), child: Text('Annuler', style: TextStyle(color: c.t2))),
           ]),
         );
       },
