@@ -1,7 +1,10 @@
 /// Onglet Réglages : pistes, qualité, file, yt-dlp, cookies.
 library;
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../moteur/langues.dart' as langues;
 import '../moteur/gouts.dart';
@@ -11,6 +14,7 @@ import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
 import 'fenetre_maj.dart';
 import 'theme.dart';
+import 'verrou.dart';
 
 class PageReglages extends StatefulWidget {
   const PageReglages({super.key});
@@ -94,6 +98,68 @@ class _PageReglagesState extends State<PageReglages> {
       await reglages.enregistrerCookies(ctrl.text);
       if (mounted) toast(context, ctrl.text.trim().isEmpty ? 'Cookies effacés' : 'Cookies enregistrés');
     }
+  }
+
+  Future<void> _code() async {
+    if (verrouActif) {
+      final action = await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            ListTile(leading: const Icon(Icons.edit_rounded), title: const Text('Changer le code'), onTap: () => Navigator.pop(ctx, 'changer')),
+            ListTile(leading: const Icon(Icons.lock_open_rounded), title: const Text('Désactiver le verrouillage'), onTap: () => Navigator.pop(ctx, 'off')),
+          ]),
+        ),
+      );
+      if (action == 'off') {
+        definirCode(null);
+        if (mounted) toast(context, 'Verrouillage désactivé');
+        return;
+      }
+      if (action != 'changer') return;
+    }
+    if (!mounted) return;
+    final code = await demanderNouveauCode(context);
+    if (code == null) return;
+    definirCode(code);
+    if (mounted) toast(context, 'Code enregistré : demandé au lancement et après 20 s hors de l’app');
+  }
+
+  Future<void> _viderTemporaires() async {
+    final n = gestionnaire.viderTemporaires();
+    setState(() {});
+    toast(context, n > 0 ? '${formaterTaille(n)} libérés' : 'Rien à nettoyer');
+  }
+
+  Future<void> _exporter() async {
+    final copie = Map<String, dynamic>.of(reglages.tout)
+      ..removeWhere((k, _) => const ['pin_hash', 'pin_sel', 'derniere_maj', 'dernier_lien_propose'].contains(k));
+    await Clipboard.setData(ClipboardData(text: jsonEncode({'yt_nexus': 1, 'reglages': copie})));
+    if (mounted) toast(context, 'Sauvegarde copiée : colle-la dans une note ou un message');
+  }
+
+  Future<void> _importer() async {
+    try {
+      final d = await Clipboard.getData(Clipboard.kTextPlain);
+      final donnees = jsonDecode(d?.text ?? '') as Map;
+      if (donnees['yt_nexus'] == null) throw const FormatException();
+      var n = 0;
+      for (final e in (donnees['reglages'] as Map).entries) {
+        if (reglagesDefaut.containsKey(e.key) && !const ['pin_hash', 'pin_sel'].contains(e.key)) {
+          reglages.ecrireSansPrevenir('${e.key}', e.value);
+          n++;
+        }
+      }
+      reglages['theme'] = reglages['theme']; // notifie l'interface
+      if (mounted) toast(context, 'Sauvegarde restaurée ($n réglages, favoris, positions de lecture)');
+    } catch (_) {
+      if (mounted) toast(context, 'Le presse-papiers ne contient pas de sauvegarde YT-NEXUS', erreur: true);
+    }
+  }
+
+  Future<void> _rapport() async {
+    await Clipboard.setData(ClipboardData(text: gestionnaire.rapport()));
+    if (mounted) toast(context, 'Rapport copié : colle-le pour signaler un problème');
   }
 
   @override
@@ -211,6 +277,66 @@ class _PageReglagesState extends State<PageReglages> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Etiquette('Lecteur'),
                 inter('pip_auto', 'Image dans l’image', 'Une vidéo en lecture reste en petite fenêtre quand tu quittes l’app'),
+              ]),
+            ),
+            const SizedBox(height: 12),
+            Verre(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Etiquette('Données mobiles'),
+                inter('eco_donnees', 'Économie de données', 'Qualité plafonnée quand tu n’es pas en Wi-Fi'),
+                if (r['eco_donnees'] == true)
+                  Wrap(spacing: 8, runSpacing: 8, children: [
+                    for (final q in const ['240', '360', '480', '720'])
+                      Puce('${q}p', choisie: r['eco_qualite'] == q, onTap: () => r['eco_qualite'] = q),
+                  ]),
+              ]),
+            ),
+            const SizedBox(height: 12),
+            Verre(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Etiquette('Confidentialité et stockage'),
+                _Ligne(
+                  titre: 'Verrouillage par code',
+                  sous: verrouActif ? 'Activé' : 'Protège l’app (code de 4 à 6 chiffres)',
+                  fin: Icon(verrouActif ? Icons.lock_rounded : Icons.lock_open_rounded, color: c.t3),
+                  onTap: _code,
+                ),
+                _Ligne(
+                  titre: 'Fichiers temporaires',
+                  sous: '${formaterTaille(gestionnaire.tailleTemporaires())} de téléchargements abandonnés à nettoyer',
+                  fin: Icon(Icons.cleaning_services_outlined, color: c.t3),
+                  onTap: _viderTemporaires,
+                ),
+                _Ligne(
+                  titre: 'Vidéos téléchargées',
+                  sous: '${gestionnaire.taches.where((t) => t.statut == 'termine').length} fichiers · '
+                      '${formaterTaille(gestionnaire.taches.where((t) => t.statut == 'termine').fold(0, (a, t) => a + t.tailleFichier))}',
+                  fin: const SizedBox(),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 12),
+            Verre(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Etiquette('Sauvegarde et aide'),
+                _Ligne(
+                  titre: 'Sauvegarder mes réglages',
+                  sous: 'Copie réglages, favoris et positions de lecture',
+                  fin: Icon(Icons.upload_rounded, color: c.t3),
+                  onTap: _exporter,
+                ),
+                _Ligne(
+                  titre: 'Restaurer une sauvegarde',
+                  sous: 'Depuis le presse-papiers',
+                  fin: Icon(Icons.download_rounded, color: c.t3),
+                  onTap: _importer,
+                ),
+                _Ligne(
+                  titre: 'Copier le rapport d’erreurs',
+                  sous: 'Versions et derniers échecs, pour comprendre un problème',
+                  fin: Icon(Icons.bug_report_outlined, color: c.t3),
+                  onTap: _rapport,
+                ),
               ]),
             ),
             const SizedBox(height: 12),

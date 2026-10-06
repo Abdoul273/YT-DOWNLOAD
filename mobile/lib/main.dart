@@ -16,6 +16,7 @@ import 'ui/page_reglages.dart';
 import 'ui/page_video.dart';
 import 'ui/theme.dart';
 import 'ui/veille_liens.dart';
+import 'ui/verrou.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -80,7 +81,7 @@ class _AppState extends State<App> {
               builder: (context, s) {
                 if (s.hasError) return _Demarrage(erreur: '${s.error}', reessayer: _reessayer);
                 if (s.connectionState != ConnectionState.done) return const _Demarrage();
-                return const VeilleMaj(child: VeilleLiens(child: Accueil()));
+                return const VerrouApp(child: VeilleMaj(child: VeilleLiens(child: Accueil())));
               },
             ),
           ),

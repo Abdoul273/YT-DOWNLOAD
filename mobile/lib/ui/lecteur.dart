@@ -45,7 +45,8 @@ class _LecteurState extends State<Lecteur> {
   final _abos = <StreamSubscription>[];
   double _vitesse = 1;
   List<VideoAudioTrack> _pistes = [];
-  Timer? _masquer;
+  Timer? _masquer, _sommeil;
+  int _sommeilMin = 0;
 
   // Gestes
   String? _indication; // texte affiché au centre (±10 s, 2×, volume…)
@@ -78,6 +79,7 @@ class _LecteurState extends State<Lecteur> {
   void dispose() {
     _memoriserPosition();
     _masquer?.cancel();
+    _sommeil?.cancel();
     _finIndication?.cancel();
     _finSaut?.cancel();
     for (final a in _abos) {
@@ -371,6 +373,20 @@ class _LecteurState extends State<Lecteur> {
         _synchro();
       });
 
+  void _menuSommeil() => _choisir<int>('Minuteur de sommeil', [
+        for (final m in const [0, 10, 20, 30, 45, 60, 90])
+          (m, m == 0 ? 'Désactivé' : '$m minutes', m == _sommeilMin),
+      ], (m) {
+        _sommeil?.cancel();
+        setState(() => _sommeilMin = m);
+        if (m == 0) return;
+        _sommeil = Timer(Duration(minutes: m), () {
+          _ctrl?.pause();
+          if (mounted) setState(() => _sommeilMin = 0);
+        });
+        _indiquer('La lecture s’arrêtera dans $m min', Icons.bedtime_rounded);
+      });
+
   String _nomPiste(VideoAudioTrack p, int i) {
     final code = p.language;
     final nom = code != null && code != 'und' ? '${langues.drapeau(code)} ${langues.nom(code)}' : null;
@@ -657,6 +673,12 @@ class _LecteurState extends State<Lecteur> {
                       icon: Icon(_sousTitresActifs ? Icons.closed_caption_rounded : Icons.closed_caption_off_outlined),
                       onPressed: () => setState(() => _sousTitresActifs = !_sousTitresActifs),
                     ),
+                  IconButton(
+                    color: _sommeilMin > 0 ? context.c.indigo : blanc,
+                    tooltip: 'Minuteur de sommeil',
+                    icon: const Icon(Icons.bedtime_outlined),
+                    onPressed: _menuSommeil,
+                  ),
                   TextButton(
                     onPressed: _menuVitesse,
                     child: Text('${'$_vitesse'.replaceAll('.0', '').replaceAll('.', ',')}×',

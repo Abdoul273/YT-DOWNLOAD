@@ -335,6 +335,73 @@ class Gestionnaire extends ChangeNotifier {
     }
   }
 
+  /// Dossiers de travail qui ne servent plus (hors téléchargements actifs ou en pause).
+  List<Directory> _orphelins() {
+    final garder = {for (final t in taches) if (actifs.contains(t.statut) || t.statut == 'pause') t.id};
+    try {
+      return Directory(Natif.dossierTravail)
+          .listSync()
+          .whereType<Directory>()
+          .where((d) => !garder.contains(d.uri.pathSegments.where((s) => s.isNotEmpty).last))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static int _tailleDossier(Directory d) {
+    var n = 0;
+    try {
+      for (final f in d.listSync(recursive: true).whereType<File>()) {
+        n += f.lengthSync();
+      }
+    } catch (_) {}
+    return n;
+  }
+
+  /// Octets occupés par les fichiers temporaires (partiels, caches d'analyse).
+  int tailleTemporaires() {
+    var n = _orphelins().fold(0, (a, d) => a + _tailleDossier(d));
+    final infos = Directory('${Natif.dossierCache}/infos');
+    if (infos.existsSync()) n += _tailleDossier(infos);
+    return n;
+  }
+
+  /// Supprime les temporaires ; renvoie les octets libérés.
+  int viderTemporaires() {
+    final n = tailleTemporaires();
+    for (final d in _orphelins()) {
+      try {
+        d.deleteSync(recursive: true);
+      } catch (_) {}
+    }
+    final infos = Directory('${Natif.dossierCache}/infos');
+    try {
+      if (infos.existsSync()) {
+        final garder = {for (final t in taches) if (actifs.contains(t.statut) || t.statut == 'pause') '${t.id}.json'};
+        for (final f in infos.listSync().whereType<File>()) {
+          if (!garder.contains(f.uri.pathSegments.last)) f.deleteSync();
+        }
+      }
+    } catch (_) {}
+    return n;
+  }
+
+  /// Rapport pour comprendre les échecs (à copier/coller).
+  String rapport() {
+    final b = StringBuffer('YT-NEXUS ${Natif.versionApp} · yt-dlp ${Natif.version}\n')
+      ..writeln('Android · réseau : $_reseau · Wi-Fi seul : ${reglages['wifi_seulement']} · éco données : ${reglages['eco_donnees']}')
+      ..writeln('Tâches : ${taches.length} (erreurs : ${taches.where((t) => t.statut == 'erreur').length})');
+    for (final t in taches.where((t) => t.statut == 'erreur').take(10)) {
+      b
+        ..writeln('\n— ${t.titre}')
+        ..writeln('  ${t.url}')
+        ..writeln('  options : ${jsonEncode(t.options)}')
+        ..writeln('  erreur : ${t.erreur.split('\n').take(6).join(' | ')}');
+    }
+    return b.toString();
+  }
+
   /// Supprime les fichiers partiels d'un téléchargement abandonné.
   void _menage(Tache t) {
     try {
@@ -528,7 +595,7 @@ class Gestionnaire extends ChangeNotifier {
 
   /// (réussi, message d'erreur, erreur passagère ?)
   Future<(bool, String, bool)> _uneTentative(Tache t) async {
-    final o = t.options;
+    var o = t.options;
     t
       ..statut = 'analyse'
       ..phase = 'Analyse de la vidéo'
@@ -543,6 +610,20 @@ class Gestionnaire extends ChangeNotifier {
     if (t.arret != null) return (false, '', false);
     if (info['live_status'] == 'is_live') {
       return (false, "Les directs en cours ne sont pas pris en charge : attends la fin du live.", false);
+    }
+
+    // Économie de données : qualité plafonnée tant qu'on est sur le réseau mobile
+    if (reglages['eco_donnees'] == true && o['type'] != 'audio') {
+      final plafond = int.tryParse('${reglages['eco_qualite']}') ?? 480;
+      final voulue = int.tryParse('${o['qualite'] ?? reglages['qualite']}');
+      var mobile = false;
+      try {
+        mobile = await Natif.reseau() == 'mobile';
+      } catch (_) {}
+      if (mobile && (voulue == null || voulue > plafond)) {
+        o = {...o, 'qualite': '$plafond'};
+        t.message = 'Données mobiles : qualité limitée à ${plafond}p';
+      }
     }
 
     // Pistes audio
@@ -624,15 +705,14 @@ class Gestionnaire extends ChangeNotifier {
     t.message = msg;
     _maj(t);
 
-    final cmd = _commande(t, sel, tri, cheminInfo, piste ?? originale, deux ? originale : null, secours, langue);
+    final cmd = _commande(t, o, sel, tri, cheminInfo, piste ?? originale, deux ? originale : null, secours, langue);
     return _lancer(t, cmd);
   }
 
   String _quote(String s) => "'${s.replaceAll("'", "'\"'\"'")}'";
 
-  List<String> _commande(Tache t, String sel, List<String> tri, String cheminInfo, String? piste, String? vo,
-      bool secours, String langue) {
-    final o = t.options;
+  List<String> _commande(Tache t, Map<String, dynamic> o, String sel, List<String> tri, String cheminInfo,
+      String? piste, String? vo, bool secours, String langue) {
     final r = reglages;
     final audio = o['type'] == 'audio';
     final conteneur = (o['conteneur'] ?? r['conteneur']) as String;

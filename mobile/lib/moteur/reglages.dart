@@ -33,6 +33,10 @@ const reglagesDefaut = <String, dynamic>{
   'plage_fin': 7 * 60,
   'presse_papiers_auto': true, // propose de télécharger un lien YouTube copié
   'dernier_lien_propose': '',
+  'eco_donnees': false, // qualité plafonnée sur réseau mobile
+  'eco_qualite': '480',
+  'pin_hash': '', // verrouillage par code
+  'pin_sel': '',
   'pip_auto': true, // vidéo en image dans l'image en quittant l'app
   'favoris': <String>[], // ids des fichiers favoris
   'tri_fichiers': 'recent',
