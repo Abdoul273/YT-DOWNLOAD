@@ -20,6 +20,7 @@ import 'analyse.dart' as analyse;
 import 'erreurs.dart' as erreurs;
 import 'formats.dart' as formats;
 import 'langues.dart' as langues;
+import 'miniatures.dart' as miniatures;
 import 'natif.dart';
 import 'reglages.dart';
 
@@ -157,6 +158,15 @@ class Gestionnaire extends ChangeNotifier {
     } catch (_) {}
     _minuteur = Timer.periodic(const Duration(milliseconds: 700), (_) => _repartir());
     unawaited(_verifierFichiers());
+    unawaited(_garderMiniatures());
+  }
+
+  /// Miniatures des tâches gardées sur le disque (visibles hors ligne), les autres supprimées.
+  Future<void> _garderMiniatures() async {
+    await miniatures.nettoyer(taches.map((t) => t.miniature));
+    for (final t in taches.toList()) {
+      await miniatures.garder(t.miniature);
+    }
   }
 
   /// Signale les fichiers supprimés depuis une autre app.
@@ -627,6 +637,7 @@ class Gestionnaire extends ChangeNotifier {
       ..erreur = ''
       ..message = '';
     _maj(t, sauver: true);
+    unawaited(miniatures.garder(t.miniature));
     try {
       File('${Natif.dossierCache}/infos/${t.id}.json').deleteSync();
     } catch (_) {}

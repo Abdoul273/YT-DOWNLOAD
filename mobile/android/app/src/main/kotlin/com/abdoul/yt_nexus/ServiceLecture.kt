@@ -118,7 +118,8 @@ class ServiceLecture : Service() {
             pochette = null
             thread {
                 val b = try {
-                    URL(e.image).openStream().use { BitmapFactory.decodeStream(it) }
+                    if (e.image.startsWith("/")) BitmapFactory.decodeFile(e.image)
+                    else URL(e.image).openStream().use { BitmapFactory.decodeStream(it) }
                 } catch (x: Exception) {
                     null
                 }

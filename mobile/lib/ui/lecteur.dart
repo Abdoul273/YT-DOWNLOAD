@@ -20,6 +20,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../moteur/gouts.dart';
 import '../moteur/langues.dart' as langues;
+import '../moteur/miniatures.dart' as miniatures;
 import '../moteur/natif.dart';
 import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
@@ -252,7 +253,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     Natif.media(
       titre: _tache.titre,
       artiste: _tache.chaine ?? '',
-      image: _tache.miniature,
+      image: miniatures.locale(_tache.miniature) ?? _tache.miniature,
       lecture: v.isPlaying,
       position: v.position.inMilliseconds,
       duree: v.duration.inMilliseconds,
@@ -965,7 +966,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
               imageFilter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
               child: Opacity(
                   opacity: 0.5,
-                  child: Image.network(m, fit: BoxFit.cover, cacheWidth: 240, errorBuilder: (_, _, _) => const SizedBox())),
+                  child: Image(image: ResizeImage(miniatures.image(m), width: 240), fit: BoxFit.cover, errorBuilder: (_, _, _) => const SizedBox())),
             ),
           ),
         Center(

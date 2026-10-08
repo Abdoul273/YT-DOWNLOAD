@@ -7,6 +7,8 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../moteur/miniatures.dart' as miniatures;
+
 class Couleurs extends ThemeExtension<Couleurs> {
   final Color fond, verre, verre2, verre3, trait, trait2, t1, t2, t3;
   final Color violet, indigo, bleu, cyan, rose, vert, ambre, rouge;
@@ -421,13 +423,16 @@ class Miniature extends StatelessWidget {
           child: Stack(fit: StackFit.expand, children: [
             Container(color: c.verre3),
             if (url != null)
-              Image.network(
-                url!,
-                fit: BoxFit.cover,
+              Image(
+                // Fichier local si déjà gardé (hors ligne), sinon réseau.
                 // Décodée à la taille affichée : YouTube sert souvent du 1280×720 pour une vignette de 112 px
-                cacheWidth: ((largeur.isFinite ? largeur : MediaQuery.sizeOf(context).width) *
-                        MediaQuery.devicePixelRatioOf(context))
-                    .round(),
+                image: ResizeImage.resizeIfNeeded(
+                    ((largeur.isFinite ? largeur : MediaQuery.sizeOf(context).width) *
+                            MediaQuery.devicePixelRatioOf(context))
+                        .round(),
+                    null,
+                    miniatures.image(url!)),
+                fit: BoxFit.cover,
                 gaplessPlayback: true,
                 filterQuality: FilterQuality.medium,
                 frameBuilder: (_, image, frame, synchrone) => synchrone
