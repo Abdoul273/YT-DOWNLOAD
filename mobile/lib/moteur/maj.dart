@@ -110,7 +110,8 @@ class Maj extends ChangeNotifier {
         await for (final morceau in rep) {
           sortie.add(morceau);
           recu += morceau.length;
-          if (total > 0) {
+          // Un rafraîchissement par point de pourcentage, pas un par paquet réseau
+          if (total > 0 && (recu * 100 ~/ total) != ((progression ?? 0) * 100).floor()) {
             progression = recu / total;
             notifyListeners();
           }

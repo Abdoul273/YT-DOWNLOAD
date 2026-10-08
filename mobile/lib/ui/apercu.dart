@@ -297,7 +297,7 @@ class _Lecteur extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: onToucher,
       child: Stack(fit: StackFit.expand, children: [
-        Center(child: AspectRatio(aspectRatio: val.aspectRatio, child: VideoPlayer(ctrl))),
+        Center(child: AspectRatio(aspectRatio: val.aspectRatio, child: RepaintBoundary(child: VideoPlayer(ctrl)))),
         if (val.isBuffering && val.isPlaying)
           const Center(child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white)),
         AnimatedOpacity(

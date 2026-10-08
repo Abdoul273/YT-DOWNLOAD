@@ -47,6 +47,7 @@ const reglagesDefaut = <String, dynamic>{
 
 class Reglages extends ChangeNotifier {
   final Map<String, dynamic> _v = Map.of(reglagesDefaut);
+  bool _ecriture = false, _aRecrire = false, _cookies = false;
 
   File get _fichier => File('${Natif.dossierFichiers}/reglages.json');
   File get fichierCookies => File('${Natif.dossierFichiers}/cookies.txt');
@@ -71,17 +72,35 @@ class Reglages extends ChangeNotifier {
     try {
       _v.addAll((jsonDecode(await _fichier.readAsString()) as Map).cast<String, dynamic>());
     } catch (_) {}
-  }
-
-  Future<void> _sauver() async {
     try {
-      final tmp = File('${_fichier.path}.tmp');
-      await tmp.writeAsString(jsonEncode(_v));
-      await tmp.rename(_fichier.path);
+      _cookies = await fichierCookies.exists() && await fichierCookies.length() > 0;
     } catch (_) {}
   }
 
-  bool get aDesCookies => fichierCookies.existsSync() && fichierCookies.lengthSync() > 0;
+  /// Une seule écriture à la fois (la dernière valeur gagne) : deux écritures simultanées
+  /// dans le même fichier temporaire pouvaient le tronquer et faire perdre tous les réglages
+  /// (code, favoris, positions de lecture…).
+  Future<void> _sauver() async {
+    if (_ecriture) {
+      _aRecrire = true;
+      return;
+    }
+    _ecriture = true;
+    try {
+      do {
+        _aRecrire = false;
+        try {
+          final tmp = File('${_fichier.path}.tmp');
+          await tmp.writeAsString(jsonEncode(_v), flush: true);
+          await tmp.rename(_fichier.path);
+        } catch (_) {}
+      } while (_aRecrire);
+    } finally {
+      _ecriture = false;
+    }
+  }
+
+  bool get aDesCookies => _cookies;
 
   /// Options d'authentification/réseau communes à tous les appels yt-dlp.
   List<String> argsAuth() => [
@@ -91,11 +110,13 @@ class Reglages extends ChangeNotifier {
 
   Future<void> enregistrerCookies(String texte) async {
     if (texte.trim().isEmpty) {
-      if (fichierCookies.existsSync()) await fichierCookies.delete();
+      if (await fichierCookies.exists()) await fichierCookies.delete();
+      _cookies = false;
     } else {
       final t = texte.trimLeft();
       await fichierCookies.writeAsString(
           t.startsWith('# Netscape') || t.startsWith('# HTTP') ? t : '# Netscape HTTP Cookie File\n$t');
+      _cookies = true;
     }
     notifyListeners();
   }

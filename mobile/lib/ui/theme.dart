@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 class Couleurs extends ThemeExtension<Couleurs> {
   final Color fond, verre, verre2, verre3, trait, trait2, t1, t2, t3;
@@ -93,18 +94,54 @@ TextStyle mono(BuildContext context, {double taille = 12, Color? couleur, FontWe
     TextStyle(fontFamily: 'JetBrainsMono', fontSize: taille, color: couleur ?? context.c.t2, fontWeight: poids);
 
 /// Fond : aurore de couleurs floues qui dérivent lentement.
+///
+/// Peinte directement (sans reconstruire de widgets) et limitée à ~20 images/s : le mouvement
+/// est si lent que c'est invisible, mais le GPU et la batterie respirent. En pause quand l'app
+/// est en arrière-plan ou que l'écran est recouvert (TickerMode).
 class Aurore extends StatefulWidget {
   const Aurore({super.key});
   @override
   State<Aurore> createState() => _AuroreState();
 }
 
-class _AuroreState extends State<Aurore> with SingleTickerProviderStateMixin {
-  late final AnimationController _a = AnimationController(vsync: this, duration: const Duration(seconds: 40))..repeat();
+class _AuroreState extends State<Aurore> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  static const _periode = 40000; // ms pour un tour complet
+  static const _intervalle = 50; // ms entre deux images
+  final _phase = ValueNotifier<double>(0);
+  late final Ticker _ticker = createTicker(_tic);
+  Duration _decalage = Duration.zero, _derniere = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _ticker.start();
+  }
+
+  void _tic(Duration t) {
+    if ((t - _derniere).inMilliseconds < _intervalle) return;
+    _derniere = t;
+    _phase.value = ((_decalage + t).inMilliseconds % _periode) / _periode;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState etat) {
+    if (etat == AppLifecycleState.resumed) {
+      if (!_ticker.isActive) {
+        _derniere = Duration.zero;
+        _ticker.start();
+      }
+    } else if (_ticker.isActive) {
+      _decalage += _derniere;
+      _ticker.stop();
+    }
+  }
 
   @override
   void dispose() {
-    _a.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _ticker.dispose();
+    _phase.dispose();
     super.dispose();
   }
 
@@ -112,37 +149,47 @@ class _AuroreState extends State<Aurore> with SingleTickerProviderStateMixin {
   Widget build(BuildContext context) {
     final c = context.c;
     return RepaintBoundary(
-      child: AnimatedBuilder(
-        animation: _a,
-        builder: (context, _) {
-          final t = _a.value * 2 * pi;
-          final taille = MediaQuery.sizeOf(context);
-          Widget tache(int i, double x, double y, double r) => Positioned(
-                left: taille.width * x - r,
-                top: taille.height * y - r,
-                child: Container(
-                  width: r * 2,
-                  height: r * 2,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: RadialGradient(colors: [c.aurore[i], c.aurore[i].withAlpha(0)]),
-                  ),
-                ),
-              );
-          return Stack(children: [
-            Positioned.fill(child: ColoredBox(color: c.fond)),
-            tache(0, 0.15 + 0.12 * sin(t), 0.12 + 0.06 * cos(t), taille.width * 0.75),
-            tache(1, 0.9 + 0.1 * cos(t * 2), 0.3 + 0.08 * sin(t), taille.width * 0.7),
-            tache(2, 0.3 + 0.15 * cos(t), 0.8 + 0.05 * sin(t * 2), taille.width * 0.8),
-            tache(3, 0.85 + 0.08 * sin(t * 3), 0.9 + 0.04 * cos(t), taille.width * 0.55),
-          ]);
-        },
-      ),
+      child: CustomPaint(painter: _PeintreAurore(_phase, c.fond, c.aurore), size: Size.infinite),
     );
   }
 }
 
+class _PeintreAurore extends CustomPainter {
+  final ValueNotifier<double> phase;
+  final Color fond;
+  final List<Color> couleurs;
+  _PeintreAurore(this.phase, this.fond, this.couleurs) : super(repaint: phase);
+
+  @override
+  void paint(Canvas canvas, Size taille) {
+    canvas.drawRect(Offset.zero & taille, Paint()..color = fond);
+    final t = phase.value * 2 * pi;
+    void tache(int i, double x, double y, double r) {
+      final centre = Offset(taille.width * x, taille.height * y);
+      canvas.drawCircle(
+        centre,
+        r,
+        Paint()
+          ..shader = RadialGradient(colors: [couleurs[i], couleurs[i].withAlpha(0)])
+              .createShader(Rect.fromCircle(center: centre, radius: r)),
+      );
+    }
+
+    tache(0, 0.15 + 0.12 * sin(t), 0.12 + 0.06 * cos(t), taille.width * 0.75);
+    tache(1, 0.9 + 0.1 * cos(t * 2), 0.3 + 0.08 * sin(t), taille.width * 0.7);
+    tache(2, 0.3 + 0.15 * cos(t), 0.8 + 0.05 * sin(t * 2), taille.width * 0.8);
+    tache(3, 0.85 + 0.08 * sin(t * 3), 0.9 + 0.04 * cos(t), taille.width * 0.55);
+  }
+
+  @override
+  bool shouldRepaint(_PeintreAurore old) => old.fond != fond || old.couleurs != couleurs;
+}
+
 /// Panneau de verre dépoli.
+///
+/// Sur l'aurore (déjà floue) un vrai flou d'arrière-plan ne change rien à l'œil mais coûte
+/// très cher : chaque panneau recalculait le flou de tout ce qui est derrière lui à chaque
+/// image. Le flou n'est donc appliqué que si [flou] > 0 est demandé explicitement.
 class Verre extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
@@ -153,7 +200,7 @@ class Verre extends StatelessWidget {
   final Border? bordure;
 
   const Verre({
-    super.key, required this.child, this.padding = const EdgeInsets.all(16), this.rayon = 24, this.flou = 24,
+    super.key, required this.child, this.padding = const EdgeInsets.all(16), this.rayon = 24, this.flou = 0,
     this.teinte, this.onTap, this.bordure,
   });
 
@@ -161,36 +208,33 @@ class Verre extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.c;
     final br = BorderRadius.circular(rayon);
-    return ClipRRect(
-      borderRadius: br,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: flou, sigmaY: flou),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: br,
-            child: Container(
-              padding: padding,
-              decoration: BoxDecoration(
-                borderRadius: br,
-                color: teinte ?? c.verre,
-                border: bordure ?? Border.all(color: c.trait),
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    (teinte ?? c.verre).withAlpha(((teinte ?? c.verre).a * 255 * 1.6).clamp(0, 255).round()),
-                    teinte ?? c.verre,
-                  ],
-                ),
-              ),
-              child: child,
-            ),
+    final base = teinte ?? c.verre;
+    Widget contenu = Padding(padding: padding, child: child);
+    if (onTap != null) contenu = InkWell(onTap: onTap, borderRadius: br, child: contenu);
+    Widget w = Material(
+      type: MaterialType.transparency,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: br,
+          border: bordure ?? Border.all(color: c.trait),
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [base.withAlpha((base.a * 255 * 1.6).clamp(0, 255).round()), base],
           ),
         ),
+        child: contenu,
       ),
     );
+    if (flou > 0) {
+      w = ClipRRect(
+        borderRadius: br,
+        child: BackdropFilter(filter: ImageFilter.blur(sigmaX: flou, sigmaY: flou), child: w),
+      );
+    } else if (onTap != null) {
+      w = ClipRRect(borderRadius: br, child: w); // garde l'effet d'appui dans les coins arrondis
+    }
+    return w;
   }
 }
 
@@ -377,7 +421,25 @@ class Miniature extends StatelessWidget {
           child: Stack(fit: StackFit.expand, children: [
             Container(color: c.verre3),
             if (url != null)
-              Image.network(url!, fit: BoxFit.cover, errorBuilder: (_, _, _) => Icon(Icons.movie_outlined, color: c.t3)),
+              Image.network(
+                url!,
+                fit: BoxFit.cover,
+                // Décodée à la taille affichée : YouTube sert souvent du 1280×720 pour une vignette de 112 px
+                cacheWidth: ((largeur.isFinite ? largeur : MediaQuery.sizeOf(context).width) *
+                        MediaQuery.devicePixelRatioOf(context))
+                    .round(),
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.medium,
+                frameBuilder: (_, image, frame, synchrone) => synchrone
+                    ? image
+                    : AnimatedOpacity(
+                        opacity: frame == null ? 0 : 1,
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOut,
+                        child: image,
+                      ),
+                errorBuilder: (_, _, _) => Icon(Icons.movie_outlined, color: c.t3),
+              ),
             if (texteDuree.isNotEmpty)
               Positioned(
                 right: 5,

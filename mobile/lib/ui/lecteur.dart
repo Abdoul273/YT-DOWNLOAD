@@ -43,6 +43,7 @@ class Lecteur extends StatefulWidget {
 
 class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   VideoPlayerController? _ctrl;
+  int _generation = 0; // chargement en cours : un « suivant » rapide annule le précédent
   late int _index = widget.index;
   String? _erreur;
   bool _controles = true, _verrou = false, _boucle = false;
@@ -138,6 +139,8 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
 
   // ── chargement ──────────────────────────────────────────────────────
   Future<void> _charger() async {
+    final generation = ++_generation;
+    bool perime() => !mounted || generation != _generation;
     _memoriserPosition();
     _annulerCompte();
     final ancien = _ctrl;
@@ -153,6 +156,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       _a = _b = null;
     });
     await ancien?.dispose();
+    if (perime()) return;
     final f = _tache.fichierPrincipal;
     if (f == null) {
       setState(() => _erreur = 'Fichier introuvable');
@@ -168,30 +172,37 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       await ctrl.initialize();
     } catch (e) {
       ctrl.dispose();
-      if (mounted) setState(() => _erreur = 'Lecture impossible : fichier déplacé, supprimé ou format non pris en charge.');
+      if (!perime()) setState(() => _erreur = 'Lecture impossible : fichier déplacé, supprimé ou format non pris en charge.');
       return;
     }
-    if (!mounted) {
+    if (perime()) {
       ctrl.dispose();
       return;
     }
-    ctrl.addListener(_maj);
     await ctrl.setLooping(_boucle);
     await ctrl.setPlaybackSpeed(_vitesse);
     await ctrl.setVolume(_volume);
     final pos = ((reglages['positions'] as Map?) ?? {})[_tache.id];
     if (pos is int && pos > 10000 && pos < ctrl.value.duration.inMilliseconds * 0.95) {
       await ctrl.seekTo(Duration(milliseconds: pos));
+    }
+    if (perime()) {
+      ctrl.dispose();
+      return;
+    }
+    if (pos is int && ctrl.value.position.inMilliseconds > 10000) {
       _indiquer('Reprise à ${_temps(Duration(milliseconds: pos))}', Icons.history_rounded);
     }
+    ctrl.addListener(_maj);
     setState(() => _ctrl = ctrl);
     _orienter();
     await ctrl.play();
+    if (perime()) return;
     _synchro();
     _programmerMasquage();
     try {
       final p = await ctrl.getAudioTracks();
-      if (mounted) setState(() => _pistes = p);
+      if (!perime()) setState(() => _pistes = p);
     } catch (_) {}
   }
 
@@ -231,7 +242,8 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     final v = c.value;
     _enLecture = v.isPlaying;
     if (v.isPlaying) {
-      _pouls.repeat(reverse: true);
+      // la pochette ne pulse qu'en musique
+      _audio ? _pouls.repeat(reverse: true) : _pouls.stop();
       if (!_pip) WakelockPlus.enable();
     } else {
       _pouls.stop();
@@ -879,7 +891,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                               }
                             },
                       child: Stack(fit: StackFit.expand, children: [
-                        _image(ctrl),
+                        RepaintBoundary(child: _image(ctrl)),
                         if (_sousTitresActifs && _aSousTitres && ctrl.value.caption.text.isNotEmpty)
                           Positioned(
                             left: 24,
@@ -947,9 +959,14 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       final m = _tache.miniature;
       return Stack(fit: StackFit.expand, children: [
         if (m != null)
-          ImageFiltered(
-            imageFilter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
-            child: Opacity(opacity: 0.5, child: Image.network(m, fit: BoxFit.cover, errorBuilder: (_, _, _) => const SizedBox())),
+          // Isolé et en basse définition : de toute façon flouté, il n'est plus recalculé à chaque pulsation
+          RepaintBoundary(
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
+              child: Opacity(
+                  opacity: 0.5,
+                  child: Image.network(m, fit: BoxFit.cover, cacheWidth: 240, errorBuilder: (_, _, _) => const SizedBox())),
+            ),
           ),
         Center(
           child: Padding(

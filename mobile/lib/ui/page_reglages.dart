@@ -12,6 +12,7 @@ import '../moteur/maj.dart';
 import '../moteur/natif.dart';
 import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
+import 'etat.dart';
 import 'fenetre_maj.dart';
 import 'theme.dart';
 import 'verrou.dart';
@@ -24,6 +25,28 @@ class PageReglages extends StatefulWidget {
 
 class _PageReglagesState extends State<PageReglages> {
   bool _maj = false;
+  int? _temporaires; // calculé en arrière-plan : parcourir les dossiers bloquait l'écran
+
+  @override
+  void initState() {
+    super.initState();
+    onglet.addListener(_ongletChange);
+  }
+
+  @override
+  void dispose() {
+    onglet.removeListener(_ongletChange);
+    super.dispose();
+  }
+
+  void _ongletChange() {
+    if (onglet.value == 4) _mesurerTemporaires();
+  }
+
+  Future<void> _mesurerTemporaires() async {
+    final n = await gestionnaire.tailleTemporairesAsync();
+    if (mounted && n != _temporaires) setState(() => _temporaires = n);
+  }
 
   Future<void> _mettreAJour({bool nightly = false}) async {
     setState(() => _maj = true);
@@ -52,8 +75,10 @@ class _PageReglagesState extends State<PageReglages> {
   }
 
   Future<void> _cookies() async {
+    final texte = reglages.aDesCookies ? await reglages.fichierCookies.readAsString().catchError((_) => '') : '';
+    if (!mounted) return;
     final c = context.c;
-    final ctrl = TextEditingController(text: reglages.aDesCookies ? reglages.fichierCookies.readAsStringSync() : '');
+    final ctrl = TextEditingController(text: texte);
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -127,7 +152,7 @@ class _PageReglagesState extends State<PageReglages> {
 
   Future<void> _viderTemporaires() async {
     final n = gestionnaire.viderTemporaires();
-    setState(() {});
+    setState(() => _temporaires = 0);
     toast(context, n > 0 ? '${formaterTaille(n)} libérés' : 'Rien à nettoyer');
   }
 
@@ -303,7 +328,11 @@ class _PageReglagesState extends State<PageReglages> {
                 ),
                 _Ligne(
                   titre: 'Fichiers temporaires',
-                  sous: '${formaterTaille(gestionnaire.tailleTemporaires())} de téléchargements abandonnés à nettoyer',
+                  sous: _temporaires == null
+                      ? 'Calcul…'
+                      : _temporaires! > 0
+                          ? '${formaterTaille(_temporaires!)} de téléchargements abandonnés à nettoyer'
+                          : 'Rien à nettoyer',
                   fin: Icon(Icons.cleaning_services_outlined, color: c.t3),
                   onTap: _viderTemporaires,
                 ),

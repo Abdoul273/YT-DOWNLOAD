@@ -31,6 +31,9 @@ class App extends StatefulWidget {
 }
 
 class _AppState extends State<App> {
+  // Construits une seule fois : un nouveau ThemeData à chaque réglage modifié
+  // reconstruisait toute l'application.
+  static final _themeSombre = construireTheme(true), _themeClair = construireTheme(false);
   late Future<void> _demarrage = _demarrer();
   bool _ecoutePartages = false;
 
@@ -70,7 +73,7 @@ class _AppState extends State<App> {
         return MaterialApp(
           title: 'YT-NEXUS',
           debugShowCheckedModeBanner: false,
-          theme: construireTheme(sombre),
+          theme: sombre ? _themeSombre : _themeClair,
           home: AnnotatedRegion<SystemUiOverlayStyle>(
             value: (sombre ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark).copyWith(
               statusBarColor: Colors.transparent,
@@ -174,10 +177,9 @@ class Accueil extends StatelessWidget {
                 child: Row(children: [
                   const _Logo(),
                   const Spacer(),
-                  ListenableBuilder(
-                    listenable: gestionnaire,
-                    builder: (context, _) {
-                      final d = gestionnaire.debit;
+                  ValueListenableBuilder(
+                    valueListenable: gestionnaire.debitN,
+                    builder: (context, d, _) {
                       if (d <= 0) return const SizedBox();
                       return Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -204,7 +206,10 @@ class Accueil extends StatelessWidget {
               Expanded(
                 child: ValueListenableBuilder(
                   valueListenable: onglet,
-                  builder: (context, i, _) => IndexedStack(index: i, children: _pages),
+                  // Les onglets cachés gardent leur état mais leurs animations s'arrêtent.
+                  builder: (context, i, _) => IndexedStack(index: i, children: [
+                    for (var k = 0; k < _pages.length; k++) TickerMode(enabled: k == i, child: _pages[k]),
+                  ]),
                 ),
               ),
             ]),
@@ -233,10 +238,11 @@ class _Navigation extends StatelessWidget {
     final bas = MediaQuery.paddingOf(context).bottom;
     return Padding(
       padding: EdgeInsets.fromLTRB(14, 0, 14, bas + 10),
-      child: ClipRRect(
+      // Isolée : le flou de la barre ne force pas à repeindre la page, et inversement.
+      child: RepaintBoundary(child: ClipRRect(
         borderRadius: BorderRadius.circular(28),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
             height: 68,
             decoration: BoxDecoration(
@@ -271,16 +277,20 @@ class _Navigation extends StatelessWidget {
                           onTap: () => onglet.value = i,
                           radius: 36,
                           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                            ListenableBuilder(
-                              listenable: gestionnaire,
-                              builder: (_, _) => Badge(
-                                isLabelVisible: i == 2 && gestionnaire.nbActifs > 0,
-                                backgroundColor: c.indigo,
-                                label: Text('${gestionnaire.nbActifs}'),
+                            if (i == 2)
+                              ValueListenableBuilder(
+                                valueListenable: gestionnaire.nbActifsN,
+                                builder: (_, n, icone) => Badge(
+                                  isLabelVisible: n > 0,
+                                  backgroundColor: c.indigo,
+                                  label: Text('$n'),
+                                  child: icone,
+                                ),
                                 child: Icon(actuel == i ? _items[i].$2 : _items[i].$1,
                                     color: actuel == i ? c.t1 : c.t3, size: 24),
-                              ),
-                            ),
+                              )
+                            else
+                              Icon(actuel == i ? _items[i].$2 : _items[i].$1, color: actuel == i ? c.t1 : c.t3, size: 24),
                             const SizedBox(height: 3),
                             Text(_items[i].$3,
                                 style: TextStyle(
@@ -296,7 +306,7 @@ class _Navigation extends StatelessWidget {
             ),
           ),
         ),
-      ),
+      )),
     );
   }
 }

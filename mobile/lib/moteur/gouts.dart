@@ -125,6 +125,8 @@ class Gouts extends ChangeNotifier {
   String? erreur;
   Future<void>? _enCours;
   Timer? _sauvegarde;
+  Profil? _profil;
+  int _profilT = 0;
 
   File get _fichier => File('${Natif.dossierFichiers}/gouts.json');
   static int get _maintenant => DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -145,6 +147,7 @@ class Gouts extends ChangeNotifier {
   }
 
   void _sauver() {
+    _profil = null; // signaux, recherches ou blocages modifiés
     _sauvegarde?.cancel();
     _sauvegarde = Timer(const Duration(seconds: 2), () async {
       try {
@@ -227,7 +230,16 @@ class Gouts extends ChangeNotifier {
   }
 
   // ── profil ──────────────────────────────────────────────────────────
+  /// Profil mis en cache (l'écran Recherche le demande à chaque reconstruction) ;
+  /// recalculé quand un signal change ou toutes les 10 minutes (usure des poids).
   Profil profil() {
+    final p = _profil;
+    if (p != null && _maintenant - _profilT < 600) return p;
+    _profilT = _maintenant;
+    return _profil = _calculerProfil();
+  }
+
+  Profil _calculerProfil() {
     final p = Profil();
     final maintenant = _maintenant;
     double usure(int t) => pow(0.5, (maintenant - t) / 86400 / _demiVieJours).toDouble();

@@ -598,6 +598,7 @@ class _VuePlaylist extends StatefulWidget {
 class _VuePlaylistState extends State<_VuePlaylist> {
   late final Set<int> _choisies = {for (var i = 0; i < widget.p.entrees.length; i++) i};
   late String _type = reglages['type'], _qualite = reglages['qualite'];
+  int _affichees = 50; // les grosses playlists s'affichent par tranches pour rester fluides
 
   void _telecharger() {
     final p = widget.p;
@@ -654,7 +655,7 @@ class _VuePlaylistState extends State<_VuePlaylist> {
       Verre(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Column(children: [
-          for (var i = 0; i < p.entrees.length; i++)
+          for (var i = 0; i < p.entrees.length && i < _affichees; i++)
             InkWell(
               onTap: () => setState(() => _choisies.contains(i) ? _choisies.remove(i) : _choisies.add(i)),
               child: Padding(
@@ -675,6 +676,12 @@ class _VuePlaylistState extends State<_VuePlaylist> {
                   ),
                 ]),
               ),
+            ),
+          if (p.entrees.length > _affichees)
+            TextButton.icon(
+              onPressed: () => setState(() => _affichees += 100),
+              icon: const Icon(Icons.expand_more_rounded),
+              label: Text('Afficher plus (${p.entrees.length - _affichees} restantes)'),
             ),
         ]),
       ),

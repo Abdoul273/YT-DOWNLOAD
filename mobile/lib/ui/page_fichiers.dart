@@ -138,7 +138,8 @@ class _PageFichiersState extends State<PageFichiers> {
   Widget build(BuildContext context) {
     final c = context.c;
     return ListenableBuilder(
-      listenable: Listenable.merge([gestionnaire, reglages]),
+      // Pas l'avancement des téléchargements en cours : seulement les changements de statut.
+      listenable: Listenable.merge([gestionnaire.statuts, reglages]),
       builder: (context, _) {
         final termines = gestionnaire.taches.where((t) => t.statut == 'termine' && t.fichiers.isNotEmpty).toList();
         final q = _requete.toLowerCase();

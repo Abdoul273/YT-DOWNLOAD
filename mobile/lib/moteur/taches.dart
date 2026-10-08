@@ -122,6 +122,17 @@ class Gestionnaire extends ChangeNotifier {
   Timer? _minuteur, _sauvegarde;
   double _derniereNotif = 0, _dernierReseau = 0;
   String _reseau = 'inconnu';
+  bool _serviceActif = false;
+  bool _ecriture = false, _aRecrire = false;
+
+  /// Nombre de téléchargements actifs et débit total : écoutés par l'en-tête et la barre
+  /// de navigation, qui ne se reconstruisent ainsi que si la valeur change vraiment.
+  final nbActifsN = ValueNotifier<int>(0);
+  final debitN = ValueNotifier<double>(0);
+
+  /// Incrémenté à chaque changement autre que l'avancement d'un téléchargement
+  /// (ajout, fin, suppression…) : la bibliothèque n'a pas à se reconstruire 4 fois par seconde.
+  final statuts = ValueNotifier<int>(0);
 
   File get _fichier => File('${Natif.dossierFichiers}/taches.json');
 
@@ -154,7 +165,7 @@ class Gestionnaire extends ChangeNotifier {
       final p = t.fichierPrincipal;
       if (p != null && !await Natif.existe(p.uri)) t.message = 'Fichier déplacé ou supprimé';
     }
-    notifyListeners();
+    _touche();
   }
 
   @override
@@ -164,7 +175,10 @@ class Gestionnaire extends ChangeNotifier {
   }
 
   // ── état ────────────────────────────────────────────────────────────
-  void _touche({bool sauver = false}) {
+  void _touche({bool sauver = false, bool progres = false}) {
+    if (!progres) statuts.value++;
+    nbActifsN.value = nbActifs;
+    debitN.value = debit;
     notifyListeners();
     _majService();
     if (sauver) {
@@ -174,23 +188,42 @@ class Gestionnaire extends ChangeNotifier {
     }
   }
 
+  /// Écritures l'une après l'autre : deux écritures simultanées dans le même fichier
+  /// temporaire pouvaient produire un JSON tronqué et faire perdre toute la liste.
   Future<void> _sauver() async {
     _sauvegarde?.cancel();
     _sauvegarde = null;
+    if (_ecriture) {
+      _aRecrire = true;
+      return;
+    }
+    _ecriture = true;
     try {
-      final tmp = File('${_fichier.path}.tmp');
-      await tmp.writeAsString(jsonEncode([for (final t in taches) t.versJson()]));
-      await tmp.rename(_fichier.path);
-    } catch (_) {}
+      do {
+        _aRecrire = false;
+        try {
+          final tmp = File('${_fichier.path}.tmp');
+          await tmp.writeAsString(jsonEncode([for (final t in taches) t.versJson()]), flush: true);
+          await tmp.rename(_fichier.path);
+        } catch (_) {}
+      } while (_aRecrire);
+    } finally {
+      _ecriture = false;
+    }
   }
 
   /// Notification de premier plan : garde l'app en vie pendant les téléchargements.
   void _majService() {
     final actives = taches.where((t) => actifs.contains(t.statut)).toList();
     if (actives.isEmpty) {
-      Natif.service(false);
+      if (_serviceActif) {
+        _serviceActif = false;
+        _derniereNotif = 0;
+        Natif.service(false);
+      }
       return;
     }
+    _serviceActif = true;
     final m = _maintenant();
     if (m - _derniereNotif < 1) return;
     _derniereNotif = m;
@@ -365,6 +398,13 @@ class Gestionnaire extends ChangeNotifier {
     final infos = Directory('${Natif.dossierCache}/infos');
     if (infos.existsSync()) n += _tailleDossier(infos);
     return n;
+  }
+
+  /// Comme [tailleTemporaires], sans bloquer l'interface (parcours dans un autre isolate).
+  Future<int> tailleTemporairesAsync() {
+    final garder = {for (final t in taches) if (actifs.contains(t.statut) || t.statut == 'pause') t.id};
+    final travail = Natif.dossierTravail, infos = '${Natif.dossierCache}/infos';
+    return compute(_tailleTemporairesIsolat, (travail, infos, garder));
   }
 
   /// Supprime les temporaires ; renvoie les octets libérés.
@@ -790,9 +830,12 @@ class Gestionnaire extends ChangeNotifier {
     _maj(t);
     final r = await Natif.executer(t.id, cmd, ligne: (ligne) {
       if (ligne.startsWith('NEXUS ')) {
-        if (_ligneProgression(t, ligne) && _maintenant() - derniereMaj > 0.25) {
-          derniereMaj = _maintenant();
-          _touche();
+        // yt-dlp envoie des dizaines de lignes par seconde : inutile de toutes les décoder
+        final m = _maintenant();
+        final fin = ligne.contains('"finished"');
+        if ((fin || m - derniereMaj > 0.25) && _ligneProgression(t, ligne)) {
+          derniereMaj = m;
+          _touche(progres: !fin);
         }
       } else if (ligne.startsWith('NEXUSPP ')) {
         _lignePp(t, ligne);
@@ -869,6 +912,29 @@ class Gestionnaire extends ChangeNotifier {
       _touche();
     }
   }
+}
+
+int _tailleTemporairesIsolat((String, String, Set<String>) a) {
+  final (travail, infos, garder) = a;
+  var n = 0;
+  int taille(Directory d) {
+    var x = 0;
+    try {
+      for (final f in d.listSync(recursive: true).whereType<File>()) {
+        x += f.lengthSync();
+      }
+    } catch (_) {}
+    return x;
+  }
+
+  try {
+    for (final d in Directory(travail).listSync().whereType<Directory>()) {
+      if (!garder.contains(d.uri.pathSegments.where((s) => s.isNotEmpty).last)) n += taille(d);
+    }
+  } catch (_) {}
+  final i = Directory(infos);
+  if (i.existsSync()) n += taille(i);
+  return n;
 }
 
 String formaterTaille(num octets) {

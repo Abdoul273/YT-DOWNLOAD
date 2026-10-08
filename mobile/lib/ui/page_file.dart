@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../moteur/natif.dart';
 import '../moteur/taches.dart';
+import 'etat.dart';
 import 'theme.dart';
 
 const _filtres = {
@@ -29,13 +30,28 @@ class PageFile extends StatefulWidget {
 
 class _PageFileState extends State<PageFile> {
   String _filtre = 'tout';
+  Widget? _vue;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _vue = null; // thème changé : on reconstruit
+  }
 
   @override
   Widget build(BuildContext context) {
-    final c = context.c;
+    _vue = null;
     return ListenableBuilder(
-      listenable: gestionnaire,
-      builder: (context, _) {
+      listenable: Listenable.merge([gestionnaire, onglet]),
+      // Onglet caché : on garde la dernière vue au lieu de tout reconstruire 4 fois par seconde.
+      builder: (context, _) => onglet.value != 2 && _vue != null ? _vue! : _vue = _construire(context),
+    );
+  }
+
+  Widget _construire(BuildContext context) {
+    final c = context.c;
+    return Builder(
+      builder: (context) {
         final toutes = gestionnaire.taches;
         final liste = toutes.where((t) => _correspond(_filtre, t)).toList();
         return CustomScrollView(slivers: [
