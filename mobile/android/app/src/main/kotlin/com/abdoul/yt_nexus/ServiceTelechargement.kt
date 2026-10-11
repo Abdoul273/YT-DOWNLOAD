@@ -85,18 +85,19 @@ class ServiceTelechargement : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
-        private fun construire(ctx: Context, titre: String, texte: String, progression: Int, lignes: List<String>) =
-            NotificationCompat.Builder(ctx, CANAL_PROGRESSION)
+        private fun construire(ctx: Context, titre: String, texte: String, progression: Int, lignes: List<String>): android.app.Notification {
+            val style: NotificationCompat.Style = if (lignes.size > 1) {
+                val inbox = NotificationCompat.InboxStyle()
+                inbox.setBigContentTitle("Téléchargements YT-NEXUS")
+                lignes.forEach { inbox.addLine(it) }
+                inbox.setSummaryText(texte)
+                inbox
+            } else NotificationCompat.BigTextStyle().bigText(texte)
+            return NotificationCompat.Builder(ctx, CANAL_PROGRESSION)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
                 .setContentTitle(titre)
                 .setContentText(texte)
-                .setStyle(if (lignes.size > 1) {
-                    NotificationCompat.InboxStyle().apply {
-                        setBigContentTitle("Téléchargements YT-NEXUS")
-                        lignes.forEach { addLine(it) }
-                        setSummaryText(texte)
-                    }
-                } else NotificationCompat.BigTextStyle().bigText(texte))
+                .setStyle(style)
                 .setSubText("YT-NEXUS · Téléchargement")
                 .setCategory(NotificationCompat.CATEGORY_PROGRESS)
                 .setColor(0xFF818CF8.toInt())
@@ -109,6 +110,7 @@ class ServiceTelechargement : Service() {
                 .setContentIntent(ouvrirApp(ctx))
                 .setProgress(100, progression.coerceIn(0, 100), progression < 0)
                 .build()
+        }
 
         fun mettreAJour(ctx: Context, enMarche: Boolean, titre: String, texte: String, progression: Int, lignes: List<String>) {
             canaux(ctx)
