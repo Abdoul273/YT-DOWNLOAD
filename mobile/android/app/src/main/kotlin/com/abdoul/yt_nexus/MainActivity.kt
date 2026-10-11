@@ -41,6 +41,7 @@ class MainActivity : FlutterActivity() {
     private val principal = Handler(Looper.getMainLooper())
     private var evenements: EventChannel.EventSink? = null
     private var partageEnAttente: String? = null
+    private var telechargementsEnAttente = false
     @Volatile private var pret = false
     private var pipAuto = false
     private var pipRatio = 16.0 / 9.0
@@ -49,6 +50,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         val messager = flutterEngine.dartExecutor.binaryMessenger
         MethodChannel(messager, "yt_nexus/natif").setMethodCallHandler { appel, res -> traiter(appel, res) }
+        ServiceTelechargement.ecouteur = { emettre(it) }
         ServiceLecture.ecouteur = { emettre(it) }
         RecepteurInstallation.ecouteur = { emettre(it) }
         EventChannel(messager, "yt_nexus/evenements").setStreamHandler(object : EventChannel.StreamHandler {
@@ -65,10 +67,15 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         partageEnAttente = textePartage(intent)
+        telechargementsEnAttente = intent?.getBooleanExtra("ouvrirTelechargements", false) == true
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if (intent.getBooleanExtra("ouvrirTelechargements", false)) {
+            telechargementsEnAttente = evenements == null
+            emettre(mapOf("type" to "telechargements"))
+        }
         textePartage(intent)?.let { emettre(mapOf("type" to "partage", "texte" to it)) }
     }
 
@@ -135,6 +142,10 @@ class MainActivity : FlutterActivity() {
     private fun traiter(appel: MethodCall, res: MethodChannel.Result) {
         when (appel.method) {
             "init" -> enFond(res) { initialiser() }
+            "notificationInitiale" -> {
+                res.success(telechargementsEnAttente)
+                telechargementsEnAttente = false
+            }
             "partageInitial" -> {
                 res.success(partageEnAttente)
                 partageEnAttente = null
@@ -180,6 +191,7 @@ class MainActivity : FlutterActivity() {
                     appel.argument<String>("titre") ?: "",
                     appel.argument<String>("texte") ?: "",
                     appel.argument<Int>("progression") ?: -1,
+                    appel.argument<List<String>>("lignes") ?: emptyList(),
                 )
                 res.success(null)
             }

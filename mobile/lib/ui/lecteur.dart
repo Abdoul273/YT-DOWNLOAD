@@ -32,6 +32,8 @@ Future<void> ouvrirLecteur(BuildContext context, List<Tache> liste, int index) =
       transitionsBuilder: (_, a, _, w) => FadeTransition(opacity: a, child: w),
     ));
 
+const _orientations = ['Automatique', 'Portrait', 'Paysage', 'Paysage inversé'];
+
 const _formats = ['Ajuster', 'Remplir', '16:9', '4:3', 'Étirer'];
 
 class Lecteur extends StatefulWidget {
@@ -50,6 +52,8 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   bool _controles = true, _verrou = false, _boucle = false;
   bool _aSousTitres = false, _signale = false, _pip = false, _enLecture = false;
   bool _glisseBarre = false, _reste = false;
+  int _orientation = _pref<num>('lecteur_orientation', 0).toInt().clamp(0, 3);
+  bool _interaction = false;
   final _abos = <StreamSubscription>[];
   List<VideoAudioTrack> _pistes = [];
   Timer? _masquer, _sommeil;
@@ -147,6 +151,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     final ancien = _ctrl;
     ancien?.removeListener(_maj);
     _enLecture = false;
+    _interaction = false;
+    _glisseBarre = false;
+    _cible = null;
     setState(() {
       _ctrl = null;
       _erreur = null;
@@ -221,20 +228,100 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     }();
   }
 
-  void _orienter() {
-    final c = _ctrl;
-    if (c == null || _audio) return;
-    SystemChrome.setPreferredOrientations(c.value.aspectRatio >= 1
-        ? [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]
-        : [DeviceOrientation.portraitUp]);
-  }
+  Future<void> _orienter() => SystemChrome.setPreferredOrientations(switch (_audio ? 0 : _orientation) {
+        1 => [DeviceOrientation.portraitUp],
+        2 => [DeviceOrientation.landscapeLeft],
+        3 => [DeviceOrientation.landscapeRight],
+        _ => [DeviceOrientation.portraitUp, DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight],
+      });
+
+  void _menuOrientation() => _choisir<int>(
+        'Rotation de l’écran',
+        [for (var i = 0; i < _orientations.length; i++) (i, _orientations[i], _orientation == i)],
+        (i) {
+          setState(() => _orientation = i);
+          _retenir('lecteur_orientation', i);
+          _orienter();
+          _indiquer(_orientations[i], Icons.screen_rotation_rounded);
+        },
+      );
 
   void _pivoter() {
     final paysage = MediaQuery.orientationOf(context) == Orientation.landscape;
-    SystemChrome.setPreferredOrientations(paysage
-        ? [DeviceOrientation.portraitUp]
-        : [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
+    setState(() => _orientation = paysage ? 1 : 2);
+    _retenir('lecteur_orientation', _orientation);
+    _orienter();
+    _indiquer(_orientations[_orientation], Icons.screen_rotation_rounded);
   }
+
+  Future<void> _allerAuTemps() async {
+    final ctrl = _ctrl;
+    if (ctrl == null) return;
+    var texte = _temps(ctrl.value.position);
+    _masquer?.cancel();
+    final cible = await showDialog<Duration>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, maj) {
+        final morceaux = texte.trim().split(':');
+        final nombres = morceaux.map(int.tryParse).toList();
+        final valide = morceaux.length <= 3 && nombres.every((n) => n != null && n >= 0) &&
+            nombres.skip(1).every((n) => n! < 60);
+        var secondes = 0;
+        if (valide) {
+          for (final n in nombres) {
+            secondes = secondes * 60 + n!;
+          }
+        }
+        final temps = Duration(seconds: secondes);
+        final possible = valide && temps <= ctrl.value.duration;
+        return AlertDialog(
+          title: const Text('Aller à un moment'),
+          content: TextFormField(
+            initialValue: texte,
+            autofocus: true,
+            keyboardType: TextInputType.datetime,
+            onChanged: (v) => maj(() => texte = v),
+            decoration: InputDecoration(
+              labelText: 'Position (mm:ss ou hh:mm:ss)',
+              helperText: 'Durée : ${_temps(ctrl.value.duration)}',
+              errorText: possible ? null : 'Saisis une position dans la vidéo',
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuler')),
+            FilledButton(onPressed: possible ? () => Navigator.pop(ctx, temps) : null, child: const Text('Aller')),
+          ],
+        );
+      }),
+    );
+    if (!mounted || ctrl != _ctrl) return;
+    if (cible != null) {
+      await ctrl.seekTo(cible);
+      if (!mounted) return;
+      _synchro();
+      _indiquer(_temps(cible), Icons.my_location_rounded);
+    }
+    _programmerMasquage();
+  }
+
+  void _aideGestes() => _feuille<void>((ctx, _) => SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          _poignee('Les gestes du lecteur'),
+          for (final (icone, titre, detail) in const [
+            (Icons.touch_app_rounded, 'Double appui sur les côtés', 'Reculer ou avancer ; au centre : lecture / pause'),
+            (Icons.swipe_rounded, 'Glissement horizontal', 'Chercher un moment sans interrompre la lecture'),
+            (Icons.brightness_6_rounded, 'Glissement vertical à gauche', 'Ajuster la luminosité'),
+            (Icons.volume_up_rounded, 'Glissement vertical à droite', 'Ajuster le volume'),
+            (Icons.speed_rounded, 'Maintenir le doigt', 'Accélérer à 2×, relâcher pour revenir'),
+            (Icons.zoom_out_map_rounded, 'Pincer avec deux doigts', 'Remplir l’écran ou afficher toute l’image'),
+            (Icons.screen_rotation_rounded, 'Bouton de rotation', 'Pivoter ; appui long pour choisir le sens ou le mode automatique'),
+          ])
+            ListTile(leading: Icon(icone, color: Colors.white70),
+              title: Text(titre, style: const TextStyle(color: Colors.white)),
+              subtitle: Text(detail, style: const TextStyle(color: Colors.white70))),
+          const SizedBox(height: 16),
+        ]),
+      ), grande: true);
 
   /// Notification média + image dans l'image automatique + écran allumé : à appeler quand l'état de lecture change.
   void _synchro() {
@@ -302,6 +389,18 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     final c = _ctrl;
     if (!mounted || c == null) return;
     final v = c.value;
+    if (v.hasError) {
+      if (_erreur == null) {
+        WakelockPlus.disable();
+        Natif.mediaArreter();
+        Natif.pipAuto(false, 16 / 9);
+        setState(() {
+          _verrou = false;
+          _erreur = 'La lecture a été interrompue. Réessaie ou ouvre le fichier avec une autre application.';
+        });
+      }
+      return;
+    }
     if (v.isInitialized && v.isPlaying != _enLecture) _synchro();
     if (!_signale && v.duration > Duration.zero &&
         (v.position.inSeconds > 60 || v.position.inMilliseconds > v.duration.inMilliseconds * 0.3)) {
@@ -383,7 +482,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   void _programmerMasquage() {
     _masquer?.cancel();
     _masquer = Timer(const Duration(milliseconds: 3500), () {
-      if (mounted && (_ctrl?.value.isPlaying ?? false)) setState(() => _controles = false);
+      if (mounted && !_interaction && !_glisseBarre && (_ctrl?.value.isPlaying ?? false)) setState(() => _controles = false);
     });
   }
 
@@ -523,14 +622,14 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
               ),
           ]),
         ));
-    if (r != null) choix(r);
+    if (r != null && mounted) choix(r);
   }
 
   String _libVitesse(double v) => v == 1 ? 'Normale' : '${'$v'.replaceAll('.0', '').replaceAll('.', ',')}×';
 
   void _menuVitesse() => _feuille<void>((ctx, maj) {
         final c = context.c;
-        return Padding(
+        return SingleChildScrollView(child: Padding(
           padding: const EdgeInsets.only(bottom: 18),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             _poignee('Vitesse de lecture'),
@@ -585,7 +684,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
               ]),
             ),
           ]),
-        );
+        ));
       });
 
   void _menuSommeil() => _choisir<int>('Minuteur de sommeil', [
@@ -739,6 +838,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
             if (_pistes.length > 1) ligne(Icons.translate_rounded, 'Piste audio', null, _menuPistes),
             if (_aSousTitres)
               ligne(Icons.closed_caption_rounded, 'Sous-titres', _sousTitresActifs ? '$_tailleSt pt' : 'Désactivés', _menuSousTitres),
+            if (!_audio) ligne(Icons.screen_rotation_rounded, 'Rotation de l’écran', _orientations[_orientation], _menuOrientation),
+            ligne(Icons.my_location_rounded, 'Aller à un moment', null, _allerAuTemps),
+            ligne(Icons.touch_app_rounded, 'Guide des gestes', null, _aideGestes),
             if (!_audio) ligne(Icons.aspect_ratio_rounded, 'Format de l’image', _formats[_format], _menuFormat),
             ligne(Icons.forward_10_rounded, 'Durée des sauts', '$_saut s', _menuSaut),
             ligne(Icons.bedtime_outlined, 'Minuteur de sommeil', _sommeilMin > 0 ? '$_sommeilMin min' : 'Désactivé', _menuSommeil),
@@ -770,6 +872,11 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   }
 
   void _pincement(PointerEvent e) {
+    if (_verrou) {
+      _pointeurs.clear();
+      _distancePincement = 0;
+      return;
+    }
     if (e is PointerDownEvent || e is PointerMoveEvent) _pointeurs[e.pointer] = e.position;
     if (e is PointerUpEvent || e is PointerCancelEvent) {
       _pointeurs.remove(e.pointer);
@@ -831,6 +938,8 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                       onLongPressStart: _verrou
                           ? null
                           : (_) {
+                              _interaction = true;
+                              _masquer?.cancel();
                               _vitesseAvantAppuiLong = _vitesse;
                               ctrl.setPlaybackSpeed(2);
                               HapticFeedback.mediumImpact();
@@ -842,12 +951,16 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                       onLongPressEnd: _verrou
                           ? null
                           : (_) {
+                              _interaction = false;
+                              _programmerMasquage();
                               ctrl.setPlaybackSpeed(_vitesseAvantAppuiLong ?? 1);
                               setState(() => _indication = null);
                             },
                       onHorizontalDragStart: _verrou || _pointeurs.length > 1
                           ? null
                           : (d) {
+                              _interaction = true;
+                              _masquer?.cancel();
                               _debutGlisse = d.localPosition.dx;
                               _positionDebut = ctrl.value.position;
                             },
@@ -871,12 +984,19 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                       onHorizontalDragEnd: _verrou
                           ? null
                           : (_) {
+                              _interaction = false;
+                              _programmerMasquage();
                               if (_cible != null) ctrl.seekTo(_cible!).then((_) => _synchro());
                               setState(() {
                                 _cible = null;
                                 _indication = null;
                               });
                             },
+                      onHorizontalDragCancel: () {
+                        _interaction = false;
+                        setState(() { _cible = null; _indication = null; });
+                        _programmerMasquage();
+                      },
                       onVerticalDragUpdate: _verrou || _pointeurs.length > 1
                           ? null
                           : (d) {
@@ -897,7 +1017,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                           Positioned(
                             left: 24,
                             right: 24,
-                            bottom: _controles ? 112 : 30,
+                            bottom: (_controles || !ctrl.value.isPlaying) && !_verrou ? 160 : 30,
                             child: Center(
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -936,6 +1056,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                 const SizedBox(height: 12),
                 Text(_erreur!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white)),
                 const SizedBox(height: 16),
+                FilledButton.icon(onPressed: _charger, icon: const Icon(Icons.refresh_rounded), label: const Text('Réessayer')),
                 if (_tache.fichierPrincipal != null)
                   TextButton(
                     onPressed: () => Natif.ouvrir(_tache.fichierPrincipal!.uri, _tache.fichierPrincipal!.mime),
@@ -1108,7 +1229,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       bottom: 90,
       child: SafeArea(
         child: Container(
-          width: 300,
+          width: (MediaQuery.sizeOf(context).width - 40).clamp(0, 300).toDouble(),
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: const Color(0xEE14162A),
@@ -1154,14 +1275,31 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
         tooltip: info,
         iconSize: taille,
         visualDensity: VisualDensity.compact,
-        constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
+        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
         padding: EdgeInsets.zero,
         icon: Icon(icone),
         onPressed: tap,
       );
 
+  Widget _boutonSaut(int sens) => Tooltip(
+        message: '${sens < 0 ? 'Reculer' : 'Avancer'} de $_saut secondes',
+        child: SizedBox(
+          width: 56,
+          height: 64,
+          child: TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.white, padding: EdgeInsets.zero),
+            onPressed: () => _sauter(sens, onde: false),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(sens < 0 ? Icons.fast_rewind_rounded : Icons.fast_forward_rounded, size: 30),
+              Text('$_saut s', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        ),
+      );
+
   Widget _surcouche(VideoPlayerController ctrl) {
     final v = ctrl.value;
+    final compact = MediaQuery.sizeOf(context).width < 600;
     final visible = _controles || !v.isPlaying || _audio;
     const blanc = Colors.white;
     if (_verrou) {
@@ -1234,14 +1372,14 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                           style: const TextStyle(color: Colors.white70, fontSize: 12)),
                     ]),
                   ),
-                  if (!_audio) _ib(Icons.picture_in_picture_alt_rounded, 'Image dans l’image', _entrerPip),
-                  if (_aSousTitres)
+                  if (!_audio && !compact) _ib(Icons.picture_in_picture_alt_rounded, 'Image dans l’image', _entrerPip),
+                  if (_aSousTitres && !compact)
                     _ib(_sousTitresActifs ? Icons.closed_caption_rounded : Icons.closed_caption_off_outlined, 'Sous-titres',
                         () {
                       setState(() => _sousTitresActifs = !_sousTitresActifs);
                       _retenir('lecteur_st', _sousTitresActifs);
                     }, actif: _sousTitresActifs),
-                  if (_pistes.length > 1) _ib(Icons.translate_rounded, 'Piste audio', _menuPistes),
+                  if (_pistes.length > 1 && !compact) _ib(Icons.translate_rounded, 'Piste audio', _menuPistes),
                   TextButton(
                     style: TextButton.styleFrom(minimumSize: const Size(40, 40), padding: const EdgeInsets.symmetric(horizontal: 6)),
                     onPressed: _menuVitesse,
@@ -1251,20 +1389,26 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                   _ib(Icons.tune_rounded, 'Réglages', _menuReglages),
                 ]),
               ),
-              // Centre
-              Center(
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  _ib(Icons.skip_previous_rounded, 'Précédent', _index > 0 ? () => _aller(_index - 1) : null, taille: 36),
-                  _ib(Icons.replay_10_rounded, 'Reculer', () => _sauter(-1, onde: false), taille: 34),
+              // Commandes entre le titre et la barre, même en paysage.
+              Positioned(
+                top: 64,
+                bottom: 140,
+                left: 0,
+                right: 0,
+                child: Center(child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (widget.liste.length > 1 && !compact) _ib(Icons.skip_previous_rounded, 'Précédent', _index > 0 ? () => _aller(_index - 1) : null, taille: 36),
+                  _boutonSaut(-1),
                   const SizedBox(width: 10),
                   Container(
                     decoration: BoxDecoration(
-                      color: Colors.white24,
+                      gradient: LinearGradient(colors: [accent.withAlpha(220), const Color(0xCC735BEF)]),
+                      boxShadow: [BoxShadow(color: accent.withAlpha(60), blurRadius: 24)],
                       shape: BoxShape.circle,
                       border: Border.all(color: Colors.white30),
                     ),
                     child: IconButton(
                       iconSize: 54,
+                      tooltip: fin ? 'Relire' : v.isPlaying ? 'Pause' : 'Lire',
                       color: blanc,
                       icon: AnimatedSwitcher(
                         duration: const Duration(milliseconds: 180),
@@ -1282,9 +1426,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  _ib(Icons.forward_10_rounded, 'Avancer', () => _sauter(1, onde: false), taille: 34),
-                  _ib(Icons.skip_next_rounded, 'Suivant', _aSuivant ? () => _aller(_index + 1) : null, taille: 36),
-                ]),
+                  _boutonSaut(1),
+                  if (widget.liste.length > 1 && !compact) _ib(Icons.skip_next_rounded, 'Suivant', _aSuivant ? () => _aller(_index + 1) : null, taille: 36),
+                ])),
               ),
               // Barre du bas
               Positioned(
@@ -1310,6 +1454,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                             secondaryActiveTrackColor: Colors.white38,
                           ),
                           child: Slider(
+                            semanticFormatterCallback: (x) => _temps(Duration(milliseconds: x.round())),
                             min: 0,
                             max: dureeMs,
                             value: position.inMilliseconds.toDouble().clamp(0, dureeMs),
@@ -1348,13 +1493,26 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                   ),
                   Row(children: [
                     const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () => setState(() => _reste = !_reste),
-                      child: Text(
-                          _reste
-                              ? '−${_temps(v.duration - position)} / ${_temps(v.duration)}'
-                              : '${_temps(position)} / ${_temps(v.duration)}',
-                          style: mono(context, taille: 12, couleur: blanc)),
+                    Flexible(
+                      flex: 2,
+                      child: Semantics(
+                        button: true,
+                        label: 'Position de lecture. Appuyer pour choisir un moment',
+                        child: GestureDetector(
+                          onTap: _allerAuTemps,
+                          onLongPress: () => setState(() => _reste = !_reste),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Text(
+                              _reste
+                                  ? '−${_temps(v.duration - position)} / ${_temps(v.duration)}'
+                                  : '${_temps(position)} / ${_temps(v.duration)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: mono(context, taille: 12, couleur: blanc)),
+                          ),
+                        ),
+                      ),
                     ),
                     if (!_audio && v.duration > Duration.zero) ...[
                       const SizedBox(width: 8),
@@ -1364,23 +1522,36 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                       ),
                     ],
                     const Spacer(),
-                    _ib(_b != null ? Icons.repeat_on_rounded : Icons.flag_outlined,
-                        _a == null ? 'Boucle A-B : définir A' : _b == null ? 'Définir B' : 'Retirer la boucle',
-                        _boucleAB, actif: _a != null, taille: 22),
-                    if (widget.liste.length > 1) _ib(Icons.queue_music_rounded, 'File d’attente', _menuFile, taille: 22),
-                    _ib(Icons.lock_open_rounded, 'Verrouiller', () {
-                      HapticFeedback.mediumImpact();
-                      setState(() {
-                        _verrou = true;
-                        _controles = false;
-                      });
-                      _indiquer('Écran verrouillé', Icons.lock_rounded);
-                    }, taille: 22),
-                    if (!_audio) ...[
-                      _ib(_format == 1 ? Icons.fit_screen_rounded : Icons.aspect_ratio_rounded, 'Format : ${_formats[_format]}', () => _changerFormat((_format + 1) % _formats.length), taille: 22),
-                      _ib(Icons.screen_rotation_rounded, 'Pivoter', _pivoter, taille: 22),
-                    ],
                   ]),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                      if (!_audio) ...[
+                        _ib(_format == 1 ? Icons.fit_screen_rounded : Icons.aspect_ratio_rounded, 'Format : ${_formats[_format]}', () => _changerFormat((_format + 1) % _formats.length), taille: 22),
+                        GestureDetector(
+                          onLongPress: _menuOrientation,
+                          child: _ib(Icons.screen_rotation_rounded, 'Pivoter · appui long : orientation', _pivoter, taille: 22),
+                        ),
+                      ],
+                      if (!_audio && compact) _ib(Icons.picture_in_picture_alt_rounded, 'Image dans l’image', _entrerPip),
+                      if (widget.liste.length > 1 && compact) ...[
+                        _ib(Icons.skip_previous_rounded, 'Précédent', _index > 0 ? () => _aller(_index - 1) : null),
+                        _ib(Icons.skip_next_rounded, 'Suivant', _aSuivant ? () => _aller(_index + 1) : null),
+                      ],
+                      _ib(_b != null ? Icons.repeat_on_rounded : Icons.flag_outlined,
+                          _a == null ? 'Boucle A-B : définir A' : _b == null ? 'Définir B' : 'Retirer la boucle',
+                          _boucleAB, actif: _a != null, taille: 22),
+                      if (widget.liste.length > 1) _ib(Icons.queue_music_rounded, 'File d’attente', _menuFile, taille: 22),
+                      _ib(Icons.lock_open_rounded, 'Verrouiller', () {
+                        HapticFeedback.mediumImpact();
+                        setState(() {
+                          _verrou = true;
+                          _controles = false;
+                        });
+                        _indiquer('Écran verrouillé', Icons.lock_rounded);
+                      }, taille: 22),
+                    ]),
+                  ),
                 ]),
               ),
             ]),

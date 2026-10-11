@@ -27,6 +27,11 @@ class Natif {
   static const _flux = EventChannel('yt_nexus/evenements');
 
   static final _lignes = <String, void Function(String)>{};
+  static final _actionsTelechargement = StreamController<String>.broadcast();
+  static Stream<String> get actionsTelechargement => _actionsTelechargement.stream;
+  static bool _notificationEnAttente = false;
+  static final _telechargements = StreamController<void>.broadcast();
+  static Stream<void> get telechargements => _telechargements.stream;
   static final _partages = StreamController<String>.broadcast();
   static final _commandesMedia = StreamController<({String action, int position})>.broadcast();
   static final _pip = StreamController<bool>.broadcast();
@@ -53,6 +58,14 @@ class Natif {
       final m = e as Map;
       if (m['type'] == 'ligne') {
         _lignes[m['id']]?.call(m['ligne'] as String);
+      } else if (m['type'] == 'actionTelechargement') {
+        _actionsTelechargement.add(m['action'] as String);
+      } else if (m['type'] == 'telechargements') {
+        if (_telechargements.hasListener) {
+          _telechargements.add(null);
+        } else {
+          _notificationEnAttente = true;
+        }
       } else if (m['type'] == 'partage') {
         _partages.add(m['texte'] as String);
       } else if (m['type'] == 'media') {
@@ -70,6 +83,13 @@ class Natif {
     version = r['version'] ?? '?';
     versionApp = r['versionApp'] ?? versionApp;
     abi = r['abi'] ?? '';
+  }
+
+  static Future<bool> notificationInitiale() async {
+    final native = await _canal.invokeMethod<bool>('notificationInitiale') ?? false;
+    final ouvrir = native || _notificationEnAttente;
+    _notificationEnAttente = false;
+    return ouvrir;
   }
 
   static Future<String?> partageInitial() => _canal.invokeMethod<String>('partageInitial');
@@ -107,8 +127,8 @@ class Natif {
       _canal.invokeMethod('partager', {'uri': uri, 'mime': mime});
   static Future<void> ouvrirLien(String url) => _canal.invokeMethod('ouvrirLien', {'url': url});
 
-  static Future<void> service(bool actif, {String titre = '', String texte = '', int progression = -1}) =>
-      _canal.invokeMethod('service', {'actif': actif, 'titre': titre, 'texte': texte, 'progression': progression});
+  static Future<void> service(bool actif, {String titre = '', String texte = '', int progression = -1, List<String> lignes = const []}) =>
+      _canal.invokeMethod('service', {'actif': actif, 'titre': titre, 'texte': texte, 'progression': progression, 'lignes': lignes});
   static Future<void> notifier(String titre, String texte) =>
       _canal.invokeMethod('notifier', {'titre': titre, 'texte': texte});
   /// Luminosité de la fenêtre (0‥1) ; -1 rend la main au système. Sans [valeur], lit seulement.

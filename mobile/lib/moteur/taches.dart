@@ -121,6 +121,7 @@ class Tache {
 class Gestionnaire extends ChangeNotifier {
   final taches = <Tache>[];
   Timer? _minuteur, _sauvegarde;
+  StreamSubscription<String>? _commandesNotif;
   double _derniereNotif = 0, _dernierReseau = 0;
   String _reseau = 'inconnu';
   bool _serviceActif = false;
@@ -142,6 +143,9 @@ class Gestionnaire extends ChangeNotifier {
   double get debit => taches.where((t) => t.statut == 'telechargement').fold(0.0, (a, t) => a + t.vitesse);
 
   Future<void> demarrer() async {
+    _commandesNotif ??= Natif.actionsTelechargement.listen((action) {
+      if (action == 'pause_tout') actionGlobale(action);
+    });
     try {
       final donnees = jsonDecode(await _fichier.readAsString()) as List;
       for (final d in donnees) {
@@ -181,6 +185,7 @@ class Gestionnaire extends ChangeNotifier {
   @override
   void dispose() {
     _minuteur?.cancel();
+    _commandesNotif?.cancel();
     super.dispose();
   }
 
@@ -239,12 +244,21 @@ class Gestionnaire extends ChangeNotifier {
     _derniereNotif = m;
     final dl = actives.where((t) => enCours.contains(t.statut)).toList();
     final premier = dl.isNotEmpty ? dl.first : actives.first;
-    final prog = dl.isEmpty ? -1 : (dl.fold(0.0, (a, t) => a + t.progression) / dl.length).round();
-    final titre = actives.length == 1 ? premier.titre : '${actives.length} téléchargements';
-    final texte = dl.isEmpty
-        ? 'En attente'
-        : [premier.phase, if (debit > 0) '${formaterTaille(debit.round())}/s'].where((s) => s.isNotEmpty).join(' · ');
-    Natif.service(true, titre: titre, texte: texte, progression: prog);
+    final prog = premier.statut != 'telechargement' ? -1 : premier.progression.round().clamp(0, 100);
+    final titre = premier.titre;
+    final texte = [
+      premier.phase.isNotEmpty ? premier.phase : dl.isEmpty ? 'En attente' : 'Préparation',
+      if (prog >= 0) '$prog %',
+      if (premier.total > 0) '${formaterTaille(premier.telecharge)} / ${formaterTaille(premier.total)}',
+      if (premier.vitesse > 0) '${formaterTaille(premier.vitesse)}/s',
+      if (premier.eta != null && premier.vitesse > 0) 'reste ${formaterDuree(premier.eta)}',
+      if (actives.length > 1) '${actives.length} téléchargements dans la file',
+    ].join(' · ');
+    Natif.service(true, titre: titre, texte: texte, progression: prog, lignes: [
+      for (final t in actives.take(6))
+        '${t.statut == 'telechargement' ? '${t.progression.round()} %' : t.phase.isNotEmpty ? t.phase : t.statut == 'programme' ? 'Programmé' : 'En attente'} · ${t.titre}',
+      if (actives.length > 6) 'Et ${actives.length - 6} autres téléchargements',
+    ]);
   }
 
   void _maj(Tache t, {bool sauver = false}) => _touche(sauver: sauver);

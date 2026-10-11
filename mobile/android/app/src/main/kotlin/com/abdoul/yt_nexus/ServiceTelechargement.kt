@@ -20,14 +20,21 @@ class ServiceTelechargement : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "pause_tout") {
+            ecouteur?.invoke(mapOf("type" to "actionTelechargement", "action" to "pause_tout"))
+            if (!actif) stopSelf()
+            return START_NOT_STICKY
+        }
         if (intent?.getBooleanExtra("actif", false) != true) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            actif = false
             stopSelf()
             return START_NOT_STICKY
         }
         val n = construire(
             this, intent.getStringExtra("titre") ?: "", intent.getStringExtra("texte") ?: "",
             intent.getIntExtra("progression", -1),
+            intent.getStringArrayListExtra("lignes") ?: emptyList(),
         )
         ServiceCompat.startForeground(
             this, ID_PROGRESSION, n,
@@ -44,6 +51,7 @@ class ServiceTelechargement : Service() {
     override fun onDestroy() {
         verrou?.let { if (it.isHeld) it.release() }
         verrou = null
+        actif = false
         super.onDestroy()
     }
 
@@ -51,6 +59,7 @@ class ServiceTelechargement : Service() {
         private const val CANAL_PROGRESSION = "progression"
         private const val CANAL_FIN = "termines"
         private const val ID_PROGRESSION = 1
+        var ecouteur: ((Map<String, Any?>) -> Unit)? = null
         private var actif = false
         private var compteur = 100
 
@@ -65,23 +74,43 @@ class ServiceTelechargement : Service() {
         }
 
         private fun ouvrirApp(ctx: Context): PendingIntent = PendingIntent.getActivity(
-            ctx, 0, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            ctx, 0, Intent(ctx, MainActivity::class.java)
+                .putExtra("ouvrirTelechargements", true)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
-        private fun construire(ctx: Context, titre: String, texte: String, progression: Int) =
+        private fun pause(ctx: Context): PendingIntent = PendingIntent.getService(
+            ctx, 1, Intent(ctx, ServiceTelechargement::class.java).setAction("pause_tout"),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        private fun construire(ctx: Context, titre: String, texte: String, progression: Int, lignes: List<String>) =
             NotificationCompat.Builder(ctx, CANAL_PROGRESSION)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
                 .setContentTitle(titre)
                 .setContentText(texte)
+                .setStyle(if (lignes.size > 1) {
+                    NotificationCompat.InboxStyle().apply {
+                        setBigContentTitle("Téléchargements YT-NEXUS")
+                        lignes.forEach { addLine(it) }
+                        setSummaryText(texte)
+                    }
+                } else NotificationCompat.BigTextStyle().bigText(texte))
+                .setSubText("YT-NEXUS · Téléchargement")
+                .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+                .setColor(0xFF818CF8.toInt())
+                .setShowWhen(false)
+                .addAction(android.R.drawable.ic_media_pause, "Tout mettre en pause", pause(ctx))
+                .addAction(android.R.drawable.ic_menu_view, "Voir les téléchargements", ouvrirApp(ctx))
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setSilent(true)
                 .setContentIntent(ouvrirApp(ctx))
-                .setProgress(100, progression.coerceAtLeast(0), progression < 0)
+                .setProgress(100, progression.coerceIn(0, 100), progression < 0)
                 .build()
 
-        fun mettreAJour(ctx: Context, enMarche: Boolean, titre: String, texte: String, progression: Int) {
+        fun mettreAJour(ctx: Context, enMarche: Boolean, titre: String, texte: String, progression: Int, lignes: List<String>) {
             canaux(ctx)
             try {
                 if (enMarche) {
@@ -89,11 +118,12 @@ class ServiceTelechargement : Service() {
                         val i = Intent(ctx, ServiceTelechargement::class.java)
                             .putExtra("actif", true).putExtra("titre", titre)
                             .putExtra("texte", texte).putExtra("progression", progression)
+                            .putStringArrayListExtra("lignes", ArrayList(lignes))
                         ctx.startForegroundService(i)
                         actif = true
                     } else {
                         ctx.getSystemService(NotificationManager::class.java)
-                            .notify(ID_PROGRESSION, construire(ctx, titre, texte, progression))
+                            .notify(ID_PROGRESSION, construire(ctx, titre, texte, progression, lignes))
                     }
                 } else if (actif) {
                     actif = false
@@ -112,6 +142,10 @@ class ServiceTelechargement : Service() {
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
                 .setContentTitle(titre)
                 .setContentText(texte)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(texte))
+                .setSubText("YT-NEXUS · Prêt à lire")
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setColor(0xFF34D399.toInt())
                 .setAutoCancel(true)
                 .setContentIntent(ouvrirApp(ctx))
                 .build()

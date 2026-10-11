@@ -36,6 +36,12 @@ class _AppState extends State<App> {
   static final _themeSombre = construireTheme(true), _themeClair = construireTheme(false);
   late Future<void> _demarrage = _demarrer();
   bool _ecoutePartages = false;
+  final _navigation = GlobalKey<NavigatorState>();
+
+  void _ouvrirTelechargements() {
+    onglet.value = 2;
+    _navigation.currentState?.popUntil((route) => route.isFirst);
+  }
 
   void _reessayer() => setState(() => _demarrage = _demarrer());
 
@@ -50,7 +56,9 @@ class _AppState extends State<App> {
     if (!_ecoutePartages) {
       _ecoutePartages = true;
       Natif.partages.listen(ouvrirLien);
+      Natif.telechargements.listen((_) => _ouvrirTelechargements());
     }
+    if (await Natif.notificationInitiale()) _ouvrirTelechargements();
     _majAuto();
   }
 
@@ -71,6 +79,7 @@ class _AppState extends State<App> {
       builder: (context, _) {
         final sombre = reglages['theme'] != 'clair';
         return MaterialApp(
+          navigatorKey: _navigation,
           title: 'YT-NEXUS',
           debugShowCheckedModeBanner: false,
           theme: sombre ? _themeSombre : _themeClair,

@@ -22,6 +22,24 @@ bool _correspond(String f, Tache t) => switch (f) {
       _ => true,
     };
 
+Future<bool> _confirmerRetrait(BuildContext context, String titre, String message, String action) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(Icons.delete_outline_rounded, color: context.c.rouge),
+        title: Text(titre),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Garder')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: context.c.rouge),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(action),
+          ),
+        ],
+      ),
+    ) ?? false;
+
 class PageFile extends StatefulWidget {
   const PageFile({super.key});
   @override
@@ -76,7 +94,14 @@ class _PageFileState extends State<PageFile> {
                   icon: Icon(Icons.more_vert_rounded, color: c.t2),
                   color: c.sombre ? const Color(0xFF14162A) : Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  onSelected: gestionnaire.actionGlobale,
+                  onSelected: (action) async {
+                    if (action.startsWith('vider_')) {
+                      final confirme = await _confirmerRetrait(context, 'Nettoyer la liste ?',
+                        'Retirer les téléchargements ${action == 'vider_termines' ? 'terminés' : 'en échec ou annulés'} de la liste ? Les fichiers téléchargés seront conservés.', 'Retirer');
+                      if (!confirme || !context.mounted) return;
+                    }
+                    gestionnaire.actionGlobale(action);
+                  },
                   itemBuilder: (_) => const [
                     PopupMenuItem(value: 'pause_tout', child: Text('Tout mettre en pause')),
                     PopupMenuItem(value: 'reprendre_tout', child: Text('Tout reprendre')),
@@ -135,6 +160,22 @@ class _PageFileState extends State<PageFile> {
 class CarteTache extends StatelessWidget {
   final Tache t;
   const CarteTache(this.t, {super.key});
+
+  Future<void> _retirer(BuildContext context, {bool annuler = false}) async {
+    final confirme = await _confirmerRetrait(context,
+      annuler ? 'Annuler ce téléchargement ?' : 'Retirer de la liste ?',
+      annuler
+        ? '« ${t.titre} » sera arrêté et ses fichiers temporaires seront supprimés. Pour continuer plus tard, utilise Pause.'
+        : '« ${t.titre} » sera retiré de la liste. Les fichiers téléchargés seront conservés.',
+      annuler ? 'Annuler le téléchargement' : 'Retirer');
+    if (!confirme || !context.mounted) return;
+    if (annuler) {
+      // Le téléchargement peut s’être terminé pendant la confirmation.
+      if (actifs.contains(t.statut) || t.statut == 'pause') gestionnaire.annuler(t.id);
+    } else {
+      await gestionnaire.supprimer(t.id);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -240,9 +281,9 @@ class CarteTache extends StatelessWidget {
             _Action(Icons.share_rounded, 'Partager', () => Natif.partager(principal.uri, principal.mime)),
           ],
           if (actifs.contains(t.statut) || t.statut == 'pause')
-            _Action(Icons.close_rounded, 'Annuler', () => g.annuler(t.id))
+            _Action(Icons.close_rounded, 'Annuler', () => _retirer(context, annuler: true))
           else
-            _Action(Icons.delete_outline_rounded, 'Retirer de la liste', () => g.supprimer(t.id)),
+            _Action(Icons.delete_outline_rounded, 'Retirer de la liste', () => _retirer(context)),
         ]),
       ]),
     );
