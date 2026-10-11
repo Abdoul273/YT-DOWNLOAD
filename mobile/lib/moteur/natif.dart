@@ -134,6 +134,9 @@ class Natif {
   /// Luminosité de la fenêtre (0‥1) ; -1 rend la main au système. Sans [valeur], lit seulement.
   static Future<double> luminosite([double? valeur]) async =>
       await _canal.invokeMethod<double>('luminosite', {'valeur': valeur}) ?? 0.5;
+  /// Rotation par capteur : 0 automatique, 1 portrait, 2 paysage dans les deux sens.
+  static Future<void> orientationLecteur(int mode) =>
+      _canal.invokeMethod('orientationLecteur', {'mode': mode});
   static Future<String?> lireTexte(String uri) => _canal.invokeMethod<String>('lireTexte', {'uri': uri});
   static Future<bool> peutInstaller() async => await _canal.invokeMethod<bool>('peutInstaller') ?? false;
   static Future<void> installerApk(String chemin) => _canal.invokeMethod('installerApk', {'chemin': chemin});

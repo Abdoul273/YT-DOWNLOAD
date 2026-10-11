@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.app.PendingIntent
 import android.app.PictureInPictureParams
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageInstaller
 import android.content.res.Configuration
 import android.net.ConnectivityManager
@@ -229,6 +230,15 @@ class MainActivity : FlutterActivity() {
                 res.success(null)
             }
             "reseau" -> res.success(typeReseau())
+            "orientationLecteur" -> {
+                // Le capteur autorise le retournement même si la rotation système est désactivée.
+                requestedOrientation = when (appel.argument<Int>("mode")) {
+                    1 -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    2 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                }
+                res.success(null)
+            }
             "luminosite" -> {
                 // -1 : rend la main au réglage du système
                 val v = appel.argument<Double>("valeur")

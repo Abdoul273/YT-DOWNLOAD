@@ -32,7 +32,7 @@ Future<void> ouvrirLecteur(BuildContext context, List<Tache> liste, int index) =
       transitionsBuilder: (_, a, _, w) => FadeTransition(opacity: a, child: w),
     ));
 
-const _orientations = ['Automatique', 'Portrait', 'Paysage', 'Paysage inversé'];
+const _orientations = ['Automatique', 'Portrait', 'Paysage · deux sens'];
 
 const _formats = ['Ajuster', 'Remplir', '16:9', '4:3', 'Étirer'];
 
@@ -52,7 +52,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   bool _controles = true, _verrou = false, _boucle = false;
   bool _aSousTitres = false, _signale = false, _pip = false, _enLecture = false;
   bool _glisseBarre = false, _reste = false;
-  int _orientation = _pref<num>('lecteur_orientation', 0).toInt().clamp(0, 3);
+  int _orientation = _pref<num>('lecteur_orientation', 0).toInt().clamp(0, 2);
   bool _interaction = false;
   final _abos = <StreamSubscription>[];
   List<VideoAudioTrack> _pistes = [];
@@ -228,12 +228,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     }();
   }
 
-  Future<void> _orienter() => SystemChrome.setPreferredOrientations(switch (_audio ? 0 : _orientation) {
-        1 => [DeviceOrientation.portraitUp],
-        2 => [DeviceOrientation.landscapeLeft],
-        3 => [DeviceOrientation.landscapeRight],
-        _ => [DeviceOrientation.portraitUp, DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight],
-      });
+  Future<void> _orienter() => _audio
+      ? SystemChrome.setPreferredOrientations([])
+      : Natif.orientationLecteur(_orientation);
 
   void _menuOrientation() => _choisir<int>(
         'Rotation de l’écran',
@@ -1017,7 +1014,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                           Positioned(
                             left: 24,
                             right: 24,
-                            bottom: (_controles || !ctrl.value.isPlaying) && !_verrou ? 160 : 30,
+                            bottom: (_controles || !ctrl.value.isPlaying) && !_verrou
+                                ? 108 + MediaQuery.paddingOf(context).bottom
+                                : 30,
                             child: Center(
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -1274,7 +1273,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
         color: actif ? context.c.indigo : Colors.white,
         tooltip: info,
         iconSize: taille,
-        visualDensity: VisualDensity.compact,
+        visualDensity: VisualDensity.standard,
         constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
         padding: EdgeInsets.zero,
         icon: Icon(icone),
@@ -1310,9 +1309,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
           ignoring: !_controles,
           child: SafeArea(
             child: Align(
-              alignment: Alignment.centerLeft,
+              alignment: Alignment.bottomRight,
               child: Padding(
-                padding: const EdgeInsets.only(left: 16),
+                padding: const EdgeInsets.only(right: 12, bottom: 44),
                 child: IconButton.filled(
                   style: IconButton.styleFrom(backgroundColor: Colors.white24),
                   color: blanc,
@@ -1372,7 +1371,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                           style: const TextStyle(color: Colors.white70, fontSize: 12)),
                     ]),
                   ),
-                  if (!_audio && !compact) _ib(Icons.picture_in_picture_alt_rounded, 'Image dans l’image', _entrerPip),
+                  if (!_audio) _ib(Icons.picture_in_picture_alt_rounded, 'Image dans l’image', _entrerPip),
                   if (_aSousTitres && !compact)
                     _ib(_sousTitresActifs ? Icons.closed_caption_rounded : Icons.closed_caption_off_outlined, 'Sous-titres',
                         () {
@@ -1392,11 +1391,11 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
               // Commandes entre le titre et la barre, même en paysage.
               Positioned(
                 top: 64,
-                bottom: 140,
+                bottom: 96,
                 left: 0,
                 right: 0,
-                child: Center(child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  if (widget.liste.length > 1 && !compact) _ib(Icons.skip_previous_rounded, 'Précédent', _index > 0 ? () => _aller(_index - 1) : null, taille: 36),
+                child: LayoutBuilder(builder: (ctx, box) => Center(child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (widget.liste.length > 1 && box.maxWidth >= 320) _ib(Icons.skip_previous_rounded, 'Précédent', _index > 0 ? () => _aller(_index - 1) : null, taille: 30),
                   _boutonSaut(-1),
                   const SizedBox(width: 10),
                   Container(
@@ -1427,8 +1426,8 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                   ),
                   const SizedBox(width: 10),
                   _boutonSaut(1),
-                  if (widget.liste.length > 1 && !compact) _ib(Icons.skip_next_rounded, 'Suivant', _aSuivant ? () => _aller(_index + 1) : null, taille: 36),
-                ])),
+                  if (widget.liste.length > 1 && box.maxWidth >= 320) _ib(Icons.skip_next_rounded, 'Suivant', _aSuivant ? () => _aller(_index + 1) : null, taille: 30),
+                ]))),
               ),
               // Barre du bas
               Positioned(
@@ -1436,6 +1435,82 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                 right: 12,
                 bottom: 4,
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  LayoutBuilder(builder: (ctx, box) {
+                    final largeurActions = (_audio ? 144.0 : 240.0)
+                        .clamp(0.0, (box.maxWidth - 88).clamp(0.0, double.infinity));
+                    return Row(children: [
+                      Expanded(
+                        child: Semantics(
+                          button: true,
+                          label: 'Position de lecture. Appuyer pour choisir un moment',
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _allerAuTemps,
+                            onLongPress: () => setState(() => _reste = !_reste),
+                            child: SizedBox(
+                              height: 48,
+                              child: Row(children: [
+                                Expanded(
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      _reste
+                                          ? '−${_temps(v.duration - position)} / ${_temps(v.duration)}'
+                                          : '${_temps(position)} / ${_temps(v.duration)}',
+                                      style: mono(context, taille: 12, couleur: blanc)),
+                                  ),
+                                ),
+                                if (!_audio && box.maxWidth >= 600 && v.duration > Duration.zero)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                                    child: Text('· fin ${_heureFin(v)}',
+                                        style: mono(context, taille: 11, couleur: Colors.white54)),
+                                  ),
+                              ]),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: largeurActions,
+                        height: 48,
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            reverse: true,
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              if (!_audio) ...[
+                                GestureDetector(
+                                  onLongPress: _menuFormat,
+                                  child: _ib(_format == 1 ? Icons.fit_screen_rounded : Icons.aspect_ratio_rounded,
+                                      'Format : ${_formats[_format]}', () => _changerFormat((_format + 1) % _formats.length), taille: 22),
+                                ),
+                                GestureDetector(
+                                  onLongPress: _menuOrientation,
+                                  child: _ib(Icons.screen_rotation_rounded, 'Pivoter · paysage dans les deux sens', _pivoter, taille: 22),
+                                ),
+                              ],
+                              _ib(_b != null ? Icons.repeat_on_rounded : Icons.flag_outlined,
+                                  _a == null ? 'Boucle A-B : définir A' : _b == null ? 'Définir B' : 'Retirer la boucle',
+                                  _boucleAB, actif: _a != null, taille: 22),
+                              _ib(Icons.queue_music_rounded, 'File d’attente', _menuFile, taille: 22),
+                              _ib(Icons.lock_open_rounded, 'Verrouiller', () {
+                                HapticFeedback.mediumImpact();
+                                setState(() {
+                                  _verrou = true;
+                                  _controles = false;
+                                });
+                                _indiquer('Écran verrouillé', Icons.lock_rounded);
+                              }, taille: 22),
+                            ]),
+                          ),
+                        ),
+                      ),
+                    ]);
+                  }),
                   SizedBox(
                     height: 40,
                     child: LayoutBuilder(builder: (ctx, box) {
@@ -1490,67 +1565,6 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                           ),
                       ]);
                     }),
-                  ),
-                  Row(children: [
-                    const SizedBox(width: 8),
-                    Flexible(
-                      flex: 2,
-                      child: Semantics(
-                        button: true,
-                        label: 'Position de lecture. Appuyer pour choisir un moment',
-                        child: GestureDetector(
-                          onTap: _allerAuTemps,
-                          onLongPress: () => setState(() => _reste = !_reste),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Text(
-                              _reste
-                                  ? '−${_temps(v.duration - position)} / ${_temps(v.duration)}'
-                                  : '${_temps(position)} / ${_temps(v.duration)}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: mono(context, taille: 12, couleur: blanc)),
-                          ),
-                        ),
-                      ),
-                    ),
-                    if (!_audio && v.duration > Duration.zero) ...[
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text('· fin ${_heureFin(v)}',
-                            maxLines: 1, overflow: TextOverflow.ellipsis, style: mono(context, taille: 11, couleur: Colors.white54)),
-                      ),
-                    ],
-                    const Spacer(),
-                  ]),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                      if (!_audio) ...[
-                        _ib(_format == 1 ? Icons.fit_screen_rounded : Icons.aspect_ratio_rounded, 'Format : ${_formats[_format]}', () => _changerFormat((_format + 1) % _formats.length), taille: 22),
-                        GestureDetector(
-                          onLongPress: _menuOrientation,
-                          child: _ib(Icons.screen_rotation_rounded, 'Pivoter · appui long : orientation', _pivoter, taille: 22),
-                        ),
-                      ],
-                      if (!_audio && compact) _ib(Icons.picture_in_picture_alt_rounded, 'Image dans l’image', _entrerPip),
-                      if (widget.liste.length > 1 && compact) ...[
-                        _ib(Icons.skip_previous_rounded, 'Précédent', _index > 0 ? () => _aller(_index - 1) : null),
-                        _ib(Icons.skip_next_rounded, 'Suivant', _aSuivant ? () => _aller(_index + 1) : null),
-                      ],
-                      _ib(_b != null ? Icons.repeat_on_rounded : Icons.flag_outlined,
-                          _a == null ? 'Boucle A-B : définir A' : _b == null ? 'Définir B' : 'Retirer la boucle',
-                          _boucleAB, actif: _a != null, taille: 22),
-                      if (widget.liste.length > 1) _ib(Icons.queue_music_rounded, 'File d’attente', _menuFile, taille: 22),
-                      _ib(Icons.lock_open_rounded, 'Verrouiller', () {
-                        HapticFeedback.mediumImpact();
-                        setState(() {
-                          _verrou = true;
-                          _controles = false;
-                        });
-                        _indiquer('Écran verrouillé', Icons.lock_rounded);
-                      }, taille: 22),
-                    ]),
                   ),
                 ]),
               ),
