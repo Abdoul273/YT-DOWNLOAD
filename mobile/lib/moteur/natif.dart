@@ -120,6 +120,8 @@ class Natif {
   }
 
   static Future<bool> existe(String uri) async => await _canal.invokeMethod<bool>('existe', {'uri': uri}) ?? false;
+  static Future<int> espaceLibre({bool telechargements = false, bool travail = false}) async =>
+      await _canal.invokeMethod<int>('espaceLibre', {'telechargements': telechargements, 'travail': travail}) ?? 0;
   static Future<bool> supprimerFichier(String uri) async =>
       await _canal.invokeMethod<bool>('supprimerFichier', {'uri': uri}) ?? false;
   static Future<void> ouvrir(String uri, String mime) => _canal.invokeMethod('ouvrir', {'uri': uri, 'mime': mime});

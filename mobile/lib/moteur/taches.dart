@@ -126,6 +126,7 @@ class Gestionnaire extends ChangeNotifier {
   String _reseau = 'inconnu';
   bool _serviceActif = false;
   bool _ecriture = false, _aRecrire = false;
+  final _reservationsEspace = <String, int>{};
 
   /// Nombre de téléchargements actifs et débit total : écoutés par l'en-tête et la barre
   /// de navigation, qui ne se reconstruisent ainsi que si la valeur change vraiment.
@@ -264,7 +265,34 @@ class Gestionnaire extends ChangeNotifier {
   void _maj(Tache t, {bool sauver = false}) => _touche(sauver: sauver);
 
   // ── actions ─────────────────────────────────────────────────────────
-  List<Tache> ajouter(List<Ajout> elements, Map<String, dynamic> options) {
+  /// Les variantes de liens YouTube désignent la même vidéo (sans les paramètres de partage).
+  static String cleVideo(String url) {
+    final u = Uri.tryParse(analyse.normaliserUrl(url));
+    if (u == null) return url.trim();
+    final h = u.host.toLowerCase().replaceFirst(RegExp(r'^(www\.|m\.|music\.)'), '');
+    String? id;
+    if (h == 'youtu.be' && u.pathSegments.isNotEmpty) id = u.pathSegments.first;
+    if (h == 'youtube.com' || h == 'youtube-nocookie.com') {
+      id = u.queryParameters['v'];
+      if (id == null && u.pathSegments.length >= 2 && const ['shorts', 'embed', 'live'].contains(u.pathSegments.first)) {
+        id = u.pathSegments[1];
+      }
+    }
+    return id != null && id.isNotEmpty ? 'youtube:$id' : u.replace(fragment: '').toString();
+  }
+
+  /// Un audio et une vidéo du même lien restent deux téléchargements différents.
+  Future<Tache?> doublon(String url, String type) async {
+    final cle = cleVideo(url);
+    final candidates = taches.where((t) => cleVideo(t.url) == cle && (t.options['type'] ?? 'video') == type).toList();
+    for (final t in candidates) {
+      if (actifs.contains(t.statut) || t.statut == 'pause') return t;
+      if (t.statut == 'termine' && t.fichierPrincipal != null && await Natif.existe(t.fichierPrincipal!.uri)) return t;
+    }
+    return null;
+  }
+
+  Future<List<Tache>> ajouter(List<Ajout> elements, Map<String, dynamic> options, {bool retelcharger = false}) async {
     // Les options non précisées prennent les réglages actuels
     options = {
       for (final k in const ['type', 'qualite', 'conteneur', 'format_audio', 'qualite_audio', 'langue_audio', 'garder_vo', 'sponsorblock'])
@@ -272,15 +300,25 @@ class Gestionnaire extends ChangeNotifier {
       ...options,
     };
     final nouvelles = <Tache>[];
+    final vues = <String>{};
     for (final e in elements) {
-      if (e.url.isEmpty) continue;
+      if (e.url.isEmpty || !vues.add(cleVideo(e.url))) continue;
+      final existante = await doublon(e.url, options['type'] as String);
+      if (existante != null && (!retelcharger || existante.statut != 'termine')) continue;
+      // Une autre demande a pu ajouter ce lien pendant la vérification Android.
+      if (taches.any((t) => cleVideo(t.url) == cleVideo(e.url) && t.options['type'] == options['type'] &&
+          (actifs.contains(t.statut) || t.statut == 'pause'))) {
+        continue;
+      }
       final t = Tache(e.url, Map.of(options),
           titre: e.titre, miniature: e.miniature, chaine: e.chaine, duree: e.duree, groupe: e.groupe);
       taches.insert(0, t);
       nouvelles.add(t);
     }
-    _touche(sauver: true);
-    _repartir();
+    if (nouvelles.isNotEmpty) {
+      _touche(sauver: true);
+      _repartir();
+    }
     return nouvelles;
   }
 
@@ -559,6 +597,8 @@ class Gestionnaire extends ChangeNotifier {
         ..vitesse = 0
         ..eta = null;
       _maj(t, sauver: true);
+    } finally {
+      _reservationsEspace.remove(t.id);
     }
   }
 
@@ -770,8 +810,40 @@ class Gestionnaire extends ChangeNotifier {
     t.message = msg;
     _maj(t);
 
+    final espace = await _verifierEspace(t, o, info);
+    if (t.arret != null) return (false, '', false);
+    if (espace != null) return (false, espace, false);
     final cmd = _commande(t, o, sel, tri, cheminInfo, piste ?? originale, deux ? originale : null, secours, langue);
     return _lancer(t, cmd);
+  }
+
+  Future<String?> _verifierEspace(Tache t, Map<String, dynamic> o, Map<String, dynamic> info) async {
+    var estimation = t.total;
+    // WAV/FLAC peuvent occuper bien plus que la piste audio compressée téléchargée.
+    if (o['type'] == 'audio' && const ['wav', 'flac'].contains(o['format_audio'])) {
+      estimation = max(estimation, ((info['duration'] as num?)?.ceil() ?? 0) * 48000 * 2 * 4);
+    }
+    final existant = await compute(_tailleTravail, t.dossierTravail);
+    // Sources + fusion/conversion + copie MediaStore ; une marge reste toujours libre.
+    final besoin = max(0, estimation * 3 - existant);
+    const marge = 50 * 1024 * 1024;
+    final libre = await Natif.espaceLibre(travail: true);
+    final autres = _reservationsEspace.entries.where((e) => e.key != t.id).fold(0, (n, e) => n + e.value);
+    final requis = besoin + autres + marge;
+    if (libre < requis) {
+      return 'Espace insuffisant : environ ${formaterTaille(requis)} nécessaires pour le téléchargement et le traitement, '
+          '${formaterTaille(libre)} libres. Libère de la place puis réessaie.';
+    }
+    final destination = await Natif.espaceLibre(telechargements: true);
+    if (destination < estimation + marge) {
+      return 'Espace insuffisant dans Téléchargements : environ ${formaterTaille(estimation + marge)} nécessaires, '
+          '${formaterTaille(destination)} libres. Libère de la place puis réessaie.';
+    }
+    // Recontrôle des réservations après les appels asynchrones (téléchargements simultanés).
+    final reserves = _reservationsEspace.entries.where((e) => e.key != t.id).fold(0, (n, e) => n + e.value);
+    if (libre < besoin + reserves + marge) return 'Espace réservé aux autres téléchargements. Libère de la place ou réessaie après leur fin.';
+    _reservationsEspace[t.id] = besoin;
+    return null;
   }
 
   String _quote(String s) => "'${s.replaceAll("'", "'\"'\"'")}'";
@@ -983,3 +1055,5 @@ String formaterDuree(num? s) {
 }
 
 final gestionnaire = Gestionnaire();
+
+int _tailleTravail(String chemin) => Gestionnaire._tailleDossier(Directory(chemin));

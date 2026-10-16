@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.StatFs
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Rational
@@ -166,6 +167,14 @@ class MainActivity : FlutterActivity() {
                 publier(File(appel.argument<String>("dossier")!!), appel.argument<String>("sousDossier") ?: "")
             }
             "existe" -> enFond(res) { existe(Uri.parse(appel.argument<String>("uri")!!)) }
+            "espaceLibre" -> enFond(res) {
+                val dossier = if (appel.argument<Boolean>("telechargements") == true) {
+                    Environment.getExternalStorageDirectory()
+                } else if (appel.argument<Boolean>("travail") == true) {
+                    getExternalFilesDir("travail") ?: File(filesDir, "travail")
+                } else filesDir
+                StatFs(dossier.absolutePath).availableBytes
+            }
             "supprimerFichier" -> enFond(res) {
                 contentResolver.delete(Uri.parse(appel.argument<String>("uri")!!), null, null) > 0
             }
@@ -381,6 +390,9 @@ class MainActivity : FlutterActivity() {
         if (!dossier.exists()) return resultats
         val base = (Environment.DIRECTORY_DOWNLOADS + "/YT-NEXUS/" + sousDossier).trimEnd('/')
         dossier.walkTopDown().filter { it.isFile && !estTemporaire(it) }.forEach { f ->
+            if (StatFs(Environment.getExternalStorageDirectory().absolutePath).availableBytes < f.length() + 10L * 1024 * 1024) {
+                throw Exception("Espace insuffisant dans Téléchargements : libère de la place puis réessaie.")
+            }
             val relatif = f.parentFile!!.relativeTo(dossier).path
             val chemin = if (relatif.isEmpty()) base else "$base/$relatif"
             val ext = f.extension.lowercase()
@@ -398,7 +410,13 @@ class MainActivity : FlutterActivity() {
             }
             val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, valeurs)
                 ?: throw Exception("Impossible de créer ${f.name} dans Téléchargements")
-            contentResolver.openOutputStream(uri)!!.use { sortie -> f.inputStream().use { it.copyTo(sortie) } }
+            try {
+                contentResolver.openOutputStream(uri)!!.use { sortie -> f.inputStream().use { it.copyTo(sortie) } }
+            } catch (e: Exception) {
+                // Une copie interrompue ne doit pas laisser un fichier incomplet dans MediaStore.
+                contentResolver.delete(uri, null, null)
+                throw e
+            }
             valeurs.clear()
             valeurs.put(MediaStore.MediaColumns.IS_PENDING, 0)
             contentResolver.update(uri, valeurs, null, null)

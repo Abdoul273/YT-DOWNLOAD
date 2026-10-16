@@ -13,7 +13,76 @@ import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
 import 'apercu.dart';
 import 'etat.dart';
+import 'lecteur.dart';
 import 'theme.dart';
+
+bool _ajoutEnCours = false;
+
+/// Même confirmation pour une vidéo, une playlist ou un lot ; les liens répétés sont ignorés.
+Future<List<Tache>> _ajouterAvecConfirmation(BuildContext context, List<Ajout> elements, Map<String, dynamic> options) async {
+  if (_ajoutEnCours) return [];
+  _ajoutEnCours = true;
+  try {
+    final uniques = <String, Ajout>{};
+    for (final e in elements) {
+      uniques.putIfAbsent(Gestionnaire.cleVideo(e.url), () => e);
+    }
+    final doublons = <Tache>[];
+    for (final e in uniques.values) {
+      final d = await gestionnaire.doublon(e.url, (options['type'] ?? reglages['type']) as String);
+      if (d != null) doublons.add(d);
+    }
+    if (!context.mounted) return [];
+    var retelcharger = false;
+    if (doublons.isNotEmpty) {
+      final seule = uniques.length == 1 ? doublons.first : null;
+      final terminees = doublons.where((t) => t.statut == 'termine').length;
+      final action = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(seule != null ? (terminees == 1 ? 'Déjà téléchargé' : 'Déjà dans la file') : 'Téléchargements déjà présents'),
+          content: SingleChildScrollView(child: Text(seule != null
+              ? '${seule.titre}\n\n${terminees == 1 ? 'Tu peux lire le fichier existant ou télécharger une autre version avec les options choisies.' : 'Cette vidéo est déjà en attente, en cours ou en pause.'}'
+              : '${doublons.length} téléchargement${doublons.length > 1 ? 's' : ''} déjà présent${doublons.length > 1 ? 's' : ''} sur ${uniques.length}. '
+                  'Ignore-les pour économiser tes données. Les téléchargements déjà dans la file ne seront pas ajoutés une seconde fois.')),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuler')),
+            if (seule != null)
+              TextButton(onPressed: () => Navigator.pop(ctx, 'ouvrir'), child: Text(terminees == 1 ? 'Lire' : 'Voir la file')),
+            if (terminees > 0)
+              TextButton(onPressed: () => Navigator.pop(ctx, 'retelcharger'),
+                  child: Text(seule != null ? 'Télécharger à nouveau' : 'Inclure les fichiers déjà téléchargés')),
+            if (seule == null)
+              FilledButton(onPressed: () => Navigator.pop(ctx, 'ignorer'), child: const Text('Ignorer les doublons')),
+          ],
+        ),
+      );
+      if (!context.mounted || action == null) return [];
+      if (action == 'ouvrir') {
+        if (seule!.statut == 'termine') {
+          ouvrirLecteur(context, [seule], 0);
+        } else {
+          onglet.value = 2;
+        }
+        return [];
+      }
+      retelcharger = action == 'retelcharger';
+    }
+    final ajoutees = await gestionnaire.ajouter(uniques.values.toList(), options, retelcharger: retelcharger);
+    if (!context.mounted) return ajoutees;
+    final ignores = elements.length - ajoutees.length;
+    toast(context, ajoutees.isEmpty ? 'Aucun téléchargement ajouté' :
+        '${ajoutees.length} téléchargement${ajoutees.length > 1 ? 's' : ''} ajouté${ajoutees.length > 1 ? 's' : ''}'
+        '${ignores > 0 ? ' · $ignores doublon${ignores > 1 ? 's' : ''} ignoré${ignores > 1 ? 's' : ''}' : ''}');
+    if (ajoutees.isNotEmpty) onglet.value = 2;
+    return ajoutees;
+  } catch (e) {
+    if (context.mounted) toast(context, 'Impossible d’ajouter les téléchargements : $e', erreur: true);
+    return [];
+  } finally {
+    _ajoutEnCours = false;
+  }
+}
 
 class PageVideo extends StatefulWidget {
   const PageVideo({super.key});
@@ -293,10 +362,10 @@ class _VueVideoState extends State<_VueVideo> {
       widget.v.pisteVoulue == null &&
       !langues.memeLangue(widget.v.originale, reglages['langue_audio']);
 
-  void _telecharger() {
+  Future<void> _telecharger() async {
     final v = widget.v;
     final langue = _langue == 'original' || _langue == v.originale ? 'original' : _langue;
-    gestionnaire.ajouter([
+    final ajoutees = await _ajouterAvecConfirmation(context, [
       Ajout(v.url, titre: v.titre, miniature: v.miniature, chaine: v.chaine, duree: v.duree)
     ], {
       'type': _type,
@@ -315,9 +384,9 @@ class _VueVideoState extends State<_VueVideo> {
       'debut': _debut.text,
       'fin': _fin.text,
     });
-    gouts.signal('telechargement', url: v.url, titre: v.titre, chaine: v.chaine, chaineId: v.info['channel_id'] as String?);
-    toast(context, 'Ajouté à la file');
-    onglet.value = 2;
+    if (ajoutees.isNotEmpty) {
+      gouts.signal('telechargement', url: v.url, titre: v.titre, chaine: v.chaine, chaineId: v.info['channel_id'] as String?);
+    }
   }
 
   @override
@@ -600,7 +669,7 @@ class _VuePlaylistState extends State<_VuePlaylist> {
   late String _type = reglages['type'], _qualite = reglages['qualite'];
   int _affichees = 50; // les grosses playlists s'affichent par tranches pour rester fluides
 
-  void _telecharger() {
+  Future<void> _telecharger() async {
     final p = widget.p;
     final elements = [
       for (final i in _choisies.toList()..sort())
@@ -612,9 +681,7 @@ class _VuePlaylistState extends State<_VuePlaylist> {
               duree: p.entrees[i].duree,
               groupe: p.titre)
     ];
-    gestionnaire.ajouter(elements, {'type': _type, 'qualite': _qualite});
-    toast(context, '${elements.length} vidéo${elements.length > 1 ? 's' : ''} ajoutée${elements.length > 1 ? 's' : ''}');
-    onglet.value = 2;
+    await _ajouterAvecConfirmation(context, elements, {'type': _type, 'qualite': _qualite});
   }
 
   @override
@@ -723,11 +790,8 @@ class _VueLotState extends State<_VueLot> {
       const SizedBox(height: 12),
       Verre(child: _OptionsRapides(_type, _qualite, (x) => setState(() => _type = x), (x) => setState(() => _qualite = x))),
       const SizedBox(height: 16),
-      BoutonGrad('Tout télécharger', icone: Icons.download_rounded, onTap: () {
-        gestionnaire.ajouter([for (final l in widget.liens) Ajout(l)], {'type': _type, 'qualite': _qualite});
-        toast(context, '${widget.liens.length} liens ajoutés');
-        onglet.value = 2;
-      }),
+      BoutonGrad('Tout télécharger', icone: Icons.download_rounded, onTap: () =>
+        _ajouterAvecConfirmation(context, [for (final l in widget.liens) Ajout(l)], {'type': _type, 'qualite': _qualite})),
     ]);
   }
 }
