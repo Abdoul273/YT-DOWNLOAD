@@ -1,5 +1,6 @@
-from pathlib import Path
 import tempfile
+from pathlib import Path
+
 from nexus.gouts import GestionnaireGouts, mots_cles
 from nexus.web import creer_app
 
@@ -80,3 +81,13 @@ def test_api_routes_gouts():
     sugg_data = res.get_json()
     assert "suggestions" in sugg_data
     assert isinstance(sugg_data["suggestions"], list)
+
+
+def test_securite_referrer_policy():
+    app = creer_app()
+    app.config["TESTING"] = True
+    client = app.test_client()
+    rep = client.get("/")
+    assert rep.status_code == 200
+    assert rep.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+    assert rep.headers.get("X-Content-Type-Options") == "nosniff"

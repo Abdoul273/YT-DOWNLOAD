@@ -678,7 +678,7 @@ def creer_app():
     @app.after_request
     def securite(rep):
         rep.headers.setdefault("X-Content-Type-Options", "nosniff")
-        rep.headers.setdefault("Referrer-Policy", "no-referrer")
+        rep.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         return rep
 
     @app.before_request

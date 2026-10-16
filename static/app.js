@@ -681,14 +681,21 @@ function ouvrirApercu(video) {
   $("#apercu-sep-1").hidden = !video.chaine || !video.vues;
   $("#apercu-sep-2").hidden = !video.vues || !video.date;
 
+  const ytId = video.id || idVideo(video.url);
+  const lienExt = $("#btn-apercu-externe");
+  if (lienExt) {
+    lienExt.href = video.url || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : "#");
+  }
+
   const cadre = $("#apercu-media-cadre");
   cadre.innerHTML = "";
 
-  const ytId = video.id || idVideo(video.url);
   if (ytId) {
     const iframe = document.createElement("iframe");
-    iframe.src = `https://www.youtube-nocookie.com/embed/${ytId}?autoplay=1&enablejsapi=1&rel=0`;
+    const origin = window.location.origin;
+    iframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&rel=0&origin=${encodeURIComponent(origin)}`;
     iframe.title = video.titre || "Aperçu YouTube";
+    iframe.referrerPolicy = "strict-origin-when-cross-origin";
     iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
     iframe.allowFullscreen = true;
     cadre.appendChild(iframe);

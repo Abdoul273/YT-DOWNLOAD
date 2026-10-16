@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#05060d" />
   <title>YT-NEXUS</title>
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
   <link rel="icon" href="/static/icone.svg" type="image/svg+xml" />
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -293,9 +294,14 @@
           <span class="apercu-pastille-live">APERÇU DIRECT</span>
           <h3 id="apercu-titre">Titre de la vidéo</h3>
         </div>
-        <button class="icone-btn fantome" id="btn-fermer-apercu" title="Fermer (Échap)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
-        </button>
+        <div class="apercu-tete-actions">
+          <a class="icone-btn fantome" id="btn-apercu-externe" target="_blank" rel="noopener noreferrer" title="Ouvrir sur YouTube">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/></svg>
+          </a>
+          <button class="icone-btn fantome" id="btn-fermer-apercu" title="Fermer (Échap)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
       </div>
       <div class="apercu-video-conteneur">
         <div class="apercu-video-cadre" id="apercu-media-cadre"></div>

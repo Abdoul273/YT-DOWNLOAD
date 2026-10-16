@@ -1967,6 +1967,11 @@ dialog#lecteur.lecteur-dialog:-webkit-full-screen {
   padding: 16px 22px;
   border-bottom: 1px solid var(--trait);
 }
+.apercu-tete-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .apercu-titre-boite {
   display: flex;
   align-items: center;
