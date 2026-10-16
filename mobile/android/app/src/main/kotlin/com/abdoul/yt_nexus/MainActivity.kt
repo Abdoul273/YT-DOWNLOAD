@@ -167,6 +167,7 @@ class MainActivity : FlutterActivity() {
                 publier(File(appel.argument<String>("dossier")!!), appel.argument<String>("sousDossier") ?: "")
             }
             "existe" -> enFond(res) { existe(Uri.parse(appel.argument<String>("uri")!!)) }
+            "ouvrirStockage" -> lancer(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS), res)
             "espaceLibre" -> enFond(res) {
                 val dossier = if (appel.argument<Boolean>("telechargements") == true) {
                     Environment.getExternalStorageDirectory()

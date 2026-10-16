@@ -128,6 +128,7 @@ class Natif {
   static Future<void> partager(String uri, String mime) =>
       _canal.invokeMethod('partager', {'uri': uri, 'mime': mime});
   static Future<void> ouvrirLien(String url) => _canal.invokeMethod('ouvrirLien', {'url': url});
+  static Future<void> ouvrirStockage() => _canal.invokeMethod('ouvrirStockage');
 
   static Future<void> service(bool actif, {String titre = '', String texte = '', int progression = -1, List<String> lignes = const []}) =>
       _canal.invokeMethod('service', {'actif': actif, 'titre': titre, 'texte': texte, 'progression': progression, 'lignes': lignes});

@@ -1,12 +1,13 @@
 /// Réglages persistants (fichier JSON dans le stockage privé de l'app).
 library;
 
-import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import 'natif.dart';
+import 'persistance.dart';
 
 const reglagesDefaut = <String, dynamic>{
   'simultanes': 2, // téléchargements en parallèle
@@ -48,6 +49,17 @@ const reglagesDefaut = <String, dynamic>{
 class Reglages extends ChangeNotifier {
   final Map<String, dynamic> _v = Map.of(reglagesDefaut);
   bool _ecriture = false, _aRecrire = false, _cookies = false;
+  bool _detruit = false;
+  Completer<void>? _finEcriture;
+  String? avertissement;
+
+  @override
+  void dispose() {
+    _detruit = true;
+    super.dispose();
+  }
+
+  Future<void> attendreSauvegarde() => _finEcriture?.future ?? Future.value();
 
   File get _fichier => File('${Natif.dossierFichiers}/reglages.json');
   File get fichierCookies => File('${Natif.dossierFichiers}/cookies.txt');
@@ -69,9 +81,9 @@ class Reglages extends ChangeNotifier {
   Map<String, dynamic> get tout => Map.unmodifiable(_v);
 
   Future<void> charger() async {
-    try {
-      _v.addAll((jsonDecode(await _fichier.readAsString()) as Map).cast<String, dynamic>());
-    } catch (_) {}
+    final lecture = await lireJsonSecours(_fichier, _decoderReglages);
+    avertissement = lecture.avertissement;
+    if (lecture.donnees != null) _v.addAll(lecture.donnees!);
     try {
       _cookies = await fichierCookies.exists() && await fichierCookies.length() > 0;
     } catch (_) {}
@@ -86,17 +98,20 @@ class Reglages extends ChangeNotifier {
       return;
     }
     _ecriture = true;
+    final fin = _finEcriture = Completer<void>();
     try {
       do {
         _aRecrire = false;
         try {
-          final tmp = File('${_fichier.path}.tmp');
-          await tmp.writeAsString(jsonEncode(_v), flush: true);
-          await tmp.rename(_fichier.path);
-        } catch (_) {}
+          await ecrireJsonSecours(_fichier, _v, _decoderReglages);
+        } catch (e) {
+          avertissement = 'Impossible de sauvegarder les réglages : $e';
+          if (!_detruit) notifyListeners();
+        }
       } while (_aRecrire);
     } finally {
       _ecriture = false;
+      fin.complete();
     }
   }
 
@@ -123,3 +138,16 @@ class Reglages extends ChangeNotifier {
 }
 
 final reglages = Reglages();
+
+Map<String, dynamic> _decoderReglages(Object? brut) {
+  final d = Map<String, dynamic>.from(brut as Map);
+  for (final e in reglagesDefaut.entries) {
+    if (!d.containsKey(e.key)) continue;
+    final v = d[e.key], modele = e.value;
+    if ((modele is bool && v is! bool) || (modele is num && v is! num) ||
+        (modele is String && v is! String) || (modele is List && v is! List)) {
+      throw FormatException('Réglage invalide : ${e.key}');
+    }
+  }
+  return d;
+}

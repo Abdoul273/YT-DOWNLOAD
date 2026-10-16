@@ -4,8 +4,10 @@ library;
 import 'package:flutter/material.dart';
 
 import '../moteur/natif.dart';
+import '../moteur/erreurs.dart';
 import '../moteur/taches.dart';
 import 'etat.dart';
+import 'page_reglages.dart' show modifierCookies;
 import 'theme.dart';
 
 const _filtres = {
@@ -71,8 +73,20 @@ class _PageFileState extends State<PageFile> {
     return Builder(
       builder: (context) {
         final toutes = gestionnaire.taches;
-        final liste = toutes.where((t) => _correspond(_filtre, t)).toList();
+        final attente = gestionnaire.fileAttente;
+        final idsAttente = attente.map((t) => t.id).toSet();
+        final positions = {for (var i = 0; i < attente.length; i++) attente[i].id: i};
+        final liste = [
+          ...toutes.where((t) => enCours.contains(t.statut)),
+          ...attente,
+          ...toutes.where((t) => !enCours.contains(t.statut) && !idsAttente.contains(t.id)),
+        ].where((t) => _correspond(_filtre, t)).toList();
         return CustomScrollView(slivers: [
+          if (gestionnaire.avertissement != null)
+            SliverToBoxAdapter(child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(gestionnaire.avertissement!, style: TextStyle(color: c.ambre)),
+            )),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             sliver: SliverToBoxAdapter(
@@ -131,7 +145,8 @@ class _PageFileState extends State<PageFile> {
               sliver: SliverList.separated(
                 itemCount: liste.length,
                 separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (context, i) => CarteTache(liste[i], key: ValueKey(liste[i].id)),
+                itemBuilder: (context, i) => CarteTache(liste[i], key: ValueKey(liste[i].id),
+                    positionFile: positions[liste[i].id] ?? -1, nombreFile: attente.length),
               ),
             ),
         ]);
@@ -159,7 +174,36 @@ class _PageFileState extends State<PageFile> {
 
 class CarteTache extends StatelessWidget {
   final Tache t;
-  const CarteTache(this.t, {super.key});
+  final int? positionFile, nombreFile;
+  const CarteTache(this.t, {super.key, this.positionFile, this.nombreFile});
+
+  Future<void> _corriger(BuildContext context, Remede action) async {
+    if (action == Remede.cookies) {
+      final ok = await modifierCookies(context);
+      if (ok && t.statut == 'erreur') gestionnaire.relancer(t.id);
+    } else if (action == Remede.stockage) {
+      try {
+        await Natif.ouvrirStockage();
+      } catch (_) {
+        if (context.mounted) toast(context, 'Ouvre les réglages de stockage du téléphone pour libérer de la place.', erreur: true);
+      }
+    } else {
+      final audio = t.options['type'] == 'audio';
+      final qualite = await showModalBottomSheet<String>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        builder: (ctx) => SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(padding: const EdgeInsets.all(16), child: Text(audio ? 'Changer le format audio et réessayer' : 'Changer la qualité et réessayer')),
+          for (final q in audio ? const ['original', 'mp3', 'm4a', 'opus', 'flac', 'wav'] : const ['best', '1080', '720', '480', '360', '240', '144'])
+            ListTile(title: Text(audio ? (q == 'original' ? 'Format original' : q.toUpperCase()) : q == 'best' ? 'Meilleure disponible' : '${q}p'),
+              trailing: t.options[audio ? 'format_audio' : 'qualite'] == q ? const Icon(Icons.check_rounded) : null,
+              onTap: () => Navigator.pop(ctx, q)),
+        ])),
+      );
+      if (qualite != null) gestionnaire.changerQualite(t.id, qualite);
+    }
+  }
 
   Future<void> _retirer(BuildContext context, {bool annuler = false}) async {
     final confirme = await _confirmerRetrait(context,
@@ -185,6 +229,11 @@ class CarteTache extends StatelessWidget {
     final actif = enCours.contains(t.statut);
     final indetermine = t.statut == 'analyse' || t.statut == 'traitement' || t.statut == 'attente_relance';
     final principal = t.fichierPrincipal;
+    final action = t.statut == 'erreur' ? remede(t.erreur) : null;
+    // La page calcule l'ordre une seule fois pour toutes les cartes.
+    final attente = positionFile == null || nombreFile == null ? g.fileAttente : null;
+    final position = positionFile ?? attente!.indexWhere((e) => e.id == t.id);
+    final nombre = nombreFile ?? attente!.length;
     return Verre(
       padding: const EdgeInsets.all(12),
       rayon: 20,
@@ -269,8 +318,29 @@ class CarteTache extends StatelessWidget {
           Text('${principal.chemin} · ${formaterTaille(t.tailleFichier)}',
               maxLines: 1, overflow: TextOverflow.ellipsis, style: mono(context, taille: 10.5, couleur: c.t3)),
         ],
+        if (position >= 0)
+          Padding(padding: const EdgeInsets.only(top: 6), child: Text(
+            'Position ${position + 1} dans la file${t.statut == 'programme' ? ' · horaire conservé' : t.statut == 'pause' ? ' · en pause' : ''}',
+            style: TextStyle(color: c.t3, fontSize: 12))),
+        if (action != null)
+          TextButton.icon(
+            onPressed: () => _corriger(context, action),
+            icon: Icon(switch (action) { Remede.cookies => Icons.cookie_outlined, Remede.qualite => Icons.tune_rounded, Remede.stockage => Icons.storage_rounded }),
+            label: Text(switch (action) { Remede.cookies => 'Ajouter les cookies', Remede.qualite => t.options['type'] == 'audio' ? 'Changer le format audio' : 'Changer la qualité', Remede.stockage => 'Libérer de l’espace' }),
+          ),
         const SizedBox(height: 8),
-        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        Wrap(alignment: WrapAlignment.end, children: [
+          if (position >= 0 && nombre > 1)
+            PopupMenuButton<int>(
+              tooltip: 'Réorganiser la file',
+              icon: const Icon(Icons.low_priority_rounded),
+              onSelected: (cible) => g.deplacer(t.id, cible),
+              itemBuilder: (_) => [
+                if (position > 0) const PopupMenuItem(value: 0, child: Text('Passer en premier')),
+                if (position > 1) PopupMenuItem(value: position - 1, child: const Text('Monter')),
+                if (position < nombre - 1) PopupMenuItem(value: position + 1, child: const Text('Descendre')),
+              ],
+            ),
           if (actifs.contains(t.statut))
             _Action(Icons.pause_rounded, 'Pause', () => g.pause(t.id)),
           if (t.statut == 'pause') _Action(Icons.play_arrow_rounded, 'Reprendre', () => g.reprendre(t.id)),

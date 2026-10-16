@@ -7,6 +7,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:yt_nexus/moteur/maj.dart';
 import 'package:yt_nexus/moteur/natif.dart';
 import 'package:yt_nexus/moteur/taches.dart';
+import 'package:yt_nexus/moteur/erreurs.dart';
+import 'package:yt_nexus/moteur/persistance.dart';
+import 'package:yt_nexus/moteur/reglages.dart';
 
 /// Les tests HTTP parlent uniquement au serveur local créé dans chaque scénario.
 class _Binding extends AutomatedTestWidgetsFlutterBinding {
@@ -45,11 +48,129 @@ void main() {
     });
   });
 
+  void liberer(Gestionnaire g) {
+    addTearDown(() async {
+      await g.sauvegarder();
+      g.dispose();
+    });
+  }
+
   tearDown(() async {
+    await reglages.attendreSauvegarde();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(canal, null);
     // Laisse finir les sauvegardes JSON déclenchées par les réglages.
     await pumpEventQueue();
     await dossier.delete(recursive: true);
+  });
+
+  test('La priorité déplace les tâches en attente sans interrompre les actives', () {
+    final g = Gestionnaire();
+    liberer(g);
+    final ancienne = Tache('https://youtu.be/ancienne', {})..statut = 'pause';
+    final recente = Tache('https://youtu.be/recente', {})..statut = 'programme'..programme = 4102444800;
+    final active = Tache('https://youtu.be/active', {})..statut = 'telechargement';
+    g.taches.addAll([active, recente, ancienne]);
+    expect(g.fileAttente, [ancienne, recente]);
+    g.deplacer(recente.id, 0);
+    expect(g.fileAttente, [recente, ancienne]);
+    expect(active.statut, 'telechargement');
+    expect(active.arret, isNull);
+    expect(recente.statut, 'programme');
+    expect(recente.programme, 4102444800);
+    final recharge = Gestionnaire()..taches.addAll(g.taches.map((t) => Tache.depuis(t.versJson())));
+    addTearDown(recharge.dispose);
+    expect(recharge.fileAttente.map((t) => t.id), [recente.id, ancienne.id]);
+    g.deplacer(recente.id, 1);
+    expect(g.fileAttente, [ancienne, recente]);
+    expect(appels.where((a) => a.method == 'arreter'), isEmpty);
+  });
+
+  test('Les erreurs proposent uniquement la correction adaptée', () {
+    expect(remede(analyser('Sign in to confirm you are not a bot').$1), Remede.cookies);
+    expect(remede(analyser('Requested format is not available').$1), Remede.qualite);
+    expect(remede('Espace insuffisant dans Téléchargements'), Remede.stockage);
+    expect(remede(analyser('Private video').$1), isNull);
+  });
+
+  test('Changer la qualité relance la tâche en échec et conserve les autres options', () {
+    final g = Gestionnaire();
+    liberer(g);
+    final t = Tache('https://youtu.be/qualite', {'type': 'video', 'qualite': '1080', 'langue_audio': 'fr'})
+      ..statut = 'erreur'..erreur = 'Format demandé indisponible';
+    g.taches.add(t);
+    g.changerQualite(t.id, '480');
+    expect(t.statut, 'en_attente');
+    expect(t.options['qualite'], '480');
+    expect(t.options['langue_audio'], 'fr');
+    expect(t.erreur, isEmpty);
+    t.statut = 'telechargement';
+    g.changerQualite(t.id, '720');
+    expect(t.options['qualite'], '480');
+  });
+
+  test('Un format audio en échec peut être remplacé sans changer les options vidéo', () {
+    final g = Gestionnaire();
+    liberer(g);
+    final t = Tache('https://youtu.be/format', {'type': 'audio', 'format_audio': 'mp3', 'qualite': '1080'})..statut = 'erreur';
+    g.taches.add(t);
+    g.changerQualite(t.id, 'original');
+    expect(t.options['format_audio'], 'original');
+    expect(t.options['qualite'], '1080');
+    expect(t.statut, 'en_attente');
+  });
+
+  Map<String, dynamic> decoderCarte(Object? brut) => Map<String, dynamic>.from(brut as Map);
+
+  test('Une principale corrompue ne remplace jamais la dernière sauvegarde valide', () async {
+    final f = File('${dossier.path}/donnees.json');
+    await ecrireJsonSecours(f, {'valeur': 1}, decoderCarte);
+    await ecrireJsonSecours(f, {'valeur': 2}, decoderCarte);
+    await f.writeAsString('{tronque');
+    final lecture = await lireJsonSecours(f, decoderCarte);
+    expect(lecture.donnees, {'valeur': 1});
+    expect(lecture.avertissement, contains('secours'));
+    await ecrireJsonSecours(f, {'valeur': 3}, decoderCarte);
+    expect(jsonDecode(await File('${f.path}.bak').readAsString()), {'valeur': 1});
+    expect((await lireJsonSecours(f, decoderCarte)).donnees, {'valeur': 3});
+  });
+
+  test('Deux copies corrompues sont conservées et signalées', () async {
+    final f = File('${dossier.path}/donnees.json');
+    final secours = File('${f.path}.bak');
+    await f.writeAsString('{');
+    await secours.writeAsString('[');
+    final lecture = await lireJsonSecours(f, decoderCarte);
+    expect(lecture.donnees, isNull);
+    expect(lecture.avertissement, contains('conservés'));
+    await expectLater(ecrireJsonSecours(f, {'valeur': 3}, decoderCarte), throwsA(isA<FileSystemException>()));
+    expect(await f.readAsString(), '{');
+    expect(await secours.readAsString(), '[');
+  });
+
+  test('Les réglages récupèrent le secours même si le JSON principal a un mauvais type', () async {
+    await File('${dossier.path}/reglages.json').writeAsString('{"qualite":123}');
+    await File('${dossier.path}/reglages.json.bak').writeAsString('{"qualite":"480","theme":"clair","favoris":["abc"]}');
+    final r = Reglages();
+    addTearDown(r.dispose);
+    await r.charger();
+    expect(r['qualite'], '480');
+    expect(r['favoris'], ['abc']);
+    expect(r.avertissement, contains('secours'));
+  });
+
+  test('Un historique partiellement invalide est remplacé par le secours complet', () async {
+    final t = Tache('https://youtu.be/sauvegarde', {})..statut = 'pause'..priorite = 8;
+    await File('${dossier.path}/taches.json').writeAsString(jsonEncode([t.versJson(), 'invalide']));
+    await File('${dossier.path}/taches.json.bak').writeAsString(jsonEncode([t.versJson()]));
+    final g = Gestionnaire();
+    await g.demarrer();
+    await pumpEventQueue();
+    await g.sauvegarder();
+    g.dispose();
+    expect(g.taches, hasLength(1));
+    expect(g.taches.single.id, t.id);
+    expect(g.taches.single.priorite, 8);
+    expect(g.avertissement, contains('secours'));
   });
 
   test('Les liens classiques, courts, Shorts et music désignent la même vidéo', () {
@@ -66,7 +187,7 @@ void main() {
 
   test('Détecter une vidéo en pause sans bloquer sa version audio', () async {
     final g = Gestionnaire();
-    addTearDown(g.dispose);
+    liberer(g);
     final t = Tache('https://youtu.be/abc123', {'type': 'video'})..statut = 'pause';
     g.taches.add(t);
     expect(await g.doublon('https://youtube.com/shorts/abc123', 'video'), same(t));
@@ -75,7 +196,7 @@ void main() {
 
   test('Un fichier supprimé du téléphone ne bloque pas un nouveau téléchargement', () async {
     final g = Gestionnaire();
-    addTearDown(g.dispose);
+    liberer(g);
     final t = Tache('https://youtu.be/abc123', {'type': 'video'})
       ..statut = 'termine'
       ..fichiers = [FichierPublie('video.mp4', 'content://supprime', '', 'video/mp4', 6)];
@@ -87,7 +208,7 @@ void main() {
 
   test('La file ignore les doublons et ne retélécharge un fichier que sur demande', () async {
     final g = Gestionnaire();
-    addTearDown(g.dispose);
+    liberer(g);
     final options = {'type': 'video', 'programme': 4102444800};
     final liens = [const Ajout('https://youtu.be/doublon'), const Ajout('https://youtube.com/watch?v=doublon')];
     expect(await g.ajouter(liens, options), hasLength(1));
@@ -108,7 +229,7 @@ void main() {
         libreTravail = 200 * 1024 * 1024; // La source tient, mais pas la fusion et la copie.
       }
       final g = Gestionnaire();
-      addTearDown(g.dispose);
+      liberer(g);
       final fin = Completer<void>();
       g.addListener(() {
         if (g.taches.isNotEmpty && g.taches.first.statut == 'erreur' && !fin.isCompleted) fin.complete();

@@ -17,6 +17,60 @@ import 'fenetre_maj.dart';
 import 'theme.dart';
 import 'verrou.dart';
 
+Future<bool> modifierCookies(BuildContext context) async {
+  final texte = reglages.aDesCookies ? await reglages.fichierCookies.readAsString().catchError((_) => '') : '';
+  if (!context.mounted) return false;
+  final c = context.c;
+  final ctrl = TextEditingController(text: texte);
+  final ok = await showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: c.sombre ? const Color(0xFF10121F) : Colors.white,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+    builder: (ctx) => Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.viewInsetsOf(ctx).bottom + 20),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Cookies YouTube', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c.t1)),
+        const SizedBox(height: 6),
+        Text(
+          'Si YouTube demande de prouver que tu n’es pas un robot, ou pour les vidéos réservées aux adultes/membres : '
+          'exporte tes cookies au format Netscape (extension « Get cookies.txt LOCALLY » sur PC) et colle-les ici.',
+          style: TextStyle(color: c.t2, fontSize: 12.5),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: ctrl,
+          maxLines: 8,
+          style: mono(ctx, taille: 11, couleur: c.t1, poids: FontWeight.w500),
+          decoration: InputDecoration(
+            hintText: '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\t…',
+            hintStyle: mono(ctx, taille: 11, couleur: c.t3, poids: FontWeight.w500),
+            filled: true,
+            fillColor: c.verre2,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(children: [
+          BoutonVerre(icone: Icons.delete_outline_rounded, texte: 'Effacer', onTap: () {
+            ctrl.clear();
+            Navigator.pop(ctx, true);
+          }),
+          const SizedBox(width: 10),
+          Expanded(child: BoutonGrad('Enregistrer', icone: Icons.check_rounded, onTap: () => Navigator.pop(ctx, true))),
+        ]),
+      ]),
+    ),
+  );
+  final contenu = ctrl.text;
+  if (ok == true) {
+    await reglages.enregistrerCookies(contenu);
+    if (context.mounted) toast(context, contenu.trim().isEmpty ? 'Cookies effacés' : 'Cookies enregistrés');
+  }
+  return ok == true && contenu.trim().isNotEmpty;
+}
+
+
 class PageReglages extends StatefulWidget {
   const PageReglages({super.key});
   @override
@@ -72,57 +126,6 @@ class _PageReglagesState extends State<PageReglages> {
       ),
     );
     if (t != null) reglages[cle] = t.hour * 60 + t.minute;
-  }
-
-  Future<void> _cookies() async {
-    final texte = reglages.aDesCookies ? await reglages.fichierCookies.readAsString().catchError((_) => '') : '';
-    if (!mounted) return;
-    final c = context.c;
-    final ctrl = TextEditingController(text: texte);
-    final ok = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: c.sombre ? const Color(0xFF10121F) : Colors.white,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.viewInsetsOf(ctx).bottom + 20),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Cookies YouTube', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c.t1)),
-          const SizedBox(height: 6),
-          Text(
-            'Si YouTube demande de prouver que tu n’es pas un robot, ou pour les vidéos réservées aux adultes/membres : '
-            'exporte tes cookies au format Netscape (extension « Get cookies.txt LOCALLY » sur PC) et colle-les ici.',
-            style: TextStyle(color: c.t2, fontSize: 12.5),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: ctrl,
-            maxLines: 8,
-            style: mono(ctx, taille: 11, couleur: c.t1, poids: FontWeight.w500),
-            decoration: InputDecoration(
-              hintText: '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\t…',
-              hintStyle: mono(ctx, taille: 11, couleur: c.t3, poids: FontWeight.w500),
-              filled: true,
-              fillColor: c.verre2,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(children: [
-            BoutonVerre(icone: Icons.delete_outline_rounded, texte: 'Effacer', onTap: () {
-              ctrl.clear();
-              Navigator.pop(ctx, true);
-            }),
-            const SizedBox(width: 10),
-            Expanded(child: BoutonGrad('Enregistrer', icone: Icons.check_rounded, onTap: () => Navigator.pop(ctx, true))),
-          ]),
-        ]),
-      ),
-    );
-    if (ok == true) {
-      await reglages.enregistrerCookies(ctrl.text);
-      if (mounted) toast(context, ctrl.text.trim().isEmpty ? 'Cookies effacés' : 'Cookies enregistrés');
-    }
   }
 
   Future<void> _code() async {
@@ -203,6 +206,9 @@ class _PageReglagesState extends State<PageReglages> {
         return ListView(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 120 + MediaQuery.paddingOf(context).bottom),
           children: [
+            if (r.avertissement != null)
+              Padding(padding: const EdgeInsets.only(bottom: 12),
+                child: Text(r.avertissement!, style: TextStyle(color: c.ambre))),
             Verre(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Etiquette('Piste audio'),
@@ -392,7 +398,7 @@ class _PageReglagesState extends State<PageReglages> {
                   titre: 'Cookies YouTube',
                   sous: reglages.aDesCookies ? 'Enregistrés ✓' : 'Aucun — utile si YouTube bloque',
                   fin: Icon(Icons.chevron_right_rounded, color: c.t3),
-                  onTap: _cookies,
+                  onTap: () => modifierCookies(context),
                 ),
               ]),
             ),

@@ -1,6 +1,16 @@
 /// Messages d'erreur yt-dlp lisibles, et détection des erreurs passagères.
 library;
 
+enum Remede { cookies, qualite, stockage }
+
+Remede? remede(String texte) {
+  final t = texte.toLowerCase();
+  if (t.contains('cookies') || t.contains('not a bot') || t.contains('age-restricted')) return Remede.cookies;
+  if (t.contains('format demandé indisponible') || t.contains('requested format is not available')) return Remede.qualite;
+  if (t.contains('espace insuffisant') || t.contains('espace réservé') || t.contains('stockage plein') || t.contains('no space left')) return Remede.stockage;
+  return null;
+}
+
 const _connues = <(List<String>, String, bool)>[
   (['sign in to confirm you', 'not a bot'],
       "YouTube demande de prouver que tu n'es pas un robot. Ajoute tes cookies YouTube dans Réglages.", false),

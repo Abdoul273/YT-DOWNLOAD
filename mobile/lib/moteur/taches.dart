@@ -22,6 +22,7 @@ import 'formats.dart' as formats;
 import 'langues.dart' as langues;
 import 'miniatures.dart' as miniatures;
 import 'natif.dart';
+import 'persistance.dart';
 import 'reglages.dart';
 
 const enCours = {'analyse', 'telechargement', 'traitement', 'attente_relance'};
@@ -62,6 +63,7 @@ class Tache {
   double progression = 0, vitesse = 0, cree, tentatives = 0;
   double? fin, programme;
   int telecharge = 0, total = 0, tailleFichier = 0;
+  int priorite = 0;
   List<FichierPublie> fichiers = [];
 
   // interne
@@ -88,7 +90,7 @@ class Tache {
         'groupe': groupe, 'options': options, 'statut': statut, 'progression': progression,
         'telecharge': telecharge, 'total': total, 'message': message, 'erreur': erreur,
         'fichiers': [for (final f in fichiers) f.versJson()], 'taille_fichier': tailleFichier, 'pistes': pistes,
-        'cree': cree, 'fin': fin, 'programme': programme, 'tentatives': tentatives, 'phase': phase,
+        'cree': cree, 'fin': fin, 'programme': programme, 'tentatives': tentatives, 'phase': phase, 'priorite': priorite,
       };
 
   factory Tache.depuis(Map d) {
@@ -114,6 +116,7 @@ class Tache {
       ..programme = (d['programme'] as num?)?.toDouble()
       ..tentatives = ((d['tentatives'] ?? 0) as num).toDouble()
       ..phase = d['phase'] ?? '';
+    t.priorite = (d['priorite'] as num?)?.toInt() ?? 0;
     return t;
   }
 }
@@ -126,7 +129,10 @@ class Gestionnaire extends ChangeNotifier {
   String _reseau = 'inconnu';
   bool _serviceActif = false;
   bool _ecriture = false, _aRecrire = false;
+  bool _detruit = false;
+  Completer<void>? _finEcriture;
   final _reservationsEspace = <String, int>{};
+  String? avertissement;
 
   /// Nombre de téléchargements actifs et débit total : écoutés par l'en-tête et la barre
   /// de navigation, qui ne se reconstruisent ainsi que si la valeur change vraiment.
@@ -143,14 +149,38 @@ class Gestionnaire extends ChangeNotifier {
   int get nbActifs => taches.where((t) => actifs.contains(t.statut)).length;
   double get debit => taches.where((t) => t.statut == 'telechargement').fold(0.0, (a, t) => a + t.vitesse);
 
+  List<Tache> get fileAttente {
+    final liste = taches.reversed.where((t) => const {'en_attente', 'pause', 'programme'}.contains(t.statut)).toList();
+    final rangs = {for (var i = 0; i < liste.length; i++) liste[i].id: i};
+    liste.sort((a, b) {
+      final p = b.priorite.compareTo(a.priorite);
+      return p != 0 ? p : rangs[a.id]!.compareTo(rangs[b.id]!);
+    });
+    return liste;
+  }
+
+  /// Position dans la file d'attente ; aucun téléchargement actif n'est interrompu.
+  void deplacer(String id, int position) {
+    final liste = fileAttente;
+    final ancien = liste.indexWhere((t) => t.id == id);
+    if (ancien < 0) return;
+    final cible = position.clamp(0, liste.length - 1);
+    if (ancien == cible) return;
+    liste.insert(cible, liste.removeAt(ancien));
+    for (var i = 0; i < liste.length; i++) {
+      liste[i].priorite = liste.length - i;
+    }
+    _touche(sauver: true);
+  }
+
   Future<void> demarrer() async {
     _commandesNotif ??= Natif.actionsTelechargement.listen((action) {
       if (action == 'pause_tout') actionGlobale(action);
     });
-    try {
-      final donnees = jsonDecode(await _fichier.readAsString()) as List;
-      for (final d in donnees) {
-        final t = Tache.depuis(d as Map);
+    final lecture = await lireJsonSecours(_fichier, _decoderTaches);
+    avertissement = lecture.avertissement;
+    if (lecture.donnees != null) {
+      for (final t in lecture.donnees!) {
         if (enCours.contains(t.statut)) {
           // Interrompu par la fermeture de l'app : on reprend automatiquement.
           t
@@ -160,10 +190,12 @@ class Gestionnaire extends ChangeNotifier {
         }
         taches.add(t);
       }
-    } catch (_) {}
+    }
     _minuteur = Timer.periodic(const Duration(milliseconds: 700), (_) => _repartir());
-    unawaited(_verifierFichiers());
-    unawaited(_garderMiniatures());
+    if (lecture.donnees != null || lecture.avertissement == null) {
+      unawaited(_verifierFichiers());
+      unawaited(_garderMiniatures());
+    }
   }
 
   /// Miniatures des tâches gardées sur le disque (visibles hors ligne), les autres supprimées.
@@ -185,13 +217,16 @@ class Gestionnaire extends ChangeNotifier {
 
   @override
   void dispose() {
+    _detruit = true;
     _minuteur?.cancel();
+    _sauvegarde?.cancel();
     _commandesNotif?.cancel();
     super.dispose();
   }
 
   // ── état ────────────────────────────────────────────────────────────
   void _touche({bool sauver = false, bool progres = false}) {
+    if (_detruit) return;
     if (!progres) statuts.value++;
     nbActifsN.value = nbActifs;
     debitN.value = debit;
@@ -206,25 +241,30 @@ class Gestionnaire extends ChangeNotifier {
 
   /// Écritures l'une après l'autre : deux écritures simultanées dans le même fichier
   /// temporaire pouvaient produire un JSON tronqué et faire perdre toute la liste.
+  Future<void> sauvegarder() => _sauver();
+
   Future<void> _sauver() async {
     _sauvegarde?.cancel();
     _sauvegarde = null;
     if (_ecriture) {
       _aRecrire = true;
-      return;
+      return _finEcriture!.future;
     }
     _ecriture = true;
+    final fin = _finEcriture = Completer<void>();
     try {
       do {
         _aRecrire = false;
         try {
-          final tmp = File('${_fichier.path}.tmp');
-          await tmp.writeAsString(jsonEncode([for (final t in taches) t.versJson()]), flush: true);
-          await tmp.rename(_fichier.path);
-        } catch (_) {}
+          await ecrireJsonSecours(_fichier, [for (final t in taches) t.versJson()], _decoderTaches);
+        } catch (e) {
+          avertissement = 'Impossible de sauvegarder l’historique : $e';
+          if (!_detruit) notifyListeners();
+        }
       } while (_aRecrire);
     } finally {
       _ecriture = false;
+      fin.complete();
     }
   }
 
@@ -372,6 +412,14 @@ class Gestionnaire extends ChangeNotifier {
       ..fichiers = []
       ..telecharge = 0;
     _maj(t, sauver: true);
+  }
+
+  void changerQualite(String id, String qualite) {
+    final t = _get(id);
+    if (t == null || !const {'erreur', 'annule'}.contains(t.statut)) return;
+    t.options[t.options['type'] == 'audio' ? 'format_audio' : 'qualite'] = qualite;
+    analyse.oublier(t.url);
+    relancer(id);
   }
 
   void annuler(String id) {
@@ -572,8 +620,8 @@ class Gestionnaire extends ChangeNotifier {
         change = true;
       }
     }
-    // Les plus anciennes d'abord (la liste est affichée du plus récent au plus ancien)
-    for (final t in taches.reversed) {
+    // La priorité choisie est conservée ; par défaut, les plus anciennes passent d'abord.
+    for (final t in fileAttente) {
       if (actives >= max || raison != null) break;
       if (t.statut == 'en_attente') {
         t
@@ -1057,3 +1105,7 @@ String formaterDuree(num? s) {
 final gestionnaire = Gestionnaire();
 
 int _tailleTravail(String chemin) => Gestionnaire._tailleDossier(Directory(chemin));
+
+List<Tache> _decoderTaches(Object? brut) => [
+  for (final d in brut as List) Tache.depuis(Map<String, dynamic>.from(d as Map)),
+];
