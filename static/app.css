@@ -653,6 +653,8 @@ dialog#lecteur.lecteur-dialog.mode-theatre {
   height: calc(100vh - 20px) !important;
   border-radius: 16px !important;
 }
+#lecteur-boite:fullscreen,
+#lecteur-boite:-webkit-full-screen,
 dialog#lecteur.lecteur-dialog:fullscreen,
 dialog#lecteur.lecteur-dialog:-webkit-full-screen {
   width: 100vw !important;
@@ -661,6 +663,7 @@ dialog#lecteur.lecteur-dialog:-webkit-full-screen {
   max-height: 100vh !important;
   border-radius: 0 !important;
   border: none !important;
+  background: #000 !important;
 }
 
 /* Boîte globale */
