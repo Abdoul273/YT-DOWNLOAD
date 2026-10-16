@@ -1,4 +1,5 @@
 """API HTTP + flux d'événements (SSE) + interface."""
+import hashlib
 import json
 import os
 import shutil
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from flask import Blueprint, Flask, Response, abort, jsonify, request, send_file, stream_with_context
 
-from . import VERSION, analyse, config, miniatures, taches
+from . import VERSION, analyse, config, langues, miniatures, taches
 
 api = Blueprint("api", __name__, url_prefix="/api")
 STATIQUE = config.RACINE / "static"
@@ -203,6 +204,90 @@ def evenements():
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+def _extraire_pistes_audio(chemin: Path) -> list:
+    if not shutil.which("ffprobe"):
+        return []
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-select_streams", "a", str(chemin)],
+            capture_output=True, text=True, timeout=8,
+        )
+        data = json.loads(r.stdout or "{}")
+    except Exception:
+        return []
+
+    pistes = []
+    streams = data.get("streams") or []
+    bruit = ("soundhandler", "videohandler", "isomedia", "iso media", "gpac", "core media", "apple", "ffmpeg")
+    for idx, s in enumerate(streams):
+        stags = {k.lower(): v for k, v in (s.get("tags") or {}).items() if isinstance(v, str)}
+        hn = (stags.get("title") or stags.get("handler_name") or "").strip()
+        if any(b in hn.lower() for b in bruit):
+            hn = ""
+        lang = (stags.get("language") or "").lower()
+        code = miniatures._ISO3.get(lang, lang if lang and lang != "und" else "")
+        drap = langues.drapeau(code) if code else ""
+        nom_l = langues.nom(code) if code else ""
+
+        if hn:
+            if "(VO)" in hn and code:
+                libelle = f"{drap} {hn}".strip()
+            elif drap and not hn.startswith(drap):
+                libelle = f"{drap} {hn}".strip()
+            else:
+                libelle = hn
+        elif code:
+            libelle = f"{drap} {nom_l}".strip()
+        else:
+            libelle = f"Piste audio {idx + 1}"
+
+        codec = (s.get("codec_name") or "").upper()
+        pistes.append({
+            "idx": idx,
+            "titre": libelle.strip(),
+            "lang": code or lang,
+            "codec": codec,
+            "par_defaut": (s.get("disposition") or {}).get("default") == 1,
+        })
+    return pistes
+
+
+def _remuxer_piste_audio(fichier: Path, piste_idx: int) -> Path:
+    if piste_idx <= 0 or not shutil.which("ffmpeg"):
+        return fichier
+    try:
+        st = fichier.stat()
+    except OSError:
+        return fichier
+
+    cle = hashlib.sha1(f"{fichier.resolve()}:{int(st.st_mtime)}:{st.st_size}:{piste_idx}".encode()).hexdigest()[:16]
+    ext = fichier.suffix.lower() if fichier.suffix.lower() in {".mp4", ".mkv", ".webm"} else ".mp4"
+    cible = config.CACHE_PISTES / f"remux_{cle}{ext}"
+    if cible.is_file() and cible.stat().st_size > 0:
+        return cible
+
+    tmp = cible.with_suffix(f".{os.getpid()}.tmp")
+    cmd = [
+        "ffmpeg", "-y", "-v", "error", "-i", str(fichier),
+        "-map", "0:v:0?", "-map", f"0:a:{piste_idx}",
+        "-c", "copy",
+    ]
+    if ext in {".mp4", ".m4v", ".mov"}:
+        cmd.extend(["-movflags", "+faststart"])
+    cmd.append(str(tmp))
+
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=45)
+        if r.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 0:
+            tmp.replace(cible)
+            return cible
+    except Exception:
+        pass
+    finally:
+        tmp.unlink(missing_ok=True)
+    return fichier
+
+
 def _fichier_de(id_):
     t = taches.gestionnaire.taches.get(id_)
     if not t or not t.fichier or not Path(t.fichier).exists():
@@ -214,6 +299,12 @@ def _fichier_de(id_):
 def fichier(id_):
     """Lecture (avec Range) ou enregistrement dans le navigateur."""
     f = _fichier_de(id_)
+    piste_str = request.args.get("piste_audio")
+    if piste_str is not None:
+        try:
+            f = _remuxer_piste_audio(f, int(piste_str))
+        except (ValueError, TypeError):
+            pass
     return send_file(f, as_attachment=request.args.get("enregistrer") == "1", download_name=f.name,
                      conditional=True)
 
@@ -355,7 +446,33 @@ def lire_fichier():
     _, f = _chemin_sur(request.args.get("chemin"))
     if not f.is_file():
         abort(404)
+    piste_str = request.args.get("piste_audio")
+    if piste_str is not None:
+        try:
+            f = _remuxer_piste_audio(f, int(piste_str))
+        except (ValueError, TypeError):
+            pass
     return send_file(f, as_attachment=request.args.get("enregistrer") == "1", download_name=f.name, conditional=True)
+
+
+@api.get("/fichiers/pistes-audio")
+def pistes_audio():
+    chemin = request.args.get("chemin")
+    id_ = request.args.get("id")
+    cible = None
+    if chemin:
+        try:
+            _, cible = _chemin_sur(chemin)
+        except (ValueError, OSError):
+            return jsonify({"pistes": []})
+    elif id_:
+        try:
+            cible = _fichier_de(id_)
+        except (ValueError, OSError, KeyError):
+            return jsonify({"pistes": []})
+    if not cible or not cible.is_file():
+        return jsonify({"pistes": []})
+    return jsonify({"pistes": _extraire_pistes_audio(cible)})
 
 
 @api.get("/fichiers/sous-titres")

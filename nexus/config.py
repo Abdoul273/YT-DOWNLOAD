@@ -39,7 +39,8 @@ FICHIER_COOKIES = CONFIG / "cookies.txt"
 FICHIER_TACHES = DONNEES / "taches.json"
 CACHE_INFOS = DONNEES / "infos"
 CACHE_MINIATURES = DONNEES / "miniatures"
-for _d in (CACHE_INFOS, CACHE_MINIATURES):
+CACHE_PISTES = DONNEES / "pistes"
+for _d in (CACHE_INFOS, CACHE_MINIATURES, CACHE_PISTES):
     _d.mkdir(exist_ok=True)
 
 REGLAGES_DEFAUT = {

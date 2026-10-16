@@ -1045,6 +1045,11 @@ const LP = {
     active: -1,
     decalage: 0,
   },
+  pistesAudio: {
+    liste: [],
+    active: 0,
+    chargeant: false,
+  },
 };
 
 function initAudioLecteur() {
@@ -1449,6 +1454,91 @@ function basculerSousTitres() {
   }
 }
 
+async function chargerPistesAudio(item) {
+  LP.pistesAudio.liste = [];
+  LP.pistesAudio.active = 0;
+  LP.pistesAudio.chargeant = true;
+
+  const btnPiste = $("#lecteur-btn-piste-audio");
+  const badge = $("#lecteur-badge-pistes");
+  if (badge) badge.hidden = true;
+
+  try {
+    const url = item.chemin
+      ? `/fichiers/pistes-audio?chemin=${encodeURIComponent(item.chemin)}`
+      : item.id
+      ? `/fichiers/pistes-audio?id=${encodeURIComponent(item.id)}`
+      : null;
+    if (!url) return;
+    const res = await api(url);
+    const pistes = res.pistes || [];
+    LP.pistesAudio.liste = pistes;
+
+    if (pistes.length > 1) {
+      if (badge) {
+        badge.textContent = pistes.length;
+        badge.hidden = false;
+      }
+      if (btnPiste) {
+        btnPiste.title = `Pistes audio (${pistes.length} disponibles) - Raccourci A`;
+      }
+    } else if (pistes.length === 1) {
+      if (btnPiste) {
+        btnPiste.title = `Piste audio : ${pistes[0].titre} (A)`;
+      }
+    }
+  } catch (err) {
+    console.warn("Erreur chargement pistes audio:", err);
+  } finally {
+    LP.pistesAudio.chargeant = false;
+  }
+}
+
+function changerPisteAudio(nouvelIdx) {
+  const v = $("#lecteur-video");
+  if (!v || !LP.element) return;
+  const pistes = LP.pistesAudio.liste;
+  if (!pistes || !pistes.length) {
+    osd("Piste audio standard");
+    return;
+  }
+
+  const pisteCible = pistes.find((p) => p.idx === nouvelIdx) || pistes[0];
+  if (nouvelIdx === LP.pistesAudio.active && v.src && v.src.includes(`piste_audio=${nouvelIdx}`)) {
+    osd(`Piste active : ${pisteCible.titre}`);
+    return;
+  }
+
+  const tempsCourant = v.currentTime || 0;
+  const enLecture = !v.paused;
+  LP.pistesAudio.active = pisteCible.idx;
+
+  const baseSrc = LP.element.chemin
+    ? `/api/fichiers/lire?chemin=${encodeURIComponent(LP.element.chemin)}`
+    : `/api/fichier/${LP.element.id}`;
+
+  const separateur = baseSrc.includes("?") ? "&" : "?";
+  const nouvelleUrl = pisteCible.idx === 0
+    ? baseSrc
+    : `${baseSrc}${separateur}piste_audio=${pisteCible.idx}&_ts=${Date.now()}`;
+
+  osd(`Piste audio : ${pisteCible.titre}`);
+
+  const auChargement = () => {
+    v.currentTime = tempsCourant;
+    if (enLecture) {
+      v.play().catch(() => {});
+    }
+    v.removeEventListener("loadedmetadata", auChargement);
+  };
+  v.addEventListener("loadedmetadata", auChargement);
+
+  v.src = nouvelleUrl;
+  appliquerFiltresVideo();
+  reglerVolume(LP.volume, false);
+  reglerVitesse(LP.vitesse, false);
+}
+
 function rendreTiroirPlaylist() {
   const cont = $("#lecteur-tiroir-liste");
   if (!cont) return;
@@ -1528,6 +1618,7 @@ function ouvrirLecteur(item, liste = [], index = -1) {
   reglerVolume(LP.volume, false);
   reglerVitesse(LP.vitesse, false);
   chargerSousTitres(LP.element);
+  chargerPistesAudio(LP.element);
   rendreTiroirPlaylist();
 
   if (!d.open) d.showModal();
@@ -1905,8 +1996,59 @@ function attacherEvenementsLecteur() {
     }
   });
 
+  $("#lecteur-btn-piste-audio")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const pop = $("#lecteur-popover-piste-audio");
+    const ouvert = !pop.hidden;
+    fermerPopovers();
+    if (!ouvert) {
+      const pistes = LP.pistesAudio.liste;
+      if (!pistes || !pistes.length) {
+        pop.innerHTML = `
+          <div class="popover-titre"><span>Pistes audio & Doublage</span></div>
+          <div style="padding:12px;text-align:center;color:var(--t3);font-size:0.84rem">
+            ${LP.pistesAudio.chargeant ? "Détection des pistes…" : "Piste audio unique disponible"}
+          </div>
+        `;
+      } else {
+        pop.innerHTML = `
+          <div class="popover-titre">
+            <span>Pistes audio & Doublage</span>
+            <span style="font-size:0.75rem;color:var(--t3)">${pistes.length} disponible${pistes.length > 1 ? "s" : ""}</span>
+          </div>
+          <div class="popover-options">
+            ${pistes.map((p) => {
+              const estActive = p.idx === LP.pistesAudio.active;
+              return `
+                <div class="popover-item-piste ${estActive ? "selectionne" : ""}" data-piste-idx="${p.idx}">
+                  <div class="popover-piste-gauche">
+                    <span class="popover-piste-nom" title="${esc(p.titre)}">${esc(p.titre)}</span>
+                  </div>
+                  <div class="popover-piste-droite">
+                    ${p.codec ? `<span class="popover-piste-codec">${esc(p.codec)}</span>` : ""}
+                    ${estActive ? '<span class="popover-piste-coche">✓</span>' : ""}
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+          <div class="popover-aide-raccourci">Touche <kbd>A</kbd> pour basculer rapidement</div>
+        `;
+      }
+      pop.hidden = false;
+    }
+  });
+
   // Gestion des clics dans les popovers
   d.addEventListener("click", (e) => {
+    // Pistes audio
+    const pisteItem = e.target.closest("[data-piste-idx]");
+    if (pisteItem) {
+      const idx = +pisteItem.dataset.pisteIdx;
+      changerPisteAudio(idx);
+      fermerPopovers();
+      return;
+    }
     // Vitesse
     const vitItem = e.target.closest("[data-vitesse]");
     if (vitItem) {
@@ -2084,6 +2226,17 @@ function attacherEvenementsLecteur() {
       basculerPiP();
     } else if (k === "c") {
       basculerSousTitres();
+    } else if (k === "a") {
+      const pistes = LP.pistesAudio.liste;
+      if (pistes.length > 1) {
+        const actifPos = pistes.findIndex((p) => p.idx === LP.pistesAudio.active);
+        const prochainPos = (actifPos + 1) % pistes.length;
+        changerPisteAudio(pistes[prochainPos].idx);
+      } else if (pistes.length === 1) {
+        osd(`Piste audio : ${pistes[0].titre}`);
+      } else {
+        osd("Piste audio standard");
+      }
     } else if (k === "b") {
       basculerBoucle();
     } else if (k === "s") {

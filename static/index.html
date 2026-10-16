@@ -159,6 +159,7 @@
             <div class="aide-item"><kbd>T</kbd><span>Mode Cinéma / Théâtre</span></div>
             <div class="aide-item"><kbd>P</kbd><span>Picture-in-Picture (PiP)</span></div>
             <div class="aide-item"><kbd>C</kbd><span>Sous-titres on / off</span></div>
+            <div class="aide-item"><kbd>A</kbd><span>Changer de piste audio / langue</span></div>
             <div class="aide-item"><kbd>B</kbd><span>Répétition en boucle</span></div>
             <div class="aide-item"><kbd>S</kbd><span>Capture d'écran HD</span></div>
             <div class="aide-item"><kbd>R</kbd><span>Rotation 90°</span></div>
@@ -173,6 +174,7 @@
 
       <!-- Popovers interactifs pour les réglages -->
       <div class="lecteur-popover" id="lecteur-popover-vitesse" hidden></div>
+      <div class="lecteur-popover" id="lecteur-popover-piste-audio" hidden></div>
       <div class="lecteur-popover" id="lecteur-popover-audio" hidden></div>
       <div class="lecteur-popover" id="lecteur-popover-video" hidden></div>
       <div class="lecteur-popover" id="lecteur-popover-st" hidden></div>
@@ -240,6 +242,12 @@
             <!-- Sous-titres -->
             <button class="lecteur-btn-icone" id="lecteur-btn-st" title="Sous-titres (C)" aria-label="Sous-titres">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 12h4M14 12h4M6 15h8"/></svg>
+            </button>
+
+            <!-- Pistes audio (doublage & langues) -->
+            <button class="lecteur-btn-icone avec-badge" id="lecteur-btn-piste-audio" title="Piste audio & Doublage (A)" aria-label="Piste audio">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+              <span class="lecteur-pastille-badge" id="lecteur-badge-pistes" hidden>1</span>
             </button>
 
             <!-- Audio & Boost -->

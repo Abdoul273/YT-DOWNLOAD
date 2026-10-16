@@ -1032,6 +1032,32 @@ dialog#lecteur.lecteur-dialog:-webkit-full-screen {
   color: #fff;
   box-shadow: 0 0 12px rgba(129, 140, 248, 0.4);
 }
+.lecteur-btn-icone.avec-badge {
+  position: relative;
+}
+.lecteur-pastille-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 99px;
+  background: var(--indigo);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid rgba(14, 16, 32, 0.95);
+  box-shadow: 0 2px 6px rgba(99, 102, 241, 0.6);
+  pointer-events: none;
+}
+.lecteur-pastille-badge[hidden] {
+  display: none !important;
+}
 
 .lecteur-btn-pill {
   height: 36px;
@@ -1281,6 +1307,80 @@ dialog#lecteur.lecteur-dialog:-webkit-full-screen {
 .popover-glissiere input[type="range"] {
   width: 100%;
   accent-color: var(--indigo);
+}
+
+.popover-item-piste {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 0.86rem;
+  color: var(--t1);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+.popover-item-piste:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  transform: translateX(2px);
+}
+.popover-item-piste.selectionne {
+  background: color-mix(in srgb, var(--indigo) 30%, transparent);
+  border-color: var(--indigo);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 0 14px rgba(129, 140, 248, 0.25);
+}
+.popover-piste-gauche {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.popover-piste-nom {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.popover-piste-droite {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.popover-piste-codec {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--t3);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.popover-piste-coche {
+  color: #818cf8;
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+.popover-aide-raccourci {
+  font-size: 0.74rem;
+  color: var(--t3);
+  text-align: center;
+  padding-top: 6px;
+  border-top: 1px solid var(--trait);
+}
+.popover-aide-raccourci kbd {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 /* Tiroir Playlist Latéral */
