@@ -2037,3 +2037,103 @@ dialog#lecteur.lecteur-dialog:-webkit-full-screen {
   gap: 10px;
   margin-left: auto;
 }
+
+/* Mode Mini-lecteur (Picture-in-Picture) */
+dialog#lecteur.lecteur-dialog.en-pip {
+  position: fixed !important;
+  width: 1px !important;
+  height: 1px !important;
+  top: auto !important;
+  left: auto !important;
+  bottom: 0 !important;
+  right: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  z-index: -1 !important;
+}
+dialog#lecteur.lecteur-dialog.en-pip::backdrop {
+  display: none !important;
+  opacity: 0 !important;
+  backdrop-filter: none !important;
+  background: transparent !important;
+  pointer-events: none !important;
+}
+
+/* Dock flottant quand la vidéo est en mini-lecteur / PiP */
+.pip-dock {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border-radius: 18px;
+  background: rgba(14, 16, 32, 0.94);
+  backdrop-filter: blur(28px) saturate(1.8);
+  border: 1px solid var(--trait-2);
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.75), 0 0 25px rgba(99, 102, 241, 0.35);
+  max-width: min(450px, calc(100vw - 32px));
+  animation: monte 0.3s var(--ressort);
+}
+.pip-dock[hidden] {
+  display: none !important;
+}
+.pip-dock-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+.pip-dock-icone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--grad-btn);
+  color: #fff;
+  flex: none;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+}
+.pip-dock-icone svg {
+  width: 18px;
+  height: 18px;
+}
+.pip-dock-texte {
+  min-width: 0;
+  flex: 1;
+}
+.pip-dock-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--indigo-clair);
+}
+.pip-dock-titre {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--t1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pip-dock-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+

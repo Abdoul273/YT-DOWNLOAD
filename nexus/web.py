@@ -147,8 +147,9 @@ def suggestions_recherche():
 
 @api.get("/gouts/fil")
 def gouts_fil():
-    # Déclenche un rafraîchissement asynchrone si le fil est vide ou périmé
-    if gouts.gestionnaire.fil_perime() or not gouts.gestionnaire.fil:
+    if not gouts.gestionnaire.fil:
+        return jsonify(gouts.gestionnaire.rafraichir(force=False))
+    if gouts.gestionnaire.fil_perime():
         threading.Thread(target=gouts.gestionnaire.rafraichir, daemon=True).start()
     return jsonify(gouts.gestionnaire.etat())
 
@@ -663,6 +664,8 @@ def creer_app():
     app.json.ensure_ascii = False
     app.register_blueprint(api)
     taches.demarrer()
+    if not app.config.get("TESTING") and not gouts.gestionnaire.fil:
+        threading.Thread(target=gouts.gestionnaire.rafraichir, kwargs={"force": False}, daemon=True).start()
 
     @app.get("/")
     def accueil():

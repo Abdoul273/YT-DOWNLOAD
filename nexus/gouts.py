@@ -135,6 +135,7 @@ class Profil:
 class GestionnaireGouts:
     def __init__(self, fichier: Path | None = None):
         self._verrou = threading.Lock()
+        self._verrou_rafraichir = threading.Lock()
         self._fichier = Path(fichier) if fichier else (config.DONNEES / "gouts.json")
         self._signaux = []
         self.recherches = []           # list de {'q': str, 't': int}
@@ -343,85 +344,88 @@ class GestionnaireGouts:
     def rafraichir(self, force=False):
         if not force and not self.fil_perime() and self.fil:
             return self.etat()
-        self.chargement = True
-        self.erreur = None
-        try:
-            p = self.profil()
-            rnd = random.Random()
-            candidats = []
+        with self._verrou_rafraichir:
+            if not force and not self.fil_perime() and self.fil:
+                return self.etat()
+            self.chargement = True
+            self.erreur = None
+            try:
+                p = self.profil()
+                rnd = random.Random()
+                candidats = []
 
-            # 1. Mix YouTube des vidéos aimées (tirage pondéré)
-            graines_retenues = self._tirage(p.graines, 3, rnd)
-            for g_sig, _ in graines_retenues:
-                gid = g_sig.get("id")
-                if gid:
+                # 1. Mix YouTube des vidéos aimées (tirage pondéré)
+                graines_retenues = self._tirage(p.graines, 3, rnd)
+                for g_sig, _ in graines_retenues:
+                    gid = g_sig.get("id")
+                    if gid:
+                        try:
+                            mix_url = f"https://www.youtube.com/watch?v={gid}&list=RD{gid}"
+                            vids = analyse.rechercher(mix_url, nombre=20)
+                            for r_idx, v in enumerate(vids):
+                                candidats.append((v, "mix", r_idx))
+                        except Exception:
+                            pass
+
+                # 2. Nouveautés des chaînes préférées
+                chaines_top = sorted(
+                    [e for e in p.chaines.items() if e[1] > 1.5],
+                    key=lambda x: x[1], reverse=True
+                )[:3]
+                for c_key, _ in chaines_top:
+                    nom_c = p.noms_chaines.get(c_key, c_key)
+                    cid = p.ids_chaines.get(c_key)
+                    url = f"https://www.youtube.com/channel/{cid}/videos" if cid else f"ytsearch10:{nom_c}"
                     try:
-                        mix_url = f"https://www.youtube.com/watch?v={gid}&list=RD{gid}"
-                        vids = analyse.rechercher(mix_url, nombre=20)
+                        vids = analyse.rechercher(url, nombre=10)
                         for r_idx, v in enumerate(vids):
-                            candidats.append((v, "mix", r_idx))
+                            candidats.append((v, "chaine", r_idx))
                     except Exception:
                         pass
 
-            # 2. Nouveautés des chaînes préférées
-            chaines_top = sorted(
-                [e for e in p.chaines.items() if e[1] > 1.5],
-                key=lambda x: x[1], reverse=True
-            )[:3]
-            for c_key, _ in chaines_top:
-                nom_c = p.noms_chaines.get(c_key, c_key)
-                cid = p.ids_chaines.get(c_key)
-                url = f"https://www.youtube.com/channel/{cid}/videos" if cid else f"ytsearch10:{nom_c}"
-                try:
-                    vids = analyse.rechercher(url, nombre=10)
-                    for r_idx, v in enumerate(vids):
-                        candidats.append((v, "chaine", r_idx))
-                except Exception:
-                    pass
+                # 3. Centres d'intérêt (recherches et mots forts)
+                interets = p.interets(6)
+                rnd.shuffle(interets)
+                for q in interets[:3]:
+                    try:
+                        vids = analyse.rechercher(q, filtres={"date": "mois"}, nombre=12)
+                        for r_idx, v in enumerate(vids):
+                            candidats.append((v, "interet", r_idx))
+                    except Exception:
+                        pass
 
-            # 3. Centres d'intérêt (recherches et mots forts)
-            interets = p.interets(6)
-            rnd.shuffle(interets)
-            for q in interets[:3]:
-                try:
-                    vids = analyse.rechercher(q, filtres={"date": "mois"}, nombre=12)
-                    for r_idx, v in enumerate(vids):
-                        candidats.append((v, "interet", r_idx))
-                except Exception:
-                    pass
+                # 4. Tendances
+                tendances_vids = []
+                if force or not self.tendances or (self._maintenant() - self._maj_tendances > 3 * 3600):
+                    tendances_vids = self._chercher_tendances()
+                    if tendances_vids:
+                        with self._verrou:
+                            self.tendances = tendances_vids
+                            self._maj_tendances = self._maintenant()
+                else:
+                    tendances_vids = self.tendances
 
-            # 4. Tendances
-            tendances_vids = []
-            if force or not self.tendances or (self._maintenant() - self._maj_tendances > 3 * 3600):
-                tendances_vids = self._chercher_tendances()
-                if tendances_vids:
-                    with self._verrou:
-                        self.tendances = tendances_vids
-                        self._maj_tendances = self._maintenant()
-            else:
-                tendances_vids = self.tendances
+                for r_idx, v in enumerate(tendances_vids):
+                    candidats.append((v, "tendance", r_idx))
 
-            for r_idx, v in enumerate(tendances_vids):
-                candidats.append((v, "tendance", r_idx))
-
-            classe = self._classer(candidats, p, rnd)
-            with self._verrou:
-                if classe:
-                    self.fil = classe
-                    self._maj_fil = self._maintenant()
-                    for e in self.fil[:15]:
-                        eid = e.get("id")
-                        if eid:
-                            self._impressions[eid] = self._impressions.get(eid, 0) + 1
-                    if len(self._impressions) > 1500:
-                        cles_a_suppr = list(self._impressions.keys())[:len(self._impressions) - 1500]
-                        for k in cles_a_suppr:
-                            self._impressions.pop(k, None)
-            self._sauver()
-        except Exception as e:
-            self.erreur = str(e)
-        finally:
-            self.chargement = False
+                classe = self._classer(candidats, p, rnd)
+                with self._verrou:
+                    if classe:
+                        self.fil = classe
+                        self._maj_fil = self._maintenant()
+                        for e in self.fil[:15]:
+                            eid = e.get("id")
+                            if eid:
+                                self._impressions[eid] = self._impressions.get(eid, 0) + 1
+                        if len(self._impressions) > 1500:
+                            cles_a_suppr = list(self._impressions.keys())[:len(self._impressions) - 1500]
+                            for k in cles_a_suppr:
+                                self._impressions.pop(k, None)
+                self._sauver()
+            except Exception as e:
+                self.erreur = str(e)
+            finally:
+                self.chargement = False
         return self.etat()
 
     def _tirage(self, graines, n, rnd):

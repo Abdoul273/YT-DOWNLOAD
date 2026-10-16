@@ -322,6 +322,31 @@
     </div>
   </dialog>
 
+  <!-- Dock flottant Mini-Lecteur (Picture-in-Picture) -->
+  <aside class="pip-dock verre" id="pip-dock" hidden>
+    <div class="pip-dock-info">
+      <span class="pip-dock-icone">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 8 6 4-6 4Z"/></svg>
+      </span>
+      <div class="pip-dock-texte">
+        <span class="pip-dock-label">Mini-lecteur en cours</span>
+        <div class="pip-dock-titre" id="pip-dock-titre">Vidéo en cours</div>
+      </div>
+    </div>
+    <div class="pip-dock-actions">
+      <button class="icone-btn mini" id="pip-dock-btn-play" title="Lecture / Pause">
+        <svg id="pip-dock-ic-play" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+      </button>
+      <button class="btn petit principal" id="pip-dock-btn-agrandir" title="Rouvrir le grand lecteur">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        Agrandir
+      </button>
+      <button class="icone-btn mini fantome" id="pip-dock-btn-fermer" title="Arrêter la lecture">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </aside>
+
   <div class="toasts" id="toasts" aria-live="polite"></div>
   <div class="deposer" id="deposer" hidden>Dépose le lien ici</div>
   <script type="module" src="/static/app.js"></script>

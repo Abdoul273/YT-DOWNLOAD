@@ -627,7 +627,9 @@ function idVideo(url) {
   return m ? m[1] : "";
 }
 
+let timerPollingGouts = null;
 async function chargerGouts(force = false) {
+  clearTimeout(timerPollingGouts);
   if (E.gouts.chargement && !force) return;
   E.gouts.chargement = true;
   if (E.vue === "recherche" && !P().resultat) rafraichirResultat();
@@ -639,11 +641,18 @@ async function chargerGouts(force = false) {
     E.gouts.tendances = d.tendances || [];
     E.gouts.interets = d.interets || [];
     E.gouts.recherches = d.recherches || [];
-    E.gouts.erreur = null;
+    E.gouts.erreur = d.erreur || null;
+
+    if (d.chargement || (E.gouts.fil.length === 0 && E.gouts.tendances.length === 0 && !d.erreur)) {
+      E.gouts.chargement = true;
+      timerPollingGouts = setTimeout(() => chargerGouts(false), 1600);
+    } else {
+      E.gouts.chargement = false;
+    }
   } catch (e) {
     E.gouts.erreur = e.message;
-  } finally {
     E.gouts.chargement = false;
+  } finally {
     if (E.vue === "recherche" && !P().resultat) rafraichirResultat();
   }
 }
@@ -751,8 +760,9 @@ function carteVideoRecherche(e, i, source = "recherche") {
 function zoneDecouverteGouts() {
   const g = E.gouts;
   const onglet = g.onglet || "pour_vous";
-  const liste = onglet === "tendances" ? g.tendances : g.fil;
   const estPourVous = onglet === "pour_vous";
+  const liste = onglet === "tendances" ? g.tendances : (g.fil && g.fil.length ? g.fil : g.tendances);
+  const estRepli = estPourVous && (!g.fil || !g.fil.length) && (g.tendances && g.tendances.length > 0);
 
   return h`
   <div class="decouverte-boite anim" style="margin-top:24px">
@@ -788,18 +798,22 @@ function zoneDecouverteGouts() {
         </span>`)}
     </div>` : ""}
 
-    ${g.chargement && !liste.length ? h`
+    ${g.chargement && (!liste || !liste.length) ? h`
+      <div class="chargement-texte" style="margin-bottom:18px"><span class="rond"></span> Découverte des tendances et calcul de vos recommandations…</div>
       <div class="grille-videos">${[...Array(6)].map((_, i) => h`<div class="verre carte-video anim" style="--i:${i}"><div class="squelette" style="aspect-ratio:16/9;border-radius:0"></div><div class="corps" style="flex-direction:column;gap:8px"><div class="squelette" style="height:14px;width:90%"></div><div class="squelette" style="height:12px;width:50%"></div></div></div>`)}</div>
-    ` : !liste.length ? h`
+    ` : (!liste || !liste.length) ? h`
       <div class="vide" style="padding:40px 20px">
         <div class="halo">${brut(I.etincelle)}</div>
-        <h3>${estPourVous ? "Votre fil personnalisé se construit" : "Aucune vidéo tendance pour le moment"}</h3>
-        <p>${estPourVous ? "Regarde ou télécharge quelques vidéos : YT-NEXUS apprendra tes chaînes et thèmes favoris exactement comme l'app mobile." : "Réessaie dans un instant."}</p>
+        <h3>Chargement de vos recommandations</h3>
+        <p>Récupération des vidéos tendances de YouTube en cours…</p>
+        <button type="button" class="btn principal" style="margin-top:14px" data-action="rafraichir-fil">
+          ${brut(I.etincelle)} Charger les recommandations
+        </button>
       </div>
     ` : h`
       <div class="titre-section" style="margin-bottom:14px">
-        <h2>${estPourVous ? "Vidéos recommandées pour vous" : "Les tendances les plus populaires"}</h2>
-        <span class="muet">${liste.length} vidéos · ${estPourVous ? "basé sur vos préférences" : "populaires sur YouTube"}</span>
+        <h2>${estPourVous ? (estRepli ? "Tendances populaires pour commencer" : "Vidéos recommandées pour vous") : "Les tendances les plus populaires"}</h2>
+        <span class="muet">${liste.length} vidéos · ${estPourVous && !estRepli ? "basé sur vos préférences" : "populaires sur YouTube"}</span>
       </div>
       <div class="grille-videos">${liste.map((e, i) => carteVideoRecherche(e, i, onglet))}</div>
     `}
@@ -1964,11 +1978,37 @@ function attacherEvenementsLecteur() {
   // Lecture / Pause sur la vidéo
   v.addEventListener("play", () => {
     $("#lecteur-ic-play").innerHTML = '<rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/>';
+    const icDock = $("#pip-dock-ic-play");
+    if (icDock) icDock.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
     reinitialiserInactivite();
   });
   v.addEventListener("pause", () => {
     $("#lecteur-ic-play").innerHTML = '<path d="M8 5v14l11-7z"/>';
+    const icDock = $("#pip-dock-ic-play");
+    if (icDock) icDock.innerHTML = '<path d="M8 5v14l11-7z"/>';
     boite.classList.remove("commandes-masquees", "masquer-curseur");
+  });
+
+  // Mini-lecteur (Picture-in-Picture) : seule la mini-vidéo s'affiche, la fenêtre disparaît pour revenir dans l'app
+  v.addEventListener("enterpictureinpicture", () => {
+    d.classList.add("en-pip");
+    const dock = $("#pip-dock");
+    if (dock) {
+      const t = LP.element?.titre || LP.element?.nom || "Lecture en cours";
+      const lbl = $("#pip-dock-titre");
+      if (lbl) {
+        lbl.textContent = t;
+        lbl.title = t;
+      }
+      dock.hidden = false;
+    }
+    toast("Mini-lecteur actif · navigation dans l'app disponible", "ok");
+  });
+
+  v.addEventListener("leavepictureinpicture", () => {
+    d.classList.remove("en-pip");
+    const dock = $("#pip-dock");
+    if (dock) dock.hidden = true;
   });
 
   // Progression temporelle & sauvegarde
@@ -2103,6 +2143,28 @@ function attacherEvenementsLecteur() {
   $("#lecteur-btn-pip")?.addEventListener("click", basculerPiP);
   $("#lecteur-btn-theatre")?.addEventListener("click", basculerTheatre);
   $("#lecteur-btn-plein-ecran")?.addEventListener("click", basculerPleinEcran);
+
+  // Commandes du mini-dock Picture-in-Picture
+  $("#pip-dock-btn-play")?.addEventListener("click", basculerLecture);
+  $("#pip-dock-btn-agrandir")?.addEventListener("click", async () => {
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture().catch(() => {});
+    }
+    d.classList.remove("en-pip");
+    if (!d.open) d.showModal();
+    const dock = $("#pip-dock");
+    if (dock) dock.hidden = true;
+  });
+  $("#pip-dock-btn-fermer")?.addEventListener("click", async () => {
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture().catch(() => {});
+    }
+    v.pause();
+    d.classList.remove("en-pip");
+    if (d.open) d.close();
+    const dock = $("#pip-dock");
+    if (dock) dock.hidden = true;
+  });
 
   // Plein écran change icône
   // Plein écran change icône
