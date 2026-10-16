@@ -358,6 +358,56 @@ def lire_fichier():
     return send_file(f, as_attachment=request.args.get("enregistrer") == "1", download_name=f.name, conditional=True)
 
 
+@api.get("/fichiers/sous-titres")
+def liste_sous_titres():
+    chemin = request.args.get("chemin")
+    id_ = request.args.get("id")
+    cible = None
+    racine = config.dossier_telechargement().resolve()
+    if chemin:
+        try:
+            _, cible = _chemin_sur(chemin)
+        except (ValueError, OSError):
+            return jsonify({"sous_titres": []})
+    elif id_:
+        try:
+            cible = _fichier_de(id_)
+        except (ValueError, OSError, KeyError):
+            return jsonify({"sous_titres": []})
+    if not cible or not cible.is_file():
+        return jsonify({"sous_titres": []})
+
+    base_nom = cible.stem
+    subs = []
+    for f in cible.parent.glob(f"{base_nom}*"):
+        ext = f.suffix.lower()
+        if ext in {".vtt", ".srt"} and f.is_file():
+            suffixe = f.stem[len(base_nom):].strip("._- ")
+            lang = suffixe or "Défaut"
+            rel = f.relative_to(racine) if racine in f.parents or f == racine else f.name
+            subs.append({
+                "lang": lang,
+                "nom": f.name,
+                "chemin": str(rel),
+                "format": ext[1:],
+            })
+    return jsonify({"sous_titres": subs})
+
+
+@api.get("/fichiers/sous-titres/vtt")
+def servir_sous_titre_vtt():
+    import re
+    _, f = _chemin_sur(request.args.get("chemin"))
+    if not f.is_file():
+        abort(404)
+    contenu = f.read_text(encoding="utf-8", errors="replace")
+    if f.suffix.lower() == ".srt":
+        vtt = "WEBVTT\n\n" + re.sub(r"(\d{2}:\d{2}:\d{2}),(\d{3})", r"\1.\2", contenu)
+    else:
+        vtt = contenu
+    return Response(vtt, mimetype="text/vtt; charset=utf-8")
+
+
 @api.delete("/fichiers")
 def supprimer_fichier():
     racine, f = _chemin_sur(request.args.get("chemin"))

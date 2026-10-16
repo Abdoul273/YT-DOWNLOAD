@@ -1005,14 +1005,1114 @@ function choisir(question, detail, options) {
   });
 }
 
-function lire(t) {
-  const d = $("#lecteur"), v = $("#lecteur-video");
-  $("#lecteur-titre").textContent = t.titre;
-  v.src = `/api/fichier/${t.id}`;
-  d.showModal(); v.play().catch(() => {});
+// ═══════════════════════════════════════════════════════════════════════
+// LECTEUR VIDÉO ULTRA-COMPLET & PREMIUM (DESKTOP)
+// ═══════════════════════════════════════════════════════════════════════
+
+const LP = {
+  element: null,
+  playlist: [],
+  index: -1,
+  modeTemps: "ecoule", // "ecoule" | "restant"
+  boucle: false,
+  autoSuivante: localStorage.getItem("yt_nexus_auto_suivante") !== "false",
+  vitesse: 1.0,
+  volume: 100,
+  muet: false,
+  dernierVolume: 100,
+  repriseTemps: 0,
+  scrubbing: false,
+  timerInactivite: null,
+  timerDecompte: null,
+  filtres: {
+    lum: 100,
+    contrast: 100,
+    sat: 100,
+    rot: 0,
+    flip: 1,
+    ratio: "contain",
+  },
+  audio: {
+    ctx: null,
+    source: null,
+    gainNode: null,
+    filterNode: null,
+    compressor: null,
+    profil: "plat",
+  },
+  sousTitres: {
+    pistes: [],
+    active: -1,
+    decalage: 0,
+  },
+};
+
+function initAudioLecteur() {
+  const v = $("#lecteur-video");
+  if (!v || LP.audio.ctx) return;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  try {
+    const ctx = new AudioCtx();
+    const source = ctx.createMediaElementSource(v);
+    const filter = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+    const comp = ctx.createDynamicsCompressor();
+
+    comp.threshold.value = -3.0;
+    comp.knee.value = 6.0;
+    comp.ratio.value = 12.0;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.25;
+
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(comp);
+    comp.connect(ctx.destination);
+
+    LP.audio.ctx = ctx;
+    LP.audio.source = source;
+    LP.audio.filterNode = filter;
+    LP.audio.gainNode = gain;
+    LP.audio.compressor = comp;
+  } catch (err) {
+    console.warn("Web Audio indisponible:", err);
+  }
 }
-$("#lecteur").addEventListener("close", () => { const v = $("#lecteur-video"); v.pause(); v.removeAttribute("src"); v.load(); });
-$("#lecteur").addEventListener("click", (e) => { if (e.target.closest("[data-fermer]") || e.target === e.currentTarget) $("#lecteur").close(); });
+
+let timerOsd = null;
+function osd(texte, htmlExtra = "") {
+  const el = $("#lecteur-osd");
+  if (!el) return;
+  el.innerHTML = `<span>${texte}</span>${htmlExtra}`;
+  el.classList.add("actif");
+  clearTimeout(timerOsd);
+  timerOsd = setTimeout(() => el.classList.remove("actif"), 900);
+}
+
+let timerFlash = null;
+function flashCentre(iconeSvg) {
+  const el = $("#lecteur-centre-anim");
+  if (!el) return;
+  el.innerHTML = iconeSvg;
+  el.classList.add("flash");
+  clearTimeout(timerFlash);
+  timerFlash = setTimeout(() => el.classList.remove("flash"), 420);
+}
+
+function fermerPopovers() {
+  $$(".lecteur-popover").forEach((p) => (p.hidden = true));
+}
+
+function animerZone(zone) {
+  zone.classList.remove("anim-active");
+  void zone.offsetWidth;
+  zone.classList.add("anim-active");
+  setTimeout(() => zone.classList.remove("anim-active"), 450);
+}
+
+function reinitialiserInactivite() {
+  const boite = $("#lecteur-boite");
+  if (!boite) return;
+  boite.classList.remove("commandes-masquees", "masquer-curseur");
+  clearTimeout(LP.timerInactivite);
+  const v = $("#lecteur-video");
+  const modaleOuverte = $$(".lecteur-popover:not([hidden]), #lecteur-tiroir:not([hidden]), #lecteur-aide:not([hidden])").length > 0;
+  if (v && !v.paused && !modaleOuverte) {
+    LP.timerInactivite = setTimeout(() => {
+      boite.classList.add("commandes-masquees", "masquer-curseur");
+    }, 2600);
+  }
+}
+
+function reglerVolume(val, avecOsd = true) {
+  const v = $("#lecteur-video");
+  if (!v) return;
+  val = Math.max(0, Math.min(200, Math.round(val)));
+  LP.volume = val;
+  LP.muet = val === 0;
+
+  if (LP.audio.ctx && LP.audio.ctx.state === "suspended") {
+    LP.audio.ctx.resume().catch(() => {});
+  }
+
+  if (val <= 100) {
+    v.volume = val / 100;
+    if (LP.audio.gainNode) LP.audio.gainNode.gain.value = 1.0;
+  } else {
+    v.volume = 1.0;
+    if (LP.audio.gainNode) LP.audio.gainNode.gain.value = val / 100;
+  }
+
+  const slider = $("#lecteur-vol-range");
+  const pctLbl = $("#lecteur-vol-pct");
+  if (slider) slider.value = val;
+  if (pctLbl) {
+    pctLbl.textContent = `${val}%`;
+    pctLbl.classList.toggle("boost", val > 100);
+  }
+
+  const icVol = $("#lecteur-ic-vol");
+  if (icVol) {
+    if (val === 0 || LP.muet) {
+      icVol.innerHTML = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>';
+    } else if (val < 50) {
+      icVol.innerHTML = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>';
+    } else {
+      icVol.innerHTML = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/>';
+    }
+  }
+
+  if (avecOsd) {
+    const boostTag = val > 100 ? ' <span class="boost-tag">BOOST 200%</span>' : "";
+    const jauge = `<span class="osd-jauge"><i style="width:${Math.min(100, (val / 200) * 100)}%"></i></span>`;
+    osd(`Volume ${val}%${boostTag}`, jauge);
+  }
+}
+
+function basculerMuet() {
+  const v = $("#lecteur-video");
+  if (!v) return;
+  if (LP.muet || LP.volume === 0) {
+    reglerVolume(LP.dernierVolume > 0 ? LP.dernierVolume : 100);
+  } else {
+    LP.dernierVolume = LP.volume;
+    reglerVolume(0);
+  }
+}
+
+function reglerVitesse(vitesse, avecOsd = true) {
+  const v = $("#lecteur-video");
+  if (!v) return;
+  LP.vitesse = vitesse;
+  v.playbackRate = vitesse;
+  v.preservesPitch = true;
+  const lbl = $("#lecteur-lbl-vitesse");
+  if (lbl) lbl.textContent = `${vitesse}x`;
+  if (avecOsd) osd(`Vitesse ${vitesse}x`);
+}
+
+function appliquerProfilAudio(profil) {
+  LP.audio.profil = profil;
+  if (!LP.audio.filterNode) return;
+  const f = LP.audio.filterNode;
+  if (profil === "voix") {
+    f.type = "peaking";
+    f.frequency.value = 2400;
+    f.Q.value = 1.2;
+    f.gain.value = 6.0;
+    osd("Profil son : Voix claire");
+  } else if (profil === "bass") {
+    f.type = "lowshelf";
+    f.frequency.value = 120;
+    f.gain.value = 7.0;
+    osd("Profil son : Bass Boost");
+  } else {
+    f.type = "allpass";
+    f.gain.value = 0;
+    osd("Profil son : Neutre");
+  }
+}
+
+function appliquerFiltresVideo() {
+  const v = $("#lecteur-video");
+  if (!v) return;
+  const f = LP.filtres;
+  v.style.setProperty("--lecteur-lum", f.lum);
+  v.style.setProperty("--lecteur-contrast", f.contrast);
+  v.style.setProperty("--lecteur-sat", f.sat);
+  v.style.setProperty("--lecteur-rot", `${f.rot}deg`);
+  v.style.setProperty("--lecteur-flip", f.flip);
+  v.style.objectFit = f.ratio;
+}
+
+function basculerLecture() {
+  const v = $("#lecteur-video");
+  if (!v) return;
+  if (v.paused) {
+    v.play().catch(() => {});
+    flashCentre('<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>');
+  } else {
+    v.pause();
+    flashCentre('<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/></svg>');
+  }
+}
+
+function sautTemps(delta) {
+  const v = $("#lecteur-video");
+  if (!v || !v.duration) return;
+  v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + delta));
+  const signe = delta > 0 ? "+" : "";
+  osd(`${signe}${delta} s (${duree(v.currentTime)})`);
+}
+
+function imageParImage(sens = 1) {
+  const v = $("#lecteur-video");
+  if (!v || !v.duration) return;
+  v.pause();
+  v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + (sens * (1 / 30))));
+  osd(`Image (${duree(v.currentTime)})`);
+}
+
+function formaterTempsLecteur() {
+  const v = $("#lecteur-video");
+  if (!v) return;
+  const cur = v.currentTime || 0;
+  const tot = v.duration || 0;
+  $("#lecteur-t-actuel").textContent = duree(cur);
+  if (LP.modeTemps === "restant") {
+    $("#lecteur-t-total").textContent = `-${duree(Math.max(0, tot - cur))}`;
+  } else {
+    $("#lecteur-t-total").textContent = duree(tot);
+  }
+}
+
+function basculerPleinEcran() {
+  const d = $("#lecteur");
+  if (!document.fullscreenElement) {
+    d.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+function basculerTheatre() {
+  const d = $("#lecteur");
+  if (!d) return;
+  const actif = d.classList.toggle("mode-theatre");
+  osd(actif ? "Mode Théâtre" : "Fenêtre normale");
+}
+
+async function basculerPiP() {
+  const v = $("#lecteur-video");
+  if (!v) return;
+  try {
+    if (!document.pictureInPictureElement) {
+      await v.requestPictureInPicture();
+    } else {
+      await document.exitPictureInPicture();
+    }
+  } catch (err) {
+    toast("Picture-in-Picture indisponible", "err");
+  }
+}
+
+function basculerBoucle() {
+  LP.boucle = !LP.boucle;
+  const btn = $("#lecteur-btn-boucle");
+  if (btn) btn.classList.toggle("actif", LP.boucle);
+  osd(LP.boucle ? "Boucle activée" : "Boucle désactivée");
+}
+
+async function capturerImage() {
+  const v = $("#lecteur-video");
+  const c = $("#lecteur-canvas");
+  if (!v || !c || !v.videoWidth) return;
+  c.width = v.videoWidth;
+  c.height = v.videoHeight;
+  const ctx = c.getContext("2d");
+
+  ctx.save();
+  ctx.translate(c.width / 2, c.height / 2);
+  ctx.rotate((LP.filtres.rot * Math.PI) / 180);
+  ctx.scale(LP.filtres.flip, 1);
+  ctx.drawImage(v, -c.width / 2, -c.height / 2, c.width, c.height);
+  ctx.restore();
+
+  c.toBlob(async (blob) => {
+    if (!blob) return;
+    const titre = (LP.element?.titre || "capture").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
+    const t = duree(v.currentTime).replace(":", "m") + "s";
+    const nomFichier = `${titre}_${t}.png`;
+
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = nomFichier;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+
+    try {
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        osd("📸 Capture enregistrée et copiée !");
+        return;
+      }
+    } catch {}
+    osd("📸 Capture HD enregistrée !");
+  }, "image/png");
+}
+
+function declencherSuivanteAuto() {
+  if (!LP.autoSuivante) return;
+  if (LP.index < 0 || LP.index >= LP.playlist.length - 1) return;
+  const suiv = LP.playlist[LP.index + 1];
+  if (!suiv) return;
+
+  const banniere = $("#lecteur-suivante-auto");
+  const decompteLbl = $("#lecteur-decompte");
+  const titreLbl = $("#lecteur-suivante-titre");
+  if (!banniere || !decompteLbl || !titreLbl) return;
+
+  titreLbl.textContent = suiv.titre || suiv.nom || "Vidéo suivante";
+  banniere.hidden = false;
+  let sec = 3;
+  decompteLbl.textContent = sec;
+
+  clearInterval(LP.timerDecompte);
+  LP.timerDecompte = setInterval(() => {
+    sec--;
+    decompteLbl.textContent = sec;
+    if (sec <= 0) {
+      clearInterval(LP.timerDecompte);
+      banniere.hidden = true;
+      changerElement(LP.index + 1);
+    }
+  }, 1000);
+}
+
+function annulerSuivanteAuto() {
+  clearInterval(LP.timerDecompte);
+  const banniere = $("#lecteur-suivante-auto");
+  if (banniere) banniere.hidden = true;
+}
+
+async function chargerSousTitres(item) {
+  LP.sousTitres.pistes = [];
+  LP.sousTitres.active = -1;
+  const v = $("#lecteur-video");
+  if (!v) return;
+
+  [...v.querySelectorAll("track")].forEach((t) => t.remove());
+
+  try {
+    const url = item.chemin ? `/fichiers/sous-titres?chemin=${encodeURIComponent(item.chemin)}`
+                            : item.id ? `/fichiers/sous-titres?id=${encodeURIComponent(item.id)}` : null;
+    if (!url) return;
+    const res = await api(url);
+    if (res.sous_titres && res.sous_titres.length) {
+      res.sous_titres.forEach((st, idx) => {
+        const track = document.createElement("track");
+        track.kind = "subtitles";
+        track.label = st.lang || st.nom;
+        track.srclang = (st.lang || "fr").slice(0, 2).toLowerCase();
+        track.src = `/api/fichiers/sous-titres/vtt?chemin=${encodeURIComponent(st.chemin)}`;
+        if (idx === 0) {
+          track.default = true;
+          LP.sousTitres.active = 0;
+        }
+        v.appendChild(track);
+        LP.sousTitres.pistes.push({ label: track.label, lang: track.srclang, src: track.src, elem: track });
+      });
+      if (v.textTracks && v.textTracks[0]) {
+        v.textTracks[0].mode = "showing";
+      }
+    }
+  } catch (err) {
+    console.warn("Erreur chargement sous-titres:", err);
+  }
+}
+
+function basculerSousTitres() {
+  const v = $("#lecteur-video");
+  if (!v || !v.textTracks.length) {
+    osd("Aucun sous-titre disponible");
+    return;
+  }
+  const tracks = [...v.textTracks];
+  const activeIdx = tracks.findIndex((t) => t.mode === "showing");
+  if (activeIdx >= 0) {
+    tracks[activeIdx].mode = "disabled";
+    LP.sousTitres.active = -1;
+    osd("Sous-titres désactivés");
+  } else {
+    tracks[0].mode = "showing";
+    LP.sousTitres.active = 0;
+    osd(`Sous-titres : ${tracks[0].label || "Activés"}`);
+  }
+}
+
+function rendreTiroirPlaylist() {
+  const cont = $("#lecteur-tiroir-liste");
+  if (!cont) return;
+  if (!LP.playlist || !LP.playlist.length) {
+    cont.innerHTML = '<div style="padding:20px;text-align:center;color:var(--t3)">Aucune vidéo dans la liste</div>';
+    return;
+  }
+  cont.innerHTML = LP.playlist.map((item, idx) => {
+    const estActif = idx === LP.index;
+    const min = item.miniature ? srcMin(item.miniature) : "";
+    return `
+      <div class="tiroir-item ${estActif ? "actif" : ""}" data-idx="${idx}">
+        <div class="tiroir-min">
+          ${min ? `<img src="${min}" alt="" loading="lazy" />` : '<div style="width:100%;height:100%;background:#1a1c29;display:grid;place-items:center;color:var(--t3)">▶</div>'}
+          ${item.duree ? `<span class="duree-pastille">${duree(item.duree)}</span>` : ""}
+        </div>
+        <div class="tiroir-corps">
+          <div class="tiroir-titre" title="${esc(item.titre || item.nom)}">${esc(item.titre || item.nom)}</div>
+          <div class="tiroir-meta">
+            ${item.ext ? `<span>${item.ext.toUpperCase()}</span>` : ""}
+            ${item.taille ? `<span>· ${taille(item.taille)}</span>` : ""}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function ouvrirLecteur(item, liste = [], index = -1) {
+  const d = $("#lecteur"), v = $("#lecteur-video");
+  if (!d || !v) return;
+
+  fermerPopovers();
+  annulerSuivanteAuto();
+
+  LP.playlist = liste && liste.length ? liste : [item];
+  if (index >= 0) {
+    LP.index = index;
+  } else {
+    LP.index = LP.playlist.findIndex((x) => (x.chemin && x.chemin === item.chemin) || (x.id && x.id === item.id));
+    if (LP.index < 0) LP.index = 0;
+  }
+  LP.element = LP.playlist[LP.index] || item;
+
+  const src = LP.element.chemin
+    ? `/api/fichiers/lire?chemin=${encodeURIComponent(LP.element.chemin)}`
+    : `/api/fichier/${LP.element.id}`;
+
+  $("#lecteur-titre").textContent = LP.element.titre || LP.element.nom || "Lecture";
+  $("#lecteur-titre").title = LP.element.titre || LP.element.nom || "";
+
+  const badgeExt = $("#lecteur-badge-ext");
+  if (badgeExt) badgeExt.textContent = (LP.element.ext || "MP4").toUpperCase();
+  const badgeTaille = $("#lecteur-badge-taille");
+  if (badgeTaille) badgeTaille.textContent = LP.element.taille ? taille(LP.element.taille) : "--";
+  const badgeCompteur = $("#lecteur-badge-compteur");
+  if (badgeCompteur) badgeCompteur.textContent = `${LP.index + 1} / ${LP.playlist.length}`;
+
+  $("#lecteur-timeline-jouee").style.width = "0%";
+  $("#lecteur-timeline-tampon").style.width = "0%";
+  $("#lecteur-t-actuel").textContent = "00:00";
+  $("#lecteur-t-total").textContent = LP.element.duree ? duree(LP.element.duree) : "00:00";
+
+  const cleReprise = `yt_nexus_prog_${LP.element.chemin || LP.element.id}`;
+  const sauv = localStorage.getItem(cleReprise);
+  const repBanniere = $("#lecteur-reprise");
+  if (sauv && !isNaN(+sauv) && +sauv > 10) {
+    LP.repriseTemps = +sauv;
+    $("#lecteur-reprise-temps").textContent = duree(LP.repriseTemps);
+    repBanniere.hidden = false;
+  } else {
+    repBanniere.hidden = true;
+  }
+
+  v.src = src;
+  appliquerFiltresVideo();
+  reglerVolume(LP.volume, false);
+  reglerVitesse(LP.vitesse, false);
+  chargerSousTitres(LP.element);
+  rendreTiroirPlaylist();
+
+  if (!d.open) d.showModal();
+
+  initAudioLecteur();
+  v.play().catch(() => {});
+}
+
+function changerElement(nouvelIndex) {
+  if (!LP.playlist || !LP.playlist.length) return;
+  if (nouvelIndex < 0 || nouvelIndex >= LP.playlist.length) return;
+  ouvrirLecteur(LP.playlist[nouvelIndex], LP.playlist, nouvelIndex);
+}
+
+function lire(t) {
+  const liste = [...E.taches.values()].filter((x) => x.statut === "termine" && x.fichier);
+  const idx = liste.findIndex((x) => x.id === t.id);
+  ouvrirLecteur(t, liste, idx >= 0 ? idx : 0);
+}
+
+// ── Initialisation des événements du lecteur ────────────────────────
+function attacherEvenementsLecteur() {
+  const d = $("#lecteur"), v = $("#lecteur-video"), boite = $("#lecteur-boite");
+  if (!d || !v || d._initFait) return;
+  d._initFait = true;
+
+  // Lecture / Pause sur la vidéo
+  v.addEventListener("play", () => {
+    $("#lecteur-ic-play").innerHTML = '<rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/>';
+    reinitialiserInactivite();
+  });
+  v.addEventListener("pause", () => {
+    $("#lecteur-ic-play").innerHTML = '<path d="M8 5v14l11-7z"/>';
+    boite.classList.remove("commandes-masquees", "masquer-curseur");
+  });
+
+  // Progression temporelle & sauvegarde
+  v.addEventListener("timeupdate", () => {
+    if (!LP.scrubbing && v.duration) {
+      const pct = (v.currentTime / v.duration) * 100;
+      $("#lecteur-timeline-jouee").style.width = `${pct}%`;
+    }
+    formaterTempsLecteur();
+    if (v.currentTime > 5 && v.duration && (v.currentTime / v.duration) < 0.95) {
+      const cle = `yt_nexus_prog_${LP.element?.chemin || LP.element?.id}`;
+      localStorage.setItem(cle, Math.round(v.currentTime));
+    }
+  });
+
+  // Tampon de chargement
+  v.addEventListener("progress", () => {
+    if (v.buffered.length && v.duration) {
+      let fin = 0;
+      for (let i = 0; i < v.buffered.length; i++) {
+        if (v.buffered.start(i) <= v.currentTime && v.currentTime <= v.buffered.end(i)) {
+          fin = v.buffered.end(i);
+          break;
+        }
+      }
+      const pct = (fin / v.duration) * 100;
+      $("#lecteur-timeline-tampon").style.width = `${pct}%`;
+    }
+  });
+
+  // Métadonnées & résolution vidéo
+  v.addEventListener("loadedmetadata", () => {
+    formaterTempsLecteur();
+    const h = v.videoHeight;
+    const badgeQ = $("#lecteur-badge-qualite");
+    if (badgeQ && h) {
+      const q = h >= 2160 ? "4K 2160p" : h >= 1440 ? "2K 1440p" : h >= 1080 ? "FHD 1080p" : h >= 720 ? "HD 720p" : `${h}p`;
+      badgeQ.textContent = q;
+    }
+  });
+
+  // Fin de lecture (boucle ou vidéo suivante)
+  v.addEventListener("ended", () => {
+    if (LP.boucle) {
+      v.currentTime = 0;
+      v.play();
+    } else {
+      declencherSuivanteAuto();
+    }
+  });
+
+  // Clic sur l'affichage du temps (écoule / restant)
+  $("#lecteur-temps")?.addEventListener("click", () => {
+    LP.modeTemps = LP.modeTemps === "ecoule" ? "restant" : "ecoule";
+    formaterTempsLecteur();
+  });
+
+  // Timeline : survol et scrubbing
+  const timeline = $("#lecteur-timeline");
+  const bulle = $("#lecteur-timeline-bulle");
+
+  function majScrub(e) {
+    if (!v.duration) return;
+    const rect = timeline.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    v.currentTime = pct * v.duration;
+    $("#lecteur-timeline-jouee").style.width = `${pct * 100}%`;
+  }
+
+  timeline?.addEventListener("mousemove", (e) => {
+    if (!v.duration) return;
+    const rect = timeline.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const t = pct * v.duration;
+    bulle.textContent = duree(t);
+    bulle.style.left = `${e.clientX - rect.left}px`;
+    bulle.classList.add("visible");
+  });
+  timeline?.addEventListener("mouseleave", () => bulle.classList.remove("visible"));
+
+  timeline?.addEventListener("mousedown", (e) => {
+    LP.scrubbing = true;
+    majScrub(e);
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (LP.scrubbing) majScrub(e);
+  });
+  window.addEventListener("mouseup", () => {
+    if (LP.scrubbing) LP.scrubbing = false;
+  });
+
+  // Zones de double-clic et clic central
+  let clicCentreTimer = null;
+  $("#lecteur-zones")?.addEventListener("click", (e) => {
+    const z = e.target.closest(".lecteur-zone");
+    if (!z) return;
+    if (z.dataset.zone === "centre") {
+      if (clicCentreTimer) {
+        clearTimeout(clicCentreTimer);
+        clicCentreTimer = null;
+        basculerPleinEcran();
+      } else {
+        clicCentreTimer = setTimeout(() => {
+          clicCentreTimer = null;
+          basculerLecture();
+        }, 240);
+      }
+    }
+  });
+  $("#lecteur-zones")?.addEventListener("dblclick", (e) => {
+    const z = e.target.closest(".lecteur-zone");
+    if (!z) return;
+    if (z.dataset.zone === "gauche") {
+      sautTemps(-10);
+      animerZone(z);
+    } else if (z.dataset.zone === "droite") {
+      sautTemps(10);
+      animerZone(z);
+    }
+  });
+
+  // Boutons de contrôle direct
+  $("#lecteur-btn-play")?.addEventListener("click", basculerLecture);
+  $("#lecteur-btn-recul10")?.addEventListener("click", () => sautTemps(-10));
+  $("#lecteur-btn-avance10")?.addEventListener("click", () => sautTemps(10));
+  $("#lecteur-btn-prec")?.addEventListener("click", () => changerElement(LP.index - 1));
+  $("#lecteur-btn-suiv")?.addEventListener("click", () => changerElement(LP.index + 1));
+  $("#lecteur-btn-vol")?.addEventListener("click", basculerMuet);
+  $("#lecteur-vol-range")?.addEventListener("input", (e) => reglerVolume(+e.target.value));
+  $("#lecteur-btn-boucle")?.addEventListener("click", basculerBoucle);
+  $("#lecteur-btn-capture")?.addEventListener("click", capturerImage);
+  $("#lecteur-btn-pip")?.addEventListener("click", basculerPiP);
+  $("#lecteur-btn-theatre")?.addEventListener("click", basculerTheatre);
+  $("#lecteur-btn-plein-ecran")?.addEventListener("click", basculerPleinEcran);
+
+  // Plein écran change icône
+  document.addEventListener("fullscreenchange", () => {
+    const ic = $("#lecteur-ic-pe");
+    if (!ic) return;
+    if (document.fullscreenElement) {
+      ic.innerHTML = '<path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>';
+    } else {
+      ic.innerHTML = '<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>';
+    }
+  });
+
+  // Bannières reprise et suivante auto
+  $("#btn-reprise-oui")?.addEventListener("click", () => {
+    v.currentTime = LP.repriseTemps;
+    $("#lecteur-reprise").hidden = true;
+    osd(`Reprise à ${duree(LP.repriseTemps)}`);
+  });
+  $("#btn-reprise-non")?.addEventListener("click", () => {
+    v.currentTime = 0;
+    $("#lecteur-reprise").hidden = true;
+  });
+  $("#btn-suivante-maintenant")?.addEventListener("click", () => {
+    annulerSuivanteAuto();
+    changerElement(LP.index + 1);
+  });
+  $("#btn-suivante-annuler")?.addEventListener("click", annulerSuivanteAuto);
+
+  // Barre supérieure : fermer, externe, dossier, file, aide
+  $("#lecteur-btn-fermer")?.addEventListener("click", () => d.close());
+  $("#lecteur-btn-externe")?.addEventListener("click", async () => {
+    if (!LP.element) return;
+    try {
+      if (LP.element.chemin) {
+        await api("/fichiers/ouvrir", { methode: "POST", corps: { chemin: LP.element.chemin, dossier: false } });
+      } else if (LP.element.id) {
+        await api(`/ouvrir/${LP.element.id}`, { methode: "POST", corps: { dossier: false } });
+      }
+      toast("Ouverture dans le lecteur externe…", "ok");
+    } catch (e) { toast(e.message, "err"); }
+  });
+  $("#lecteur-btn-dossier")?.addEventListener("click", async () => {
+    if (!LP.element) return;
+    try {
+      if (LP.element.chemin) {
+        await api("/fichiers/ouvrir", { methode: "POST", corps: { chemin: LP.element.chemin, dossier: true } });
+      } else if (LP.element.id) {
+        await api(`/ouvrir/${LP.element.id}`, { methode: "POST", corps: { dossier: true } });
+      }
+    } catch (e) { toast(e.message, "err"); }
+  });
+
+  // Tiroir playlist
+  $("#lecteur-btn-file")?.addEventListener("click", () => {
+    fermerPopovers();
+    const t = $("#lecteur-tiroir");
+    t.hidden = !t.hidden;
+    if (!t.hidden) rendreTiroirPlaylist();
+  });
+  $("#btn-fermer-tiroir")?.addEventListener("click", () => $("#lecteur-tiroir").hidden = true);
+  $("#lecteur-tiroir-liste")?.addEventListener("click", (e) => {
+    const item = e.target.closest(".tiroir-item");
+    if (!item) return;
+    changerElement(+item.dataset.idx);
+  });
+
+  // Aide aux raccourcis
+  $("#lecteur-btn-aide")?.addEventListener("click", () => {
+    fermerPopovers();
+    $("#lecteur-aide").hidden = !$("#lecteur-aide").hidden;
+  });
+  $("#btn-fermer-aide")?.addEventListener("click", () => $("#lecteur-aide").hidden = true);
+
+  // Popovers réglages
+  $("#lecteur-btn-vitesse")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const pop = $("#lecteur-popover-vitesse");
+    const ouvert = !pop.hidden;
+    fermerPopovers();
+    if (!ouvert) {
+      const vitesses = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+      pop.innerHTML = `
+        <div class="popover-titre"><span>Vitesse de lecture</span></div>
+        <div class="popover-options">
+          ${vitesses.map((sp) => `
+            <div class="popover-item ${LP.vitesse === sp ? "selectionne" : ""}" data-vitesse="${sp}">
+              <span>${sp === 1.0 ? "1.0x (Normale)" : `${sp}x`}</span>
+              ${LP.vitesse === sp ? "✓" : ""}
+            </div>
+          `).join("")}
+        </div>
+      `;
+      pop.hidden = false;
+    }
+  });
+
+  $("#lecteur-btn-audio")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const pop = $("#lecteur-popover-audio");
+    const ouvert = !pop.hidden;
+    fermerPopovers();
+    if (!ouvert) {
+      pop.innerHTML = `
+        <div class="popover-titre"><span>Moteur Audio & Égaliseur</span></div>
+        <div class="popover-glissiere" style="margin-bottom:8px">
+          <label><span>Boost sonore (jusqu'à 200%)</span><b id="lbl-boost-popover">${LP.volume}%</b></label>
+          <input type="range" id="slider-boost-popover" min="0" max="200" step="1" value="${LP.volume}" />
+        </div>
+        <div class="popover-titre" style="margin-top:6px"><span>Profil sonore</span></div>
+        <div class="popover-options">
+          <div class="popover-item ${LP.audio.profil === "plat" ? "selectionne" : ""}" data-profil="plat">
+            <span>Standard (Neutre)</span>
+            ${LP.audio.profil === "plat" ? "✓" : ""}
+          </div>
+          <div class="popover-item ${LP.audio.profil === "voix" ? "selectionne" : ""}" data-profil="voix">
+            <span>Voix claire (Vocal Boost)</span>
+            ${LP.audio.profil === "voix" ? "✓" : ""}
+          </div>
+          <div class="popover-item ${LP.audio.profil === "bass" ? "selectionne" : ""}" data-profil="bass">
+            <span>Basses renforcées (Bass Boost)</span>
+            ${LP.audio.profil === "bass" ? "✓" : ""}
+          </div>
+        </div>
+      `;
+      pop.hidden = false;
+    }
+  });
+
+  $("#lecteur-btn-visuel")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const pop = $("#lecteur-popover-video");
+    const ouvert = !pop.hidden;
+    fermerPopovers();
+    if (!ouvert) {
+      pop.innerHTML = `
+        <div class="popover-titre"><span>Ajustements d'image</span><button class="btn ultra-petit fantome" id="btn-reinit-video">Réinitialiser</button></div>
+        <div class="popover-glissiere">
+          <label><span>Luminosité</span><b id="lbl-lum">${LP.filtres.lum}%</b></label>
+          <input type="range" id="slider-lum" min="50" max="150" value="${LP.filtres.lum}" />
+        </div>
+        <div class="popover-glissiere">
+          <label><span>Contraste</span><b id="lbl-contrast">${LP.filtres.contrast}%</b></label>
+          <input type="range" id="slider-contrast" min="50" max="150" value="${LP.filtres.contrast}" />
+        </div>
+        <div class="popover-glissiere">
+          <label><span>Saturation</span><b id="lbl-sat">${LP.filtres.sat}%</b></label>
+          <input type="range" id="slider-sat" min="0" max="200" value="${LP.filtres.sat}" />
+        </div>
+        <div class="popover-titre" style="margin-top:8px"><span>Orientation & Ratio</span></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn petit ${LP.filtres.rot === 0 ? "principal" : "fantome"}" data-rot="0">0°</button>
+          <button class="btn petit ${LP.filtres.rot === 90 ? "principal" : "fantome"}" data-rot="90">90°</button>
+          <button class="btn petit ${LP.filtres.rot === 180 ? "principal" : "fantome"}" data-rot="180">180°</button>
+          <button class="btn petit ${LP.filtres.rot === 270 ? "principal" : "fantome"}" data-rot="270">270°</button>
+          <button class="btn petit ${LP.filtres.flip === -1 ? "principal" : "fantome"}" id="btn-miroir">Miroir ⇄</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+          <button class="btn ultra-petit ${LP.filtres.ratio === "contain" ? "principal" : "fantome"}" data-ratio="contain">Ajuster</button>
+          <button class="btn ultra-petit ${LP.filtres.ratio === "cover" ? "principal" : "fantome"}" data-ratio="cover">Remplir</button>
+          <button class="btn ultra-petit ${LP.filtres.ratio === "fill" ? "principal" : "fantome"}" data-ratio="fill">Étirer</button>
+        </div>
+      `;
+      pop.hidden = false;
+    }
+  });
+
+  $("#lecteur-btn-st")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const pop = $("#lecteur-popover-st");
+    const ouvert = !pop.hidden;
+    fermerPopovers();
+    if (!ouvert) {
+      const pistes = [...v.textTracks];
+      pop.innerHTML = `
+        <div class="popover-titre"><span>Sous-titres</span></div>
+        <div class="popover-options">
+          <div class="popover-item ${LP.sousTitres.active === -1 ? "selectionne" : ""}" data-st-idx="-1">
+            <span>Désactivés</span>
+            ${LP.sousTitres.active === -1 ? "✓" : ""}
+          </div>
+          ${pistes.map((p, idx) => `
+            <div class="popover-item ${LP.sousTitres.active === idx ? "selectionne" : ""}" data-st-idx="${idx}">
+              <span>${esc(p.label || p.language || `Piste ${idx + 1}`)}</span>
+              ${LP.sousTitres.active === idx ? "✓" : ""}
+            </div>
+          `).join("")}
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn petit fantome" style="flex:1" id="btn-importer-st">Importer .srt / .vtt…</button>
+        </div>
+        <div class="popover-titre" style="margin-top:8px"><span>Synchronisation</span></div>
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+          <button class="btn ultra-petit fantome" id="btn-st-sync-moins">-0.5 s</button>
+          <span style="font-family:var(--mono);font-size:0.8rem">${LP.sousTitres.decalage >= 0 ? `+${LP.sousTitres.decalage.toFixed(1)}` : LP.sousTitres.decalage.toFixed(1)} s</span>
+          <button class="btn ultra-petit fantome" id="btn-st-sync-plus">+0.5 s</button>
+        </div>
+      `;
+      pop.hidden = false;
+    }
+  });
+
+  // Gestion des clics dans les popovers
+  d.addEventListener("click", (e) => {
+    // Vitesse
+    const vitItem = e.target.closest("[data-vitesse]");
+    if (vitItem) {
+      reglerVitesse(+vitItem.dataset.vitesse);
+      fermerPopovers();
+      return;
+    }
+    // Profil audio
+    const profItem = e.target.closest("[data-profil]");
+    if (profItem) {
+      appliquerProfilAudio(profItem.dataset.profil);
+      fermerPopovers();
+      return;
+    }
+    // Slider boost dans popover
+    if (e.target.id === "slider-boost-popover") {
+      reglerVolume(+e.target.value);
+      const lbl = $("#lbl-boost-popover");
+      if (lbl) lbl.textContent = `${e.target.value}%`;
+      return;
+    }
+    // Vidéo réinitialisation
+    if (e.target.id === "btn-reinit-video") {
+      LP.filtres = { lum: 100, contrast: 100, sat: 100, rot: 0, flip: 1, ratio: "contain" };
+      appliquerFiltresVideo();
+      fermerPopovers();
+      osd("Image réinitialisée");
+      return;
+    }
+    // Orientation et ratio
+    const rotBtn = e.target.closest("[data-rot]");
+    if (rotBtn) {
+      LP.filtres.rot = +rotBtn.dataset.rot;
+      appliquerFiltresVideo();
+      fermerPopovers();
+      osd(`Rotation ${LP.filtres.rot}°`);
+      return;
+    }
+    if (e.target.id === "btn-miroir") {
+      LP.filtres.flip = LP.filtres.flip === 1 ? -1 : 1;
+      appliquerFiltresVideo();
+      fermerPopovers();
+      osd(LP.filtres.flip === -1 ? "Miroir activé" : "Miroir désactivé");
+      return;
+    }
+    const ratioBtn = e.target.closest("[data-ratio]");
+    if (ratioBtn) {
+      LP.filtres.ratio = ratioBtn.dataset.ratio;
+      appliquerFiltresVideo();
+      fermerPopovers();
+      osd(`Ratio : ${ratioBtn.textContent}`);
+      return;
+    }
+    // Sous-titres
+    const stItem = e.target.closest("[data-st-idx]");
+    if (stItem) {
+      const idx = +stItem.dataset.stIdx;
+      [...v.textTracks].forEach((tr, i) => tr.mode = i === idx ? "showing" : "disabled");
+      LP.sousTitres.active = idx;
+      fermerPopovers();
+      osd(idx === -1 ? "Sous-titres désactivés" : `Sous-titres : ${v.textTracks[idx].label || "Activés"}`);
+      return;
+    }
+    if (e.target.id === "btn-importer-st") {
+      $("#lecteur-import-st")?.click();
+      return;
+    }
+    if (e.target.id === "btn-st-sync-moins" || e.target.id === "btn-st-sync-plus") {
+      const delta = e.target.id === "btn-st-sync-plus" ? 0.5 : -0.5;
+      LP.sousTitres.decalage += delta;
+      if (LP.sousTitres.active >= 0 && v.textTracks[LP.sousTitres.active]) {
+        const cues = v.textTracks[LP.sousTitres.active].cues;
+        if (cues) {
+          for (let i = 0; i < cues.length; i++) {
+            cues[i].startTime += delta;
+            cues[i].endTime += delta;
+          }
+        }
+      }
+      osd(`Décalage ST : ${LP.sousTitres.decalage >= 0 ? `+${LP.sousTitres.decalage.toFixed(1)}` : LP.sousTitres.decalage.toFixed(1)} s`);
+      return;
+    }
+    if (!e.target.closest(".lecteur-popover") && !e.target.closest(".lecteur-btn-icone") && !e.target.closest(".lecteur-btn-pill")) {
+      fermerPopovers();
+    }
+  });
+
+  // Inputs glissières vidéo dans popover
+  d.addEventListener("input", (e) => {
+    if (e.target.id === "slider-lum") {
+      LP.filtres.lum = +e.target.value;
+      appliquerFiltresVideo();
+      const l = $("#lbl-lum"); if (l) l.textContent = `${LP.filtres.lum}%`;
+    } else if (e.target.id === "slider-contrast") {
+      LP.filtres.contrast = +e.target.value;
+      appliquerFiltresVideo();
+      const l = $("#lbl-contrast"); if (l) l.textContent = `${LP.filtres.contrast}%`;
+    } else if (e.target.id === "slider-sat") {
+      LP.filtres.sat = +e.target.value;
+      appliquerFiltresVideo();
+      const l = $("#lbl-sat"); if (l) l.textContent = `${LP.filtres.sat}%`;
+    }
+  });
+
+  // Import local de sous-titres
+  $("#lecteur-import-st")?.addEventListener("change", (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      let texte = ev.target.result;
+      if (f.name.toLowerCase().endsWith(".srt")) {
+        texte = "WEBVTT\n\n" + texte.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
+      }
+      const blob = new Blob([texte], { type: "text/vtt" });
+      const track = document.createElement("track");
+      track.kind = "subtitles";
+      track.label = f.name.replace(/\.[^/.]+$/, "");
+      track.srclang = "fr";
+      track.src = URL.createObjectURL(blob);
+      track.default = true;
+      v.appendChild(track);
+      setTimeout(() => {
+        const idx = v.textTracks.length - 1;
+        [...v.textTracks].forEach((tr, i) => tr.mode = i === idx ? "showing" : "disabled");
+        LP.sousTitres.active = idx;
+        osd(`Sous-titres importés : ${track.label}`);
+        fermerPopovers();
+      }, 100);
+    };
+    reader.readAsText(f);
+  });
+
+  // Auto-hide commandes au mouvement de la souris
+  boite.addEventListener("mousemove", reinitialiserInactivite);
+  boite.addEventListener("mouseleave", () => {
+    if (!v.paused) boite.classList.add("commandes-masquees");
+  });
+
+  // Clavier global quand le lecteur est ouvert
+  window.addEventListener("keydown", (e) => {
+    if (!d.open) return;
+    if (["input", "textarea"].includes(document.activeElement?.tagName?.toLowerCase())) return;
+
+    const k = e.key.toLowerCase();
+
+    if (e.key === " " || k === "k") {
+      e.preventDefault();
+      basculerLecture();
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      sautTemps(e.shiftKey ? -1 : -5);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      sautTemps(e.shiftKey ? 1 : 5);
+    } else if (k === "j") {
+      e.preventDefault();
+      sautTemps(-10);
+    } else if (k === "l") {
+      e.preventDefault();
+      sautTemps(10);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      reglerVolume(LP.volume + 5);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      reglerVolume(LP.volume - 5);
+    } else if (k === "m") {
+      basculerMuet();
+    } else if (k === "f") {
+      basculerPleinEcran();
+    } else if (k === "t") {
+      basculerTheatre();
+    } else if (k === "p") {
+      basculerPiP();
+    } else if (k === "c") {
+      basculerSousTitres();
+    } else if (k === "b") {
+      basculerBoucle();
+    } else if (k === "s") {
+      capturerImage();
+    } else if (k === "r") {
+      LP.filtres.rot = (LP.filtres.rot + 90) % 360;
+      appliquerFiltresVideo();
+      osd(`Rotation ${LP.filtres.rot}°`);
+    } else if (e.key === ">" || (e.shiftKey && e.key === ".")) {
+      reglerVitesse(Math.min(3.0, +(LP.vitesse + 0.25).toFixed(2)));
+    } else if (e.key === "<" || (e.shiftKey && e.key === ",")) {
+      reglerVitesse(Math.max(0.25, +(LP.vitesse - 0.25).toFixed(2)));
+    } else if (e.key === "," && v.paused) {
+      imageParImage(-1);
+    } else if (e.key === "." && v.paused) {
+      imageParImage(1);
+    } else if (k === "q") {
+      const t = $("#lecteur-tiroir");
+      t.hidden = !t.hidden;
+      if (!t.hidden) rendreTiroirPlaylist();
+    } else if (e.key === "?") {
+      $("#lecteur-aide").hidden = !$("#lecteur-aide").hidden;
+    } else if (e.key >= "0" && e.key <= "9" && v.duration) {
+      v.currentTime = (v.duration * (+e.key)) / 10;
+      osd(`Saut à ${+e.key * 10}%`);
+    } else if (e.key === "Escape") {
+      if (!$("#lecteur-aide").hidden) {
+        $("#lecteur-aide").hidden = true;
+        e.stopPropagation();
+      } else if (!$("#lecteur-tiroir").hidden) {
+        $("#lecteur-tiroir").hidden = true;
+        e.stopPropagation();
+      } else if ($$(".lecteur-popover:not([hidden])").length) {
+        fermerPopovers();
+        e.stopPropagation();
+      }
+    }
+  });
+
+  // Nettoyage fermeture
+  d.addEventListener("close", () => {
+    v.pause();
+    v.removeAttribute("src");
+    v.load();
+    annulerSuivanteAuto();
+    clearTimeout(LP.timerInactivite);
+    fermerPopovers();
+    $("#lecteur-tiroir").hidden = true;
+    $("#lecteur-aide").hidden = true;
+    d.classList.remove("mode-theatre");
+  });
+}
+
+// Initialise les événements dès le chargement
+attacherEvenementsLecteur();
 
 // ── vue Fichiers (dossier de téléchargement) ─────────────────────────
 async function chargerFichiers() {
@@ -1022,11 +2122,11 @@ async function chargerFichiers() {
     if (E.vue === "fichiers") rendre();
   } catch (e) { toast(e.message, "err"); }
 }
-const fichiersFiltres = () => {
+function fichiersFiltres() {
   const { q, type, tri, dossier } = E.ff;
   const l = (E.fichiers || []).filter((f) => (type === "tout" || f.type === type) && (!dossier || f.dossier === dossier) && (!q || `${f.titre} ${f.nom} ${f.dossier}`.toLowerCase().includes(q.toLowerCase())));
   return l.sort((a, b) => (tri === "taille" ? b.taille - a.taille : tri === "nom" ? a.titre.localeCompare(b.titre, "fr") : b.date - a.date));
-};
+}
 function vueFichiers() {
   const tous = E.fichiers;
   const total = (tous || []).reduce((s, f) => s + f.taille, 0);
@@ -1083,10 +2183,10 @@ function listeFichiers() {
 }
 function rendreListeFichiers() { const z = $("#liste-fichiers"); if (z) z.innerHTML = html(listeFichiers()); }
 function lireChemin(chemin, titre) {
-  const d = $("#lecteur"), v = $("#lecteur-video");
-  $("#lecteur-titre").textContent = titre;
-  v.src = `/api/fichiers/lire?chemin=${encodeURIComponent(chemin)}`;
-  d.showModal(); v.play().catch(() => {});
+  const liste = fichiersFiltres();
+  const f = (E.fichiers || []).find((x) => x.chemin === chemin) || { chemin, titre };
+  const idx = liste.findIndex((x) => x.chemin === chemin);
+  ouvrirLecteur(f, liste, idx >= 0 ? idx : 0);
 }
 $("#contenu").addEventListener("click", async (e) => {
   if (E.vue !== "fichiers") return;

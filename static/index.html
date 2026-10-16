@@ -40,9 +40,241 @@
 
   <main id="contenu"></main>
 
-  <dialog id="lecteur">
-    <div class="tete"><h3 id="lecteur-titre"></h3><button class="icone-btn" data-fermer aria-label="Fermer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
-    <video id="lecteur-video" controls playsinline></video>
+  <dialog id="lecteur" class="lecteur-dialog" tabindex="-1">
+    <div class="lecteur-boite" id="lecteur-boite">
+      <!-- Halo lumineux cinéma / aurore réactif -->
+      <div class="lecteur-lueur" id="lecteur-lueur" aria-hidden="true"></div>
+
+      <!-- Scène vidéo et overlays interactifs -->
+      <div class="lecteur-scene" id="lecteur-scene">
+        <video id="lecteur-video" playsinline preload="metadata" crossorigin="anonymous"></video>
+        <canvas id="lecteur-canvas" hidden></canvas>
+        <input type="file" id="lecteur-import-st" accept=".srt,.vtt" hidden />
+
+        <!-- Animation centrale flash play/pause/seek -->
+        <div class="lecteur-centre-anim" id="lecteur-centre-anim" aria-hidden="true"></div>
+
+        <!-- OSD flottant (Volume, Vitesse, Zoom, Filtres...) -->
+        <div class="lecteur-osd" id="lecteur-osd" aria-hidden="true"></div>
+
+        <!-- Zones de double-clic (recul 10s, plein écran/play, avance 10s) -->
+        <div class="lecteur-zones" id="lecteur-zones" aria-hidden="true">
+          <div class="lecteur-zone zone-gauche" data-zone="gauche">
+            <span class="zone-ripple"></span>
+            <span class="zone-texte">-10s</span>
+          </div>
+          <div class="lecteur-zone zone-centre" data-zone="centre"></div>
+          <div class="lecteur-zone zone-droite" data-zone="droite">
+            <span class="zone-ripple"></span>
+            <span class="zone-texte">+10s</span>
+          </div>
+        </div>
+
+        <!-- Bannière discrète de reprise de lecture -->
+        <div class="lecteur-banniere-reprise" id="lecteur-reprise" hidden>
+          <div class="reprise-texte">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span>Reprendre la lecture à <b id="lecteur-reprise-temps">00:00</b> ?</span>
+          </div>
+          <div class="reprise-actions">
+            <button class="btn petit principal" id="btn-reprise-oui">Reprendre</button>
+            <button class="btn petit fantome" id="btn-reprise-non">Recommencer</button>
+          </div>
+        </div>
+
+        <!-- Bannière d'enchaînement vidéo suivante -->
+        <div class="lecteur-banniere-suivante" id="lecteur-suivante-auto" hidden>
+          <div class="suivante-texte">
+            <span class="suivante-libelle">Vidéo suivante dans <b id="lecteur-decompte">3</b> s</span>
+            <div class="suivante-titre" id="lecteur-suivante-titre"></div>
+          </div>
+          <div class="suivante-actions">
+            <button class="btn petit principal" id="btn-suivante-maintenant">Lire maintenant</button>
+            <button class="btn petit fantome" id="btn-suivante-annuler">Annuler</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Barre supérieure flottante -->
+      <div class="lecteur-haut" id="lecteur-haut">
+        <button class="lecteur-btn-icone" id="lecteur-btn-fermer" title="Fermer (Échap)" aria-label="Fermer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+        <div class="lecteur-infos">
+          <h3 id="lecteur-titre"></h3>
+          <div class="lecteur-badges" id="lecteur-badges">
+            <span class="lecteur-badge" id="lecteur-badge-qualite">HD</span>
+            <span class="lecteur-badge" id="lecteur-badge-ext">MP4</span>
+            <span class="lecteur-badge" id="lecteur-badge-taille">--</span>
+            <span class="lecteur-badge" id="lecteur-badge-compteur">1 / 1</span>
+          </div>
+        </div>
+        <div class="lecteur-haut-actions">
+          <button class="lecteur-btn-icone" id="lecteur-btn-externe" title="Ouvrir dans le lecteur externe (VLC/MPV)" aria-label="Lecteur externe">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+          </button>
+          <button class="lecteur-btn-icone" id="lecteur-btn-dossier" title="Afficher dans le dossier" aria-label="Dossier">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          </button>
+          <button class="lecteur-btn-icone" id="lecteur-btn-file" title="File de lecture (Q)" aria-label="File d'attente">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h13M3 11h13M3 16h8M17 13v8l5-4z"/></svg>
+          </button>
+          <button class="lecteur-btn-icone" id="lecteur-btn-aide" title="Raccourcis clavier (?)" aria-label="Aide raccourcis">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3m.08 4h.01"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Tiroir latéral Playlist -->
+      <aside class="lecteur-tiroir" id="lecteur-tiroir" hidden>
+        <div class="tiroir-tete">
+          <div class="tiroir-titre-boite">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h13M3 11h13M3 16h8M17 13v8l5-4z"/></svg>
+            <h4>File de lecture</h4>
+          </div>
+          <button class="lecteur-btn-icone mini" id="btn-fermer-tiroir" title="Fermer la file">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="tiroir-liste" id="lecteur-tiroir-liste"></div>
+      </aside>
+
+      <!-- Modale d'aide aux raccourcis clavier -->
+      <div class="lecteur-aide" id="lecteur-aide" hidden>
+        <div class="aide-boite verre">
+          <div class="aide-tete">
+            <div class="aide-titre-boite">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3m.08 4h.01"/></svg>
+              <h4>Raccourcis du lecteur</h4>
+            </div>
+            <button class="lecteur-btn-icone mini" id="btn-fermer-aide" title="Fermer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          </div>
+          <div class="aide-corps">
+            <div class="aide-item"><kbd>Espace</kbd> ou <kbd>K</kbd><span>Lecture / Pause</span></div>
+            <div class="aide-item"><kbd>←</kbd> / <kbd>→</kbd><span>Reculer / Avancer 5 s</span></div>
+            <div class="aide-item"><kbd>J</kbd> / <kbd>L</kbd><span>Reculer / Avancer 10 s</span></div>
+            <div class="aide-item"><kbd>↑</kbd> / <kbd>↓</kbd><span>Volume +/- 5% (Boost jusqu'à 200%)</span></div>
+            <div class="aide-item"><kbd>M</kbd><span>Muet / Rétablir le son</span></div>
+            <div class="aide-item"><kbd>F</kbd><span>Plein écran</span></div>
+            <div class="aide-item"><kbd>T</kbd><span>Mode Cinéma / Théâtre</span></div>
+            <div class="aide-item"><kbd>P</kbd><span>Picture-in-Picture (PiP)</span></div>
+            <div class="aide-item"><kbd>C</kbd><span>Sous-titres on / off</span></div>
+            <div class="aide-item"><kbd>B</kbd><span>Répétition en boucle</span></div>
+            <div class="aide-item"><kbd>S</kbd><span>Capture d'écran HD</span></div>
+            <div class="aide-item"><kbd>R</kbd><span>Rotation 90°</span></div>
+            <div class="aide-item"><kbd>&lt;</kbd> / <kbd>&gt;</kbd><span>Vitesse de lecture</span></div>
+            <div class="aide-item"><kbd>,</kbd> / <kbd>.</kbd><span>Image par image (en pause)</span></div>
+            <div class="aide-item"><kbd>0 - 9</kbd><span>Saut direct à 0% … 90%</span></div>
+            <div class="aide-item"><kbd>Q</kbd><span>File de lecture</span></div>
+            <div class="aide-item"><kbd>Échap</kbd><span>Fermer le lecteur</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Popovers interactifs pour les réglages -->
+      <div class="lecteur-popover" id="lecteur-popover-vitesse" hidden></div>
+      <div class="lecteur-popover" id="lecteur-popover-audio" hidden></div>
+      <div class="lecteur-popover" id="lecteur-popover-video" hidden></div>
+      <div class="lecteur-popover" id="lecteur-popover-st" hidden></div>
+
+      <!-- Barre inférieure de commandes flottante -->
+      <div class="lecteur-bas" id="lecteur-bas">
+        <!-- Timeline scrubbable -->
+        <div class="lecteur-timeline" id="lecteur-timeline">
+          <div class="timeline-piste">
+            <div class="timeline-tampon" id="lecteur-timeline-tampon"></div>
+            <div class="timeline-jouee" id="lecteur-timeline-jouee">
+              <span class="timeline-curseur"></span>
+            </div>
+          </div>
+          <div class="timeline-infobulle" id="lecteur-timeline-bulle">00:00</div>
+        </div>
+
+        <div class="lecteur-rang-commandes">
+          <!-- Groupe lecture & temps -->
+          <div class="lecteur-grp gauche">
+            <button class="lecteur-btn-icone" id="lecteur-btn-prec" title="Vidéo précédente (Shift+P)" aria-label="Précédente">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+            </button>
+            <button class="lecteur-btn-icone" id="lecteur-btn-recul10" title="Reculer 10 s (J ou ←)" aria-label="Reculer 10s">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21A9 9 0 1 0 3 12"/><path d="M3 7V3h4"/><text x="12" y="15" font-size="7.5" font-weight="bold" fill="currentColor" text-anchor="middle" stroke="none">10</text></svg>
+            </button>
+            <button class="lecteur-btn-icone principal-play" id="lecteur-btn-play" title="Lecture / Pause (Espace)" aria-label="Lecture">
+              <svg viewBox="0 0 24 24" fill="currentColor" id="lecteur-ic-play"><path d="M8 5v14l11-7z"/></svg>
+            </button>
+            <button class="lecteur-btn-icone" id="lecteur-btn-avance10" title="Avancer 10 s (L ou →)" aria-label="Avancer 10s">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21a9 9 0 1 1 9-9"/><path d="M21 7V3h-4"/><text x="12" y="15" font-size="7.5" font-weight="bold" fill="currentColor" text-anchor="middle" stroke="none">10</text></svg>
+            </button>
+            <button class="lecteur-btn-icone" id="lecteur-btn-suiv" title="Vidéo suivante (Shift+N)" aria-label="Suivante">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+            </button>
+
+            <!-- Volume avec Audio Boost -->
+            <div class="lecteur-vol-boite">
+              <button class="lecteur-btn-icone" id="lecteur-btn-vol" title="Couper/rétablir le son (M)" aria-label="Volume">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="lecteur-ic-vol"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+              </button>
+              <div class="lecteur-vol-curseur">
+                <input type="range" id="lecteur-vol-range" min="0" max="200" step="1" value="100" aria-label="Volume" />
+                <span class="lecteur-vol-pct" id="lecteur-vol-pct">100%</span>
+              </div>
+            </div>
+
+            <div class="lecteur-temps" id="lecteur-temps" title="Cliquer pour basculer temps restant">
+              <span id="lecteur-t-actuel">00:00</span><span class="sep">/</span><span id="lecteur-t-total">00:00</span>
+            </div>
+          </div>
+
+          <!-- Groupe Réglages & Fonctions avancées -->
+          <div class="lecteur-grp droite">
+            <!-- Boucle -->
+            <button class="lecteur-btn-icone" id="lecteur-btn-boucle" title="Répéter en boucle (B)" aria-label="Boucle">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+            </button>
+
+            <!-- Vitesse -->
+            <button class="lecteur-btn-pill" id="lecteur-btn-vitesse" title="Vitesse de lecture" aria-label="Vitesse">
+              <span id="lecteur-lbl-vitesse">1x</span>
+            </button>
+
+            <!-- Sous-titres -->
+            <button class="lecteur-btn-icone" id="lecteur-btn-st" title="Sous-titres (C)" aria-label="Sous-titres">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 12h4M14 12h4M6 15h8"/></svg>
+            </button>
+
+            <!-- Audio & Boost -->
+            <button class="lecteur-btn-icone" id="lecteur-btn-audio" title="Égaliseur & Boost sonore" aria-label="Audio">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v4M6 6v12M10 3v18M14 8v8M18 5v14M22 10v4"/></svg>
+            </button>
+
+            <!-- Vidéo / Effets visuels & rotation -->
+            <button class="lecteur-btn-icone" id="lecteur-btn-visuel" title="Ajustements vidéo (Luminosité, Contraste, Rotation)" aria-label="Effets visuels">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z"/></svg>
+            </button>
+
+            <!-- Capture d'écran HD -->
+            <button class="lecteur-btn-icone" id="lecteur-btn-capture" title="Capture d'écran HD (S)" aria-label="Capture d'écran">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+            </button>
+
+            <!-- PiP -->
+            <button class="lecteur-btn-icone" id="lecteur-btn-pip" title="Picture-in-Picture (P)" aria-label="Picture in Picture">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="3"/><rect x="12" y="11" width="8" height="6" rx="1.5"/></svg>
+            </button>
+
+            <!-- Mode Théâtre -->
+            <button class="lecteur-btn-icone" id="lecteur-btn-theatre" title="Mode Théâtre (T)" aria-label="Théâtre">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="M7 4v16M17 4v16"/></svg>
+            </button>
+
+            <!-- Plein écran -->
+            <button class="lecteur-btn-icone" id="lecteur-btn-plein-ecran" title="Plein écran (F)" aria-label="Plein écran">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="lecteur-ic-pe"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </dialog>
   <div class="toasts" id="toasts" aria-live="polite"></div>
   <div class="deposer" id="deposer" hidden>Dépose le lien ici</div>
