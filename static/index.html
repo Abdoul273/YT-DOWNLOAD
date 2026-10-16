@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#05060d" />
   <title>YT-NEXUS</title>
-  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <meta name="referrer" content="no-referrer-when-downgrade" />
   <link rel="icon" href="/static/icone.svg" type="image/svg+xml" />
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/app.css?v=2.2" />
   <script>try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
 </head>
 <body>
@@ -288,40 +288,76 @@
 
   <!-- Modale d'aperçu streaming avant téléchargement -->
   <dialog id="modale-apercu" class="apercu-dialog" tabindex="-1">
+    <div class="apercu-lueur-ambiance" id="apercu-lueur" aria-hidden="true"></div>
     <div class="apercu-contenu verre" id="apercu-boite">
       <div class="apercu-tete">
         <div class="apercu-titre-boite">
-          <span class="apercu-pastille-live">APERÇU DIRECT</span>
-          <h3 id="apercu-titre">Titre de la vidéo</h3>
+          <span class="apercu-pastille-live"><span class="point-pulsant"></span>APERÇU STREAMING</span>
+          <div class="apercu-titres-pile">
+            <h3 id="apercu-titre">Titre de la vidéo</h3>
+            <span class="apercu-sous-titre">Visionnage direct sans téléchargement préalable</span>
+          </div>
         </div>
         <div class="apercu-tete-actions">
-          <a class="icone-btn fantome" id="btn-apercu-externe" target="_blank" rel="noopener noreferrer" title="Ouvrir sur YouTube">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/></svg>
+          <button class="icone-btn fantome" id="btn-apercu-copier" title="Copier le lien YouTube" aria-label="Copier le lien">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          </button>
+          <a class="icone-btn fantome" id="btn-apercu-externe" target="_blank" rel="noopener noreferrer" title="Regarder directement sur YouTube" aria-label="Ouvrir sur YouTube">
+            <svg viewBox="0 0 24 24" fill="currentColor" style="width:17px;height:17px"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
           </a>
-          <button class="icone-btn fantome" id="btn-fermer-apercu" title="Fermer (Échap)">
+          <button class="icone-btn fantome" id="btn-fermer-apercu" title="Fermer la fenêtre (Échap)" aria-label="Fermer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
         </div>
       </div>
       <div class="apercu-video-conteneur">
         <div class="apercu-video-cadre" id="apercu-media-cadre"></div>
+        <div class="apercu-secours-barre">
+          <div class="apercu-secours-info">
+            <span class="pastille-info">Info</span>
+            <span>Si YouTube limite la lecture intégrée locale, regarde en 1 clic sur YouTube ou lance l'analyse complète.</span>
+          </div>
+          <div class="apercu-secours-actions">
+            <a class="btn petit secondaire" id="btn-secours-yt" target="_blank" rel="noopener noreferrer">
+              <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;color:#ff3333"><path d="m10 15 5-3-5-3v6z"/><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+              Ouvrir sur YouTube
+            </a>
+            <button class="btn petit principal" id="btn-secours-analyser">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="m10 8 6 4-6 4z"/><circle cx="12" cy="12" r="10"/></svg>
+              Lecteur & Doublages FR
+            </button>
+          </div>
+        </div>
       </div>
       <div class="apercu-pied">
-        <div class="apercu-meta">
-          <span class="chaine" id="apercu-chaine"></span>
-          <span class="sep" id="apercu-sep-1">·</span>
-          <span class="vues" id="apercu-vues"></span>
-          <span class="sep" id="apercu-sep-2">·</span>
-          <span class="date" id="apercu-date"></span>
+        <div class="apercu-meta-bloc">
+          <div class="apercu-chaine-tag">
+            <span class="apercu-chaine-icone">▶</span>
+            <span class="apercu-chaine-texte" id="apercu-chaine"></span>
+          </div>
+          <div class="apercu-puces">
+            <span class="apercu-puce" id="apercu-puce-vues">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/></svg>
+              <span id="apercu-vues"></span>
+            </span>
+            <span class="apercu-puce" id="apercu-puce-date">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>
+              <span id="apercu-date"></span>
+            </span>
+            <span class="apercu-puce" id="apercu-puce-duree" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              <span id="apercu-duree"></span>
+            </span>
+          </div>
         </div>
         <div class="apercu-actions">
-          <button class="btn fantome petit danger" id="btn-apercu-pas-interesse" title="Moins de vidéos comme celle-ci">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 14.14 14.14"/></svg>
+          <button class="btn fantome petit danger" id="btn-apercu-pas-interesse" title="Moins de vidéos comme celle-ci dans mes recommandations">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 14.14 14.14"/></svg>
             Pas intéressé
           </button>
-          <button class="btn principal" id="btn-apercu-telecharger">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"/></svg>
-            Choisir la qualité et télécharger
+          <button class="btn principal apercu-btn-telecharger" id="btn-apercu-telecharger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:17px;height:17px"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"/></svg>
+            <span>Choisir la qualité et télécharger</span>
           </button>
         </div>
       </div>
@@ -355,6 +391,6 @@
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
   <div class="deposer" id="deposer" hidden>Dépose le lien ici</div>
-  <script type="module" src="/static/app.js"></script>
+  <script type="module" src="/static/app.js?v=2.2"></script>
 </body>
 </html>

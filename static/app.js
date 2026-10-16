@@ -674,28 +674,37 @@ function ouvrirApercu(video) {
     },
   }).catch(() => {});
 
-  $("#apercu-titre").textContent = video.titre || "Aperçu vidéo";
-  $("#apercu-chaine").textContent = video.chaine || "";
-  $("#apercu-vues").textContent = video.vues ? vues(video.vues) : "";
-  $("#apercu-date").textContent = video.date ? (dateLongue(video.date) || ilYa(video.date)) : "";
-  $("#apercu-sep-1").hidden = !video.chaine || !video.vues;
-  $("#apercu-sep-2").hidden = !video.vues || !video.date;
-
   const ytId = video.id || idVideo(video.url);
-  const lienExt = $("#btn-apercu-externe");
-  if (lienExt) {
-    lienExt.href = video.url || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : "#");
+  const videoUrl = video.url || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : "");
+
+  $("#apercu-titre").textContent = video.titre || "Aperçu vidéo";
+  $("#apercu-titre").title = video.titre || "";
+  $("#apercu-chaine").textContent = video.chaine || "YouTube";
+  $("#apercu-vues").textContent = video.vues ? vues(video.vues) : "";
+  const chipVues = $("#apercu-puce-vues");
+  if (chipVues) chipVues.hidden = !video.vues;
+  $("#apercu-date").textContent = video.date ? (dateLongue(video.date) || ilYa(video.date)) : "";
+  const chipDate = $("#apercu-puce-date");
+  if (chipDate) chipDate.hidden = !video.date;
+  const chipDuree = $("#apercu-puce-duree");
+  if (chipDuree) {
+    chipDuree.hidden = !video.duree;
+    $("#apercu-duree").textContent = video.duree ? duree(video.duree) : "";
   }
+
+  const lienExt = $("#btn-apercu-externe");
+  if (lienExt) lienExt.href = videoUrl || "#";
+  const lienSecours = $("#btn-secours-yt");
+  if (lienSecours) lienSecours.href = videoUrl || "#";
 
   const cadre = $("#apercu-media-cadre");
   cadre.innerHTML = "";
 
   if (ytId) {
     const iframe = document.createElement("iframe");
-    const origin = window.location.origin;
-    iframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&rel=0&origin=${encodeURIComponent(origin)}`;
+    iframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&feature=oembed&rel=0&playsinline=1`;
     iframe.title = video.titre || "Aperçu YouTube";
-    iframe.referrerPolicy = "strict-origin-when-cross-origin";
+    iframe.referrerPolicy = "no-referrer-when-downgrade";
     iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
     iframe.allowFullscreen = true;
     cadre.appendChild(iframe);
@@ -3138,7 +3147,20 @@ function initModaleApercu() {
   const d = $("#modale-apercu");
   if (!d) return;
   $("#btn-fermer-apercu")?.addEventListener("click", fermerApercu);
-  $("#btn-apercu-telecharger")?.addEventListener("click", () => {
+  $("#btn-apercu-copier")?.addEventListener("click", async () => {
+    if (videoApercue) {
+      const u = videoApercue.url || (videoApercue.id ? `https://www.youtube.com/watch?v=${videoApercue.id}` : "");
+      if (u) {
+        try {
+          await navigator.clipboard.writeText(u);
+          toast("Lien copié dans le presse-papiers !", "ok");
+        } catch {
+          toast(u, "info");
+        }
+      }
+    }
+  });
+  const allerTelecharger = () => {
     if (videoApercue) {
       const v = videoApercue;
       fermerApercu();
@@ -3146,7 +3168,9 @@ function initModaleApercu() {
       aller("video");
       analyser(v.url, "video");
     }
-  });
+  };
+  $("#btn-apercu-telecharger")?.addEventListener("click", allerTelecharger);
+  $("#btn-secours-analyser")?.addEventListener("click", allerTelecharger);
   $("#btn-apercu-pas-interesse")?.addEventListener("click", () => {
     if (videoApercue) {
       const v = videoApercue;

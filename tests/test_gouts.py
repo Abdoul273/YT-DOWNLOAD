@@ -89,5 +89,5 @@ def test_securite_referrer_policy():
     client = app.test_client()
     rep = client.get("/")
     assert rep.status_code == 200
-    assert rep.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+    assert rep.headers.get("Referrer-Policy") == "no-referrer-when-downgrade"
     assert rep.headers.get("X-Content-Type-Options") == "nosniff"
