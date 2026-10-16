@@ -125,6 +125,9 @@ const I = {
   pouls: svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>'),
   fichier: svg('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>'),
   cookie: svg('<path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5"/><path d="M8.5 8.5v.01M16 15.5v.01M12 12v.01M11 17v.01M7 14v.01"/>'),
+  etincelle: svg('<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/>'),
+  feu: svg('<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>'),
+  oeil: svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>'),
 };
 
 // ── état ─────────────────────────────────────────────────────────────
@@ -136,6 +139,15 @@ const E = {
   taches: new Map(),
   rev: 0,
   p: { video: nouvellePage(), recherche: { ...nouvellePage(), filtres: {}, panneau: false }, lot: nouvellePage(), playlist: nouvellePage() },
+  gouts: {
+    onglet: "pour_vous",
+    fil: [],
+    tendances: [],
+    interets: [],
+    recherches: [],
+    chargement: false,
+    erreur: null,
+  },
   filtre: "tout",
   fichiers: null,
   ff: { q: "", type: "tout", tri: "date", dossier: "" },
@@ -183,10 +195,10 @@ function aller(vue, { histo = true } = {}) {
   $$("#nav button").forEach((b) => (b.dataset.vue === vue ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
   rendre();
   requestAnimationFrame(placerIndicateur);
-  if (!meme) window.scrollTo({ top: 0, behavior: "instant" });
   if (vue === "parametres") chargerEtat();
   if (vue === "fichiers") chargerFichiers();
   if (vue === "diagnostics") chargerDiagnostics();
+  if (vue === "recherche") chargerGouts();
 }
 function placerIndicateur() {
   const b = $(`#nav button[data-vue="${E.vue}"]`), ind = $("#nav .indic");
@@ -221,13 +233,14 @@ $("#btn-theme").addEventListener("click", () => {
 
 // ── pages sources : Vidéo, Recherche, Lot, Playlist ──────────────────
 function formSaisie(placeholder, bouton = "Analyser") {
-  return h`<div class="saisie-cadre">
+  return h`<div class="saisie-cadre saisie-avec-suggestions">
       <form class="saisie" id="form-saisie">
         ${brut(E.vue === "recherche" ? I.chercher : I.lien)}
         <textarea id="saisie" rows="1" placeholder="${placeholder}" autocomplete="off" spellcheck="false">${P().saisie}</textarea>
         <button type="button" class="btn fantome" id="btn-coller" title="Coller le presse-papiers">${brut(I.coller)}<span>Coller</span></button>
         <button type="submit" class="btn principal" id="btn-go"><span>${bouton}</span>${brut(I.fleche)}</button>
       </form>
+      ${E.vue === "recherche" ? h`<div class="suggestions-flottantes" id="suggestions-recherche" hidden></div>` : ""}
     </div>`;
 }
 const occupe = () => !!(P().resultat || P().chargement || P().erreur);
@@ -337,7 +350,10 @@ function zoneResultat() {
   if (P().chargement) return squelette();
   if (P().erreur) return h`<div class="alerte err anim">${brut(I.alerte)}<span>${P().erreur}</span></div>`;
   const r = P().resultat;
-  if (!r) return "";
+  if (!r) {
+    if (E.vue === "recherche") return zoneDecouverteGouts();
+    return "";
+  }
   if (r.type === "video") return carteVideo(r);
   if (r.type === "playlist" || r.type === "lot") return cartePlaylist(r);
   if (r.type === "recherche") return grilleRecherche(r);
@@ -603,20 +619,197 @@ function cartePlaylist(p) {
   </div>`;
 }
 
+let videoApercue = null;
+
+function idVideo(url) {
+  if (!url) return "";
+  const m = String(url).match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([\w-]{11})/i);
+  return m ? m[1] : "";
+}
+
+async function chargerGouts(force = false) {
+  if (E.gouts.chargement && !force) return;
+  E.gouts.chargement = true;
+  if (E.vue === "recherche" && !P().resultat) rafraichirResultat();
+  try {
+    const d = force
+      ? await api("/gouts/rafraichir", { methode: "POST" })
+      : await api("/gouts/fil");
+    E.gouts.fil = d.fil || [];
+    E.gouts.tendances = d.tendances || [];
+    E.gouts.interets = d.interets || [];
+    E.gouts.recherches = d.recherches || [];
+    E.gouts.erreur = null;
+  } catch (e) {
+    E.gouts.erreur = e.message;
+  } finally {
+    E.gouts.chargement = false;
+    if (E.vue === "recherche" && !P().resultat) rafraichirResultat();
+  }
+}
+
+function ouvrirApercu(video) {
+  if (!video) return;
+  videoApercue = video;
+  const d = $("#modale-apercu");
+  if (!d) return;
+
+  api("/gouts/signal", {
+    methode: "POST",
+    corps: {
+      id: video.id || idVideo(video.url),
+      url: video.url,
+      titre: video.titre,
+      chaine: video.chaine,
+      type: "apercu",
+    },
+  }).catch(() => {});
+
+  $("#apercu-titre").textContent = video.titre || "Aperçu vidéo";
+  $("#apercu-chaine").textContent = video.chaine || "";
+  $("#apercu-vues").textContent = video.vues ? vues(video.vues) : "";
+  $("#apercu-date").textContent = video.date ? (dateLongue(video.date) || ilYa(video.date)) : "";
+  $("#apercu-sep-1").hidden = !video.chaine || !video.vues;
+  $("#apercu-sep-2").hidden = !video.vues || !video.date;
+
+  const cadre = $("#apercu-media-cadre");
+  cadre.innerHTML = "";
+
+  const ytId = video.id || idVideo(video.url);
+  if (ytId) {
+    const iframe = document.createElement("iframe");
+    iframe.src = `https://www.youtube-nocookie.com/embed/${ytId}?autoplay=1&enablejsapi=1&rel=0`;
+    iframe.title = video.titre || "Aperçu YouTube";
+    iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+    iframe.allowFullscreen = true;
+    cadre.appendChild(iframe);
+  } else if (video.url) {
+    const v = document.createElement("video");
+    v.src = video.url;
+    v.controls = true;
+    v.autoplay = true;
+    cadre.appendChild(v);
+  }
+
+  d.showModal();
+}
+
+function fermerApercu() {
+  const d = $("#modale-apercu");
+  if (!d) return;
+  const cadre = $("#apercu-media-cadre");
+  if (cadre) cadre.innerHTML = "";
+  if (d.open) d.close();
+  videoApercue = null;
+}
+
+function videoDepuisElement(el) {
+  const racine = el.closest("[data-source][data-index]") || el;
+  const source = racine.dataset.source;
+  const index = +racine.dataset.index;
+  if (isNaN(index)) return null;
+  if (source === "recherche") return P().resultat?.resultats?.[index];
+  if (source === "tendances") return E.gouts.tendances?.[index];
+  if (source === "pour_vous") return E.gouts.fil?.[index];
+  return null;
+}
+
+function carteVideoRecherche(e, i, source = "recherche") {
+  const motif = e.motif || (source === "tendances" ? "🔥 Tendance YouTube" : "");
+  return h`
+  <article class="verre carte-video anim" style="--i:${Math.min(i, 12)}" data-source="${source}" data-index="${i}">
+    <div class="vignette" data-action="apercu-carte" data-source="${source}" data-index="${i}" title="Regarder l'aperçu streaming avant téléchargement" style="cursor:pointer">
+      <img src="${e.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />
+      <span class="survol survol-bouton-apercu">
+        <span class="badge-lire-apercu">${brut(I.play)} Regarder</span>
+      </span>
+      ${e.duree ? h`<span class="duree">${duree(e.duree)}</span>` : e.direct ? h`<span class="duree" style="background:var(--rouge)">DIRECT</span>` : ""}
+    </div>
+    <div class="corps">
+      <div style="flex:1;min-width:0">
+        ${motif ? h`<div class="carte-motif-badge" style="font-size:0.75rem;font-weight:700;color:var(--indigo-clair);margin-bottom:4px;display:flex;align-items:center;gap:4px">${brut(I.etincelle)}<span>${motif}</span></div>` : ""}
+        <div class="t" data-action="apercu-carte" data-source="${source}" data-index="${i}" title="${e.titre}" style="cursor:pointer">${e.titre}</div>
+        <div class="s">${e.chaine || ""}${e.vues ? " · " + vues(e.vues) : ""}</div>
+        ${e.date ? h`<div class="date-video" title="Publiée vers le ${dateLongue(e.date)}">${brut(I.calendrier)}${ilYa(e.date)}</div>` : ""}
+      </div>
+      <div class="carte-actions-bas">
+        <button type="button" class="icone-btn" data-action="apercu-carte" data-source="${source}" data-index="${i}" title="Regarder l'aperçu vidéo en streaming">
+          ${brut(I.oeil)}
+        </button>
+        <button type="button" class="icone-btn accent" data-action="telecharger-carte" data-source="${source}" data-index="${i}" title="Choisir la langue, la qualité et télécharger">
+          ${brut(I.dl)}
+        </button>
+        ${source !== "recherche" ? h`
+        <button type="button" class="icone-btn fantome discret" data-action="pas-interesse-carte" data-source="${source}" data-index="${i}" title="Pas intéressé (adapter l'algorithme)">
+          ${brut(I.poubelle)}
+        </button>` : ""}
+      </div>
+    </div>
+  </article>`;
+}
+
+function zoneDecouverteGouts() {
+  const g = E.gouts;
+  const onglet = g.onglet || "pour_vous";
+  const liste = onglet === "tendances" ? g.tendances : g.fil;
+  const estPourVous = onglet === "pour_vous";
+
+  return h`
+  <div class="decouverte-boite anim" style="margin-top:24px">
+    <div class="decouverte-entete" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px">
+      <div class="onglets-decouverte">
+        <button type="button" data-onglet-fil="pour_vous" aria-pressed="${estPourVous}">
+          ${brut(I.etincelle)} Pour vous
+        </button>
+        <button type="button" data-onglet-fil="tendances" aria-pressed="${!estPourVous}">
+          ${brut(I.feu)} Tendances
+        </button>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:10px">
+        ${g.chargement ? h`<span class="chargement-texte" style="margin:0"><span class="rond mini"></span> Actualisation…</span>` : ""}
+        <button type="button" class="btn petit fantome btn-rafraichir-fil" data-action="rafraichir-fil" title="Recalculer les recommandations">
+          ${brut(I.horloge)} Actualiser
+        </button>
+      </div>
+    </div>
+
+    ${g.interets.length || g.recherches.length ? h`
+    <div class="puces-interets" style="margin-bottom:20px">
+      <span class="muet petit" style="font-weight:700">Vos thèmes :</span>
+      ${g.interets.map((th) => h`
+        <button type="button" class="puce-interet" data-interet="${th}">
+          ${brut(I.etincelle)} ${th}
+        </button>`)}
+      ${g.recherches.map((r) => h`
+        <span class="puce-interet" data-interet="${r}" style="cursor:pointer">
+          ${brut(I.chercher)} ${r}
+          <button type="button" class="btn-suppr-recherche" data-oublier-recherche="${r}" title="Supprimer de l'historique" style="background:none;border:none;color:var(--t3);cursor:pointer;padding:0;margin-left:4px;display:inline-flex;align-items:center">×</button>
+        </span>`)}
+    </div>` : ""}
+
+    ${g.chargement && !liste.length ? h`
+      <div class="grille-videos">${[...Array(6)].map((_, i) => h`<div class="verre carte-video anim" style="--i:${i}"><div class="squelette" style="aspect-ratio:16/9;border-radius:0"></div><div class="corps" style="flex-direction:column;gap:8px"><div class="squelette" style="height:14px;width:90%"></div><div class="squelette" style="height:12px;width:50%"></div></div></div>`)}</div>
+    ` : !liste.length ? h`
+      <div class="vide" style="padding:40px 20px">
+        <div class="halo">${brut(I.etincelle)}</div>
+        <h3>${estPourVous ? "Votre fil personnalisé se construit" : "Aucune vidéo tendance pour le moment"}</h3>
+        <p>${estPourVous ? "Regarde ou télécharge quelques vidéos : YT-NEXUS apprendra tes chaînes et thèmes favoris exactement comme l'app mobile." : "Réessaie dans un instant."}</p>
+      </div>
+    ` : h`
+      <div class="titre-section" style="margin-bottom:14px">
+        <h2>${estPourVous ? "Vidéos recommandées pour vous" : "Les tendances les plus populaires"}</h2>
+        <span class="muet">${liste.length} vidéos · ${estPourVous ? "basé sur vos préférences" : "populaires sur YouTube"}</span>
+      </div>
+      <div class="grille-videos">${liste.map((e, i) => carteVideoRecherche(e, i, onglet))}</div>
+    `}
+  </div>`;
+}
+
 function grilleRecherche(r) {
   if (!r.resultats.length) return h`<div class="vide"><div class="halo">${brut(I.chercher)}</div><h3>Aucun résultat</h3><p>${filtresActifs(E.p.recherche.filtres).length ? "Essaie d'assouplir les filtres." : "Essaie d'autres mots-clés."}</p></div>`;
   return h`<div class="titre-section"><h2>Résultats</h2><span class="muet">${r.resultats.length} vidéos pour « ${r.requete} »</span></div>
-  <div class="grille-videos">${r.resultats.map((e, i) => h`
-    <article class="verre carte-video anim" style="--i:${Math.min(i, 12)}" data-res="${i}" tabindex="0">
-      <div class="vignette"><img src="${e.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />
-        <span class="survol"><span class="rond-lecture">${brut(I.chercher)}</span></span>
-        ${e.duree ? h`<span class="duree">${duree(e.duree)}</span>` : e.direct ? h`<span class="duree" style="background:var(--rouge)">DIRECT</span>` : ""}</div>
-      <div class="corps">
-        <div style="flex:1;min-width:0"><div class="t">${e.titre}</div><div class="s">${e.chaine || ""}${e.vues ? " · " + vues(e.vues) : ""}</div>${e.date ? h`<div class="date-video" title="Publiée vers le ${dateLongue(e.date)}">${brut(I.calendrier)}${ilYa(e.date)}</div>` : ""}</div>
-        <button class="icone-btn accent" data-rapide="${i}" title="Choisir la langue, la qualité et télécharger">${brut(I.dl)}</button>
-      </div>
-    </article>`)}
-  </div>`;
+  <div class="grille-videos">${r.resultats.map((e, i) => carteVideoRecherche(e, i, "recherche"))}</div>`;
 }
 
 function rafraichirResultat() {
@@ -637,6 +830,65 @@ function afficherPage(page) {
   if (E.vue === page) rendre();
 }
 
+let timerSugg = null;
+function brancherSuggestionsRecherche(ta) {
+  const boite = $("#suggestions-recherche");
+  if (!boite) return;
+  const cacher = () => { boite.hidden = true; boite.innerHTML = ""; };
+
+  ta.addEventListener("input", () => {
+    clearTimeout(timerSugg);
+    const q = ta.value.trim();
+    if (q.length < 2 || extraireLiens(q).length) return cacher();
+    timerSugg = setTimeout(async () => {
+      try {
+        const res = await api(`/recherche/suggestions?q=${encodeURIComponent(q)}`);
+        if (ta.value.trim() !== q || !res.suggestions || !res.suggestions.length) return cacher();
+        boite.hidden = false;
+        boite.innerHTML = html(h`${res.suggestions.slice(0, 7).map((s) => h`
+          <div class="suggestion-ligne" data-sugg="${s}">
+            <div class="suggestion-gauche">
+              ${brut(I.chercher)}
+              <span class="suggestion-texte">${s}</span>
+            </div>
+            <button type="button" class="btn-completer-sugg" data-completer="${s}" title="Compléter la saisie">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M7 17L17 7M7 7h10v10"/></svg>
+            </button>
+          </div>`)}`);
+      } catch {
+        cacher();
+      }
+    }, 180);
+  });
+
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") cacher();
+  });
+
+  boite.onclick = (e) => {
+    const comp = e.target.closest("[data-completer]");
+    if (comp) {
+      e.stopPropagation();
+      ta.value = comp.dataset.completer;
+      P().saisie = ta.value;
+      ta.focus();
+      return;
+    }
+    const ligne = e.target.closest("[data-sugg]");
+    if (ligne) {
+      const q = ligne.dataset.sugg;
+      ta.value = q;
+      P().saisie = q;
+      cacher();
+      rechercher(q);
+    }
+  };
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".saisie-avec-suggestions")) cacher();
+  });
+}
+
 function apresSource() {
   if (E.vue === "lot") return apresLot();
   const ta = $("#saisie");
@@ -653,6 +905,7 @@ function apresSource() {
       router(t, E.vue);
     } catch { ta.focus(); toast("Fais Ctrl+V dans le champ (accès au presse-papiers refusé)."); }
   });
+  if (E.vue === "recherche") brancherSuggestionsRecherche(ta);
   if (!occupe()) ta.focus({ preventScroll: true });
 }
 
@@ -797,6 +1050,66 @@ $("#contenu").addEventListener("click", (e) => {
   if (e.target.closest("[data-panneau-filtres]")) { E.p.recherche.panneau = !E.p.recherche.panneau; return rendre(); }
   const ex = e.target.closest("[data-exemple]");
   if (ex) { P().saisie = ex.dataset.exemple; return rechercher(ex.dataset.exemple); }
+
+  // Onglets du fil de recommandations
+  const of = e.target.closest("[data-onglet-fil]");
+  if (of) {
+    E.gouts.onglet = of.dataset.ongletFil;
+    return rafraichirResultat();
+  }
+  // Puce intérêt / thème
+  const di = e.target.closest("[data-interet]");
+  if (di && !e.target.closest("[data-oublier-recherche]")) {
+    const mot = di.dataset.interet;
+    P().saisie = mot;
+    return rechercher(mot);
+  }
+  // Supprimer une recherche des goûts
+  const dor = e.target.closest("[data-oublier-recherche]");
+  if (dor) {
+    e.stopPropagation();
+    const req = dor.dataset.oublierRecherche;
+    api("/gouts/oublier-recherche", { methode: "POST", corps: { requete: req } }).catch(() => {});
+    E.gouts.recherches = E.gouts.recherches.filter((x) => x !== req);
+    return rafraichirResultat();
+  }
+  // Bouton d'actualisation des goûts
+  if (e.target.closest('[data-action="rafraichir-fil"]')) {
+    return chargerGouts(true);
+  }
+  // Aperçu streaming direct
+  const ap = e.target.closest('[data-action="apercu-carte"]');
+  if (ap) {
+    e.stopPropagation();
+    const v = videoDepuisElement(ap);
+    if (v) return ouvrirApercu(v);
+  }
+  // Télécharger / analyser directement depuis la carte
+  const tc = e.target.closest('[data-action="telecharger-carte"]');
+  if (tc) {
+    e.stopPropagation();
+    const v = videoDepuisElement(tc);
+    if (v) {
+      E.p.video.saisie = v.url;
+      aller("video");
+      return analyser(v.url, "video");
+    }
+  }
+  // Pas intéressé depuis la carte
+  const pic = e.target.closest('[data-action="pas-interesse-carte"]');
+  if (pic) {
+    e.stopPropagation();
+    const v = videoDepuisElement(pic);
+    if (v) {
+      const id = v.id || idVideo(v.url);
+      api("/gouts/pas-interesse", { methode: "POST", corps: { id, chaine: v.chaine } }).catch(() => {});
+      E.gouts.fil = E.gouts.fil.filter((item) => (item.id || idVideo(item.url)) !== id);
+      E.gouts.tendances = E.gouts.tendances.filter((item) => (item.id || idVideo(item.url)) !== id);
+      toast("Vidéo masquée de vos recommandations", "ok");
+      return rafraichirResultat();
+    }
+  }
+
   const el = e.target.closest("[data-type],[data-piste],[data-qualite],[data-st],[data-action],[data-res],[data-rapide],[data-conteneur],[data-format-audio]");
   if (!el) return;
   const r = P().resultat;
@@ -816,7 +1129,10 @@ $("#contenu").addEventListener("click", (e) => {
     const x = r.resultats[+el.dataset.rapide];
     E.p.video.saisie = x.url; aller("video"); return analyser(x.url, "video");
   }
-  if (el.dataset.res) { const x = r.resultats[+el.dataset.res]; E.p.video.saisie = x.url; aller("video"); return analyser(x.url, "video"); }
+  if (el.dataset.res) {
+    const x = r.resultats[+el.dataset.res];
+    if (x) return ouvrirApercu(x);
+  }
   const a = el.dataset.action;
   if (a === "toutes-langues") { P().toutesLangues = !P().toutesLangues; return rafraichirResultat(); }
   if (a === "ouvrir-playlist") { E.p.playlist.saisie = r.playlist; aller("playlist"); return analyser(r.playlist, "playlist"); }
@@ -2749,9 +3065,44 @@ $("#contenu").addEventListener("error", (e) => {
   img.remove();
 }, true);
 
+function initModaleApercu() {
+  const d = $("#modale-apercu");
+  if (!d) return;
+  $("#btn-fermer-apercu")?.addEventListener("click", fermerApercu);
+  $("#btn-apercu-telecharger")?.addEventListener("click", () => {
+    if (videoApercue) {
+      const v = videoApercue;
+      fermerApercu();
+      E.p.video.saisie = v.url;
+      aller("video");
+      analyser(v.url, "video");
+    }
+  });
+  $("#btn-apercu-pas-interesse")?.addEventListener("click", () => {
+    if (videoApercue) {
+      const v = videoApercue;
+      const id = v.id || idVideo(v.url);
+      api("/gouts/pas-interesse", { methode: "POST", corps: { id, chaine: v.chaine } }).catch(() => {});
+      E.gouts.fil = E.gouts.fil.filter((item) => (item.id || idVideo(item.url)) !== id);
+      E.gouts.tendances = E.gouts.tendances.filter((item) => (item.id || idVideo(item.url)) !== id);
+      toast("Vidéo masquée de vos recommandations", "ok");
+      fermerApercu();
+      if (E.vue === "recherche" && !P().resultat) rafraichirResultat();
+    }
+  });
+  d.addEventListener("click", (e) => {
+    if (e.target === d) fermerApercu();
+  });
+  d.addEventListener("cancel", (e) => {
+    e.preventDefault();
+    fermerApercu();
+  });
+}
+
 // ── démarrage ────────────────────────────────────────────────────────
 (async () => {
   majBoutonTheme();
+  initModaleApercu();
   await chargerEtat();
   for (const v of SOURCES) E.p[v].choix = choixParDefaut();
   const p = new URLSearchParams(location.search);

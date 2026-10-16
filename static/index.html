@@ -284,6 +284,44 @@
       </div>
     </div>
   </dialog>
+
+  <!-- Modale d'aperçu streaming avant téléchargement -->
+  <dialog id="modale-apercu" class="apercu-dialog" tabindex="-1">
+    <div class="apercu-contenu verre" id="apercu-boite">
+      <div class="apercu-tete">
+        <div class="apercu-titre-boite">
+          <span class="apercu-pastille-live">APERÇU DIRECT</span>
+          <h3 id="apercu-titre">Titre de la vidéo</h3>
+        </div>
+        <button class="icone-btn fantome" id="btn-fermer-apercu" title="Fermer (Échap)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="apercu-video-conteneur">
+        <div class="apercu-video-cadre" id="apercu-media-cadre"></div>
+      </div>
+      <div class="apercu-pied">
+        <div class="apercu-meta">
+          <span class="chaine" id="apercu-chaine"></span>
+          <span class="sep" id="apercu-sep-1">·</span>
+          <span class="vues" id="apercu-vues"></span>
+          <span class="sep" id="apercu-sep-2">·</span>
+          <span class="date" id="apercu-date"></span>
+        </div>
+        <div class="apercu-actions">
+          <button class="btn fantome petit danger" id="btn-apercu-pas-interesse" title="Moins de vidéos comme celle-ci">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 14.14 14.14"/></svg>
+            Pas intéressé
+          </button>
+          <button class="btn principal" id="btn-apercu-telecharger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"/></svg>
+            Choisir la qualité et télécharger
+          </button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
   <div class="toasts" id="toasts" aria-live="polite"></div>
   <div class="deposer" id="deposer" hidden>Dépose le lien ici</div>
   <script type="module" src="/static/app.js"></script>

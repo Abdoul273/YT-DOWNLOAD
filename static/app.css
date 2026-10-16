@@ -1751,3 +1751,289 @@ dialog#lecteur.lecteur-dialog:-webkit-full-screen {
   .barre-filtres .segment { width: 100%; flex-wrap: nowrap; overflow-x: auto; }
   .barre-filtres .ic-tri { display: none; }
 }
+
+/* ── Découverte & Algorithme des goûts (Pour vous / Tendances) ── */
+.decouverte-boite {
+  max-width: 1240px;
+  margin: 28px auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.decouverte-barre {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.onglets-decouverte {
+  display: inline-flex;
+  gap: 6px;
+  padding: 5px;
+  border-radius: 16px;
+  background: var(--verre);
+  border: 1px solid var(--trait);
+}
+.onglets-decouverte button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--t2);
+  transition: all 0.2s var(--doux);
+}
+.onglets-decouverte button:hover {
+  color: var(--t1);
+  background: var(--verre-2);
+}
+.onglets-decouverte button[aria-pressed="true"] {
+  background: var(--grad-btn);
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+}
+.puces-interets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.puce-interet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border-radius: 99px;
+  background: var(--verre);
+  border: 1px solid var(--trait);
+  color: var(--t2);
+  font-weight: 600;
+  font-size: 0.82rem;
+  transition: all 0.2s var(--doux);
+  cursor: pointer;
+}
+.puce-interet:hover {
+  background: var(--verre-3);
+  color: #fff;
+  border-color: var(--indigo);
+  transform: translateY(-2px);
+}
+.btn-rafraichir-fil {
+  margin-left: auto;
+}
+
+/* Suggestions d'autocomplétion en direct sous la recherche */
+.saisie-avec-suggestions {
+  position: relative;
+  width: 100%;
+}
+.suggestions-flottantes {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: rgba(14, 16, 32, 0.94);
+  backdrop-filter: blur(28px) saturate(1.8);
+  border: 1px solid var(--trait-2);
+  border-radius: 18px;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.7);
+  z-index: 50;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+  animation: monte 0.25s var(--ressort);
+}
+.suggestion-ligne {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  color: var(--t1);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.suggestion-ligne:hover,
+.suggestion-ligne.actif {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  transform: translateX(3px);
+}
+.suggestion-gauche {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.suggestion-gauche svg {
+  width: 16px;
+  height: 16px;
+  color: var(--t3);
+  flex: none;
+}
+.suggestion-texte {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.btn-completer-sugg {
+  padding: 4px;
+  border-radius: 8px;
+  color: var(--t3);
+  transition: all 0.15s ease;
+}
+.btn-completer-sugg:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+/* Boutons d'aperçu et actions sur les cartes */
+.carte-video .survol-bouton-apercu {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(5, 6, 13, 0.65);
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  z-index: 2;
+}
+.carte-video:hover .survol-bouton-apercu {
+  opacity: 1;
+}
+.badge-lire-apercu {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px;
+  border-radius: 99px;
+  background: var(--grad-btn);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.85rem;
+  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.6);
+  transform: translateY(4px);
+  transition: transform 0.25s var(--ressort);
+}
+.carte-video:hover .badge-lire-apercu {
+  transform: translateY(0);
+}
+.carte-actions-bas {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* Modale d'aperçu vidéo avant téléchargement */
+.apercu-dialog {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  max-width: min(860px, 94vw);
+  width: 100%;
+}
+.apercu-dialog::backdrop {
+  background: rgba(2, 3, 8, 0.75);
+  backdrop-filter: blur(16px);
+}
+.apercu-contenu {
+  display: flex;
+  flex-direction: column;
+  border-radius: 26px;
+  border: 1px solid var(--trait-2);
+  box-shadow: 0 25px 65px rgba(0, 0, 0, 0.85), 0 0 40px rgba(99, 102, 241, 0.2);
+  overflow: hidden;
+  animation: modale 0.3s var(--ressort);
+}
+.apercu-tete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--trait);
+}
+.apercu-titre-boite {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+.apercu-pastille-live {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #ef4444, #f97316);
+  color: #fff;
+  letter-spacing: 0.05em;
+  flex: none;
+}
+.apercu-tete h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #fff;
+}
+.apercu-video-conteneur {
+  background: #000;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+.apercu-video-cadre {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+}
+.apercu-video-cadre iframe,
+.apercu-video-cadre video {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.apercu-pied {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 22px;
+  border-top: 1px solid var(--trait);
+  flex-wrap: wrap;
+}
+.apercu-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: var(--t2);
+}
+.apercu-meta .chaine {
+  font-weight: 700;
+  color: #fff;
+}
+.apercu-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from flask import Blueprint, Flask, Response, abort, jsonify, request, send_file, stream_with_context
 
-from . import VERSION, analyse, config, langues, miniatures, taches
+from . import VERSION, analyse, config, gouts, langues, miniatures, taches
 
 api = Blueprint("api", __name__, url_prefix="/api")
 STATIQUE = config.RACINE / "static"
@@ -115,7 +115,13 @@ def analyser():
     if not url:
         return _erreur("Colle un lien.")
     try:
-        return jsonify(analyse.analyser(url))
+        res = analyse.analyser(url)
+        if res.get("type") == "video":
+            gouts.gestionnaire.signal(
+                "analyse", url=url, id_=res.get("id"),
+                titre=res.get("titre"), chaine=res.get("chaine")
+            )
+        return jsonify(res)
     except analyse.ErreurAnalyse as e:
         return _erreur(str(e), 422)
 
@@ -126,10 +132,66 @@ def rechercher():
     if not q:
         return _erreur("Recherche vide.")
     try:
+        gouts.gestionnaire.ajouter_recherche(q)
         filtres = {k: v for k, v in (_corps().get("filtres") or {}).items() if v}
         return jsonify({"resultats": analyse.rechercher(q, filtres)})
     except analyse.ErreurAnalyse as e:
         return _erreur(str(e), 422)
+
+
+@api.get("/recherche/suggestions")
+def suggestions_recherche():
+    q = request.args.get("q", "").strip()
+    return jsonify({"suggestions": gouts.gestionnaire.suggestions(q)})
+
+
+@api.get("/gouts/fil")
+def gouts_fil():
+    # Déclenche un rafraîchissement asynchrone si le fil est vide ou périmé
+    if gouts.gestionnaire.fil_perime() or not gouts.gestionnaire.fil:
+        threading.Thread(target=gouts.gestionnaire.rafraichir, daemon=True).start()
+    return jsonify(gouts.gestionnaire.etat())
+
+
+@api.post("/gouts/rafraichir")
+def gouts_rafraichir():
+    return jsonify(gouts.gestionnaire.rafraichir(force=True))
+
+
+@api.post("/gouts/signal")
+def gouts_signal():
+    d = _corps()
+    type_ = d.get("type") or "clic"
+    gouts.gestionnaire.signal(
+        type_,
+        url=d.get("url"),
+        id_=d.get("id"),
+        titre=d.get("titre"),
+        chaine=d.get("chaine"),
+        chaine_id=d.get("cid"),
+    )
+    return jsonify({"ok": True})
+
+
+@api.post("/gouts/pas-interesse")
+def gouts_pas_interesse():
+    d = _corps()
+    gouts.gestionnaire.pas_interesse(id_=d.get("id"), titre=d.get("titre"), chaine=d.get("chaine"))
+    return jsonify({"ok": True})
+
+
+@api.post("/gouts/bloquer-chaine")
+def gouts_bloquer_chaine():
+    d = _corps()
+    gouts.gestionnaire.bloquer_chaine(d.get("chaine"))
+    return jsonify({"ok": True})
+
+
+@api.post("/gouts/oublier-recherche")
+def gouts_oublier_recherche():
+    d = _corps()
+    gouts.gestionnaire.oublier_recherche(d.get("q"))
+    return jsonify({"ok": True})
 
 
 # ── téléchargements ─────────────────────────────────────────────────
@@ -151,6 +213,13 @@ def ajouter():
     elements = [e for e in d.get("elements") or [] if isinstance(e, dict) and e.get("url")]
     if not elements:
         return _erreur("Rien à télécharger.")
+    for e in elements:
+        gouts.gestionnaire.signal(
+            "telechargement",
+            url=e.get("url"),
+            titre=e.get("titre"),
+            chaine=e.get("chaine"),
+        )
     options = {k: v for k, v in (d.get("options") or {}).items() if k in OPTIONS_PERMISES}
     return jsonify({"taches": taches.gestionnaire.ajouter(elements, options)})
 
