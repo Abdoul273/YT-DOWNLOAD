@@ -10,7 +10,7 @@ from pathlib import Path
 
 from flask import Blueprint, Flask, Response, abort, jsonify, request, send_file, stream_with_context
 
-from . import VERSION, analyse, config, taches
+from . import VERSION, analyse, config, miniatures, taches
 
 api = Blueprint("api", __name__, url_prefix="/api")
 STATIQUE = config.RACINE / "static"
@@ -285,6 +285,7 @@ def _chemin_sur(rel):
 
 @api.get("/fichiers")
 def fichiers():
+    from urllib.parse import quote
     racine = config.dossier_telechargement().resolve()
     par_chemin = {}
     for t in taches.gestionnaire.liste():
@@ -298,16 +299,55 @@ def fichiers():
         st = f.stat()
         t = par_chemin.get(str(f))
         rel = f.relative_to(racine)
+        meta = miniatures.infos_fichier(f) if not t else {}
+        avoir_vignette = bool(
+            (t and t.get("miniature"))
+            or meta.get("pochette")
+            or meta.get("yt_id")
+            or ext in EXT_VIDEO
+        )
         res.append({
             "chemin": str(rel), "nom": f.stem, "ext": ext[1:], "taille": st.st_size, "date": st.st_mtime,
             "type": "video" if ext in EXT_VIDEO else "audio",
             "dossier": str(rel.parent) if str(rel.parent) != "." else "",
-            "tache": t["id"] if t else None, "miniature": t.get("miniature") if t else None,
-            "pistes": t.get("pistes") if t else None, "duree": t.get("duree") if t else None,
-            "titre": t.get("titre") if t else f.stem,
+            "tache": t["id"] if t else None,
+            "miniature": f"/api/miniature?chemin={quote(str(rel))}&m={int(st.st_mtime)}" if avoir_vignette else None,
+            "pistes": (t.get("pistes") if t else None) or meta.get("pistes"),
+            "duree": (t.get("duree") if t else None) or meta.get("duree"),
+            "titre": (t.get("titre") if t else None) or meta.get("titre") or f.stem,
         })
     res.sort(key=lambda x: x["date"], reverse=True)
     return jsonify({"fichiers": res, "dossier": str(racine)})
+
+
+@api.get("/miniature")
+def miniature():
+    """Sert une miniature depuis le disque (ou l'extrait du média / la met en cache)."""
+    chemin = request.args.get("chemin")
+    url = request.args.get("url")
+    img = None
+    if chemin:
+        _, f = _chemin_sur(chemin)
+        if not f.is_file():
+            abort(404)
+        url_tache = next(
+            (t.get("miniature") for t in taches.gestionnaire.liste()
+             if t.get("fichier") and Path(t["fichier"]).resolve() == f),
+            None,
+        )
+        img = miniatures.vignette_fichier(f, url_tache)
+    elif url:
+        img = miniatures.locale(url) or miniatures.telecharger(url)
+        if not img:
+            for t in taches.gestionnaire.liste():
+                if t.get("miniature") == url and t.get("fichier") and Path(t["fichier"]).is_file():
+                    img = miniatures.vignette_fichier(Path(t["fichier"]), url)
+                    if img:
+                        break
+    if not img or not img.is_file():
+        abort(404)
+    debut = img.read_bytes()[:16]
+    return send_file(img, mimetype=miniatures.mimetype(debut), max_age=86400 * 30, conditional=True)
 
 
 @api.get("/fichiers/lire")

@@ -733,9 +733,11 @@ dialog .tete h3 { font-size: 0.98rem; font-weight: 700; flex: 1; overflow: hidde
 .outils-fichiers .entree { height: 46px; border-radius: 14px; }
 .outils-fichiers select.entree { width: auto; }
 .dossiers { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.vignette:not(.placeholder) > svg { display: none; }
 .vignette.placeholder { display: grid; place-items: center; background: linear-gradient(135deg, color-mix(in srgb, var(--indigo) 30%, transparent), color-mix(in srgb, var(--cyan) 18%, transparent)); }
 .vignette.placeholder.audio { background: linear-gradient(135deg, color-mix(in srgb, var(--rose) 28%, transparent), color-mix(in srgb, var(--violet) 22%, transparent)); }
 .vignette.placeholder svg { width: 44px; height: 44px; color: rgba(255, 255, 255, .85); filter: drop-shadow(0 6px 16px rgba(0,0,0,.4)); }
+.ligne-histo .vignette.placeholder svg, .tache .vignette.placeholder svg { width: 26px; height: 26px; }
 .vignette .ext { position: absolute; left: 10px; top: 10px; padding: 3px 8px; border-radius: 7px; background: rgba(5, 6, 13, .7); backdrop-filter: blur(8px); color: #fff; font: 700 .68rem var(--mono); text-transform: uppercase; }
 
 /* ── historique ───────────────────────────────────────────── */

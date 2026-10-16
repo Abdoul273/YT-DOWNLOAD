@@ -38,7 +38,9 @@ FICHIER_REGLAGES = CONFIG / "reglages.json"
 FICHIER_COOKIES = CONFIG / "cookies.txt"
 FICHIER_TACHES = DONNEES / "taches.json"
 CACHE_INFOS = DONNEES / "infos"
-CACHE_INFOS.mkdir(exist_ok=True)
+CACHE_MINIATURES = DONNEES / "miniatures"
+for _d in (CACHE_INFOS, CACHE_MINIATURES):
+    _d.mkdir(exist_ok=True)
 
 REGLAGES_DEFAUT = {
     "dossier": str(DOSSIER_DEFAUT),

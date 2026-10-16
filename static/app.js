@@ -60,6 +60,7 @@ const ilYa = (ts) => {
 const dateLongue = (ts) => (ts ? new Date(ts * 1000).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" }) : "");
 const tsYT = (d) => (d && d.length === 8 ? new Date(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}T12:00`).getTime() / 1000 : null);
 const quand = (t) => (t ? new Date(t * 1000).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
+const srcMin = (u) => (!u ? "" : u.startsWith("http") ? `/api/miniature?url=${encodeURIComponent(u)}` : u);
 const estUrl = (s) => /^(https?:\/\/|www\.|youtu\.?be|m\.youtube)/i.test(s.trim()) || /^[\w-]+\.[a-z]{2,}\/\S+/i.test(s.trim());
 const base = (c) => (c || "").toLowerCase().split("-")[0];
 let noms;
@@ -908,9 +909,14 @@ function boutonsTache(t) {
 function carteTache(t, i = 0) {
   const msg = t.erreur ? h`<div class="msg err">${brut(I.alerte)}${t.erreur}</div>` : t.message ? h`<div class="msg">${brut(I.info)}${t.message}</div>` : "";
   const largeur = t.statut === "analyse" || t.statut === "traitement" ? 100 : t.progression;
+  const type = t.options?.type === "audio" ? "audio" : "video";
   return h`
-  <article class="verre tache ${t.statut} anim" style="--i:${Math.min(i, 10)}" id="t-${t.id}">
-    <div class="vignette">${t.miniature ? h`<img src="${t.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : ""}${t.duree ? h`<span class="duree">${duree(t.duree)}</span>` : ""}</div>
+  <article class="verre tache ${t.statut} anim" style="--i:${Math.min(i, 10)}" id="t-${t.id}" data-type="${type}">
+    <div class="vignette ${t.miniature ? "" : `placeholder ${type}`}">
+      ${brut(type === "audio" ? I.audio : I.video)}
+      ${t.miniature ? h`<img src="${srcMin(t.miniature)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : ""}
+      ${t.duree ? h`<span class="duree">${duree(t.duree)}</span>` : ""}
+    </div>
     <div style="min-width:0">
       <h4 title="${t.titre}">${t.titre}</h4>
       <div class="sous-ligne">
@@ -1054,9 +1060,10 @@ function listeFichiers() {
   const local = E.etat?.local !== false;
   const b = (f, action, icone, titre, cls = "") => h`<button class="icone-btn ${cls}" data-f="${f.chemin}" data-fact="${action}" title="${titre}" aria-label="${titre}">${brut(icone)}</button>`;
   return h`<div class="grille-videos biblio">${l.map((f, i) => h`
-    <article class="verre carte-video anim" style="--i:${Math.min(i, 12)}" data-f="${f.chemin}" data-fact="lire">
+    <article class="verre carte-video anim" style="--i:${Math.min(i, 12)}" data-f="${f.chemin}" data-fact="lire" data-type="${f.type}">
       <div class="vignette ${f.miniature ? "" : `placeholder ${f.type}`}">
-        ${f.miniature ? h`<img src="${f.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : brut(f.type === "audio" ? I.audio : I.video)}
+        ${brut(f.type === "audio" ? I.audio : I.video)}
+        ${f.miniature ? h`<img src="${srcMin(f.miniature)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : ""}
         <span class="survol"><span class="rond-lecture">${brut(I.lecture)}</span></span>
         <span class="ext">${f.ext}</span>
         ${f.duree ? h`<span class="duree">${duree(f.duree)}</span>` : ""}
@@ -1152,8 +1159,12 @@ function listeHisto() {
       <div class="histo">${ts.map((t) => {
         const b = (action, icone, titre, cls = "") => h`<button class="icone-btn ${cls}" data-t="${t.id}" data-act="${action}" title="${titre}" aria-label="${titre}">${brut(icone)}</button>`;
         const fini = t.statut === "termine" && t.fichier;
-        return h`<article class="verre ligne-histo anim" style="--i:${Math.min(i++, 12)}">
-          <div class="vignette">${t.miniature ? h`<img src="${t.miniature}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : ""}</div>
+        const type = t.options?.type === "audio" ? "audio" : "video";
+        return h`<article class="verre ligne-histo anim" style="--i:${Math.min(i++, 12)}" data-type="${type}">
+          <div class="vignette ${t.miniature ? "" : `placeholder ${type}`}">
+            ${brut(type === "audio" ? I.audio : I.video)}
+            ${t.miniature ? h`<img src="${srcMin(t.miniature)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : ""}
+          </div>
           <div style="min-width:0">
             <h4 title="${t.titre}">${t.titre}</h4>
             <div class="sous-ligne">
@@ -1446,6 +1457,13 @@ document.addEventListener("keydown", (e) => {
     const champ = $("#saisie") || $("#saisie-lot"); champ?.focus(); champ?.select?.();
   }
 });
+$("#contenu").addEventListener("error", (e) => {
+  const img = e.target;
+  if (img.tagName !== "IMG") return;
+  const v = img.closest(".vignette");
+  if (v) v.classList.add("placeholder", v.closest(".carte-video, .tache, .ligne-histo")?.dataset.type || "video");
+  img.remove();
+}, true);
 
 // ── démarrage ────────────────────────────────────────────────────────
 (async () => {

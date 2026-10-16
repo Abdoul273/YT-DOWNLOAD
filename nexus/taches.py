@@ -21,7 +21,7 @@ from pathlib import Path
 
 import yt_dlp
 
-from . import analyse, config, erreurs, formats, langues
+from . import analyse, config, erreurs, formats, langues, miniatures
 
 EN_COURS = {"analyse", "telechargement", "traitement", "attente_relance"}
 ACTIFS = EN_COURS | {"en_attente", "programme"}
@@ -161,6 +161,7 @@ class Gestionnaire:
             if t.statut == "termine" and t.fichier and not Path(t.fichier).exists():
                 t.message = "Fichier déplacé ou supprimé"
             self.taches[t.id] = t
+        miniatures.garder_toutes(t.miniature for t in self.taches.values())
 
     # ── actions ───────────────────────────────────────────────────────
     def ajouter(self, elements, options):
@@ -174,6 +175,7 @@ class Gestionnaire:
                 self.taches[t.id] = t
                 nouvelles.append(t)
                 self._touche(t)
+                miniatures.garder(t.miniature)
         self._sauver()
         return [t.vue() for t in nouvelles]
 
@@ -346,6 +348,7 @@ class Gestionnaire:
             taille = Path(t.fichier).stat().st_size
         self.maj(t, True, statut="termine", progression=100, phase="", vitesse=0, eta=None,
                  taille_fichier=taille, fin=_maintenant(), erreur="")
+        miniatures.garder(t.miniature)
         try:
             (config.CACHE_INFOS / f"{t.id}.json").unlink()
         except OSError:
@@ -420,6 +423,7 @@ class Gestionnaire:
                  chaine=info.get("channel") or info.get("uploader") or t.chaine,
                  duree=info.get("duration") or t.duree, pistes=desc, total=total,
                  message=msg if t.tentatives == 1 or msg else t.message)
+        miniatures.garder(t.miniature)
 
         chemin_info = config.CACHE_INFOS / f"{t.id}.json"
         chemin_info.write_text(json.dumps(info))
