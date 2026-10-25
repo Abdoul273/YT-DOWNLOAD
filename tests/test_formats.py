@@ -39,6 +39,8 @@ def test_plan_sans_doublage_et_vo_demandee():
 def test_selecteur():
     s = formats.selecteur({"type": "video", "qualite": "1080"}, "fr", "en-US", True)
     assert s.startswith("bv*[height<=1080]+ba[language=fr]+ba[language=en-US]/")
+    s_comp = formats.selecteur({"type": "video", "qualite": "1080", "compatible": True}, "fr", "en-US", False)
+    assert s_comp.startswith("bv*[vcodec^=avc][height<=1080]+ba[acodec^=mp4a][language=fr]/")
     assert formats.selecteur({"type": "audio"}, "fr", "en-US", False) == "ba[language=fr]/ba/b"
     assert formats.selecteur({"type": "video"}, None, None, False).startswith("bv*+ba/")
 

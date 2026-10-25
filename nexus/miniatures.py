@@ -189,6 +189,7 @@ def _extraire_meta(chemin):
     if chemin.suffix.lower() in EXT_VIDEO and videos:
         meta["publiable"] = bool(
             chemin.suffix.lower() == ".mp4"
+            and len(videos) == 1
             and meta["vcodec"] in ("h264", "avc1", "avc")
             and (not audios or meta["acodec"] in ("aac", "mp4a"))
             and len(audios) <= 1
@@ -221,16 +222,17 @@ def _extraire_meta(chemin):
     return meta
 
 
-def infos_fichier(chemin):
+def infos_fichier(chemin, forcer=False):
     """Métadonnées mises en cache par (chemin, mtime, taille)."""
     st = chemin.stat()
     signature = f"{int(st.st_mtime)}:{st.st_size}"
     cle = str(chemin)
-    with _verrou:
-        idx = _charger_index()
-        ent = idx.get(cle)
-        if ent and ent.get("sig") == signature:
-            return ent
+    if not forcer:
+        with _verrou:
+            idx = _charger_index()
+            ent = idx.get(cle)
+            if ent and ent.get("sig") == signature and "publiable" in ent:
+                return ent
     meta = _extraire_meta(chemin)
     meta["sig"] = signature
     with _verrou:

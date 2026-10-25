@@ -2900,11 +2900,11 @@ function listeFichiers() {
         <div class="t" title="${f.titre}">${f.titre}</div>
         <div class="s">${taille(f.taille)} · ${quand(f.date)}</div>
         <div class="infos-carte">
-          ${f.type === "video" && f.publiable === true ? h`<span class="info-chip" style="color:var(--vert)">✓ Prête TikTok</span>` : ""}
-          ${f.type === "video" && f.publiable === false ? h`<span class="info-chip" style="color:var(--ambre)" title="Codec ${ (f.vcodec || '').toUpperCase() } ou flux multiples : clique sur l'étincelle pour convertir">⚠ ${(f.vcodec || "Codec").toUpperCase()}</span>` : ""}
+          ${f.conversionPct != null ? h`<span class="info-chip" style="color:var(--indigo-clair);border-color:rgba(99,102,241,.4)"><span class="rond mini" style="width:10px;height:10px;border-width:2px;margin-right:4px"></span>Conversion TikTok ${f.conversionPct}%…</span>` : f.type === "video" && f.publiable === true ? h`<span class="info-chip" style="color:var(--vert)">✓ Prête TikTok</span>` : f.type === "video" && f.publiable === false ? h`<span class="info-chip" style="color:var(--ambre)" title="Codec ${(f.vcodec || '').toUpperCase()} ou flux multiples : clique sur l'étincelle pour convertir">⚠ ${(f.vcodec || "Codec").toUpperCase()}</span>` : ""}
           ${f.pistes ? h`<span class="info-chip">${f.pistes}</span>` : ""}
           ${f.dossier ? h`<span class="info-chip">${brut(I.dossier.replace("<svg", '<svg style="width:12px;height:12px"'))}${f.dossier}</span>` : ""}
         </div>
+        ${f.conversionPct != null ? h`<div class="progres" style="margin:6px 0 2px"><i style="width:${f.conversionPct}%"></i></div>` : ""}
         <div class="actions-carte">
           ${local ? h`${b(f, "ouvrir", I.ouvrir, "Ouvrir avec le lecteur")}${b(f, "dossier", I.dossier, "Afficher dans le dossier")}` : ""}
           ${b(f, "enregistrer", I.enregistrer, "Enregistrer sur cet appareil")}
@@ -2940,6 +2940,7 @@ $("#contenu").addEventListener("click", async (e) => {
     else if (act === "ouvrir" || act === "dossier") await api("/fichiers/ouvrir", { methode: "POST", corps: { chemin: f.chemin, dossier: act === "dossier" } });
     else if (act === "enregistrer") { const a = document.createElement("a"); a.href = `/api/fichiers/lire?chemin=${encodeURIComponent(f.chemin)}&enregistrer=1`; a.click(); }
     else if (act === "tiktok") {
+      if (f.conversionPct != null) return toast("Conversion déjà en cours…", "info");
       const mode = await choisir(
         `Préparer « ${f.titre} » pour TikTok / Shorts`,
         "Convertit en MP4 H.264 + AAC propre, 1 seule piste audio et purge l'empreinte YouTube.",
@@ -2950,12 +2951,30 @@ $("#contenu").addEventListener("click", async (e) => {
         ]
       );
       if (!mode) return;
-      b.disabled = true;
-      toast("Conversion pour TikTok en cours…", "info");
+      f.conversionPct = 1;
+      rendreListeFichiers();
+      toast("Conversion pour TikTok lancée…", "info");
       const vertical = mode === "std" ? "" : mode;
-      await api("/fichiers/convertir-tiktok", { methode: "POST", corps: { chemin: f.chemin, vertical, remplacer: mode === "std" } });
-      toast("Vidéo prête à publier sur TikTok / YouTube !", "ok");
-      await chargerFichiers();
+      try {
+        await api("/fichiers/convertir-tiktok", { methode: "POST", corps: { chemin: f.chemin, vertical, remplacer: mode === "std", async: true } });
+        while (true) {
+          await new Promise((r) => setTimeout(r, 700));
+          const etat = await api(`/fichiers/convertir-tiktok?chemin=${encodeURIComponent(f.chemin)}`);
+          f.conversionPct = etat.progres ?? f.conversionPct;
+          if (E.vue === "fichiers") rendreListeFichiers();
+          if (!etat.en_cours) {
+            if (etat.erreur) throw new Error(etat.erreur);
+            break;
+          }
+        }
+        f.conversionPct = null;
+        toast("Vidéo prête à publier sur TikTok / YouTube ! ✓", "ok");
+        await chargerFichiers();
+      } catch (err) {
+        f.conversionPct = null;
+        if (E.vue === "fichiers") rendreListeFichiers();
+        throw err;
+      }
     }
     else if (act === "supprimer") {
       const rep = await choisir(`Supprimer « ${f.titre} » ?`, `${taille(f.taille)} seront libérés. Cette action est définitive.`, [["oui", "Supprimer le fichier"]]);

@@ -5,7 +5,16 @@ PORT="${PORT:-5050}"
 URL="http://localhost:$PORT"
 [[ -n "$1" ]] && URL="$URL/?url=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$1")"
 
-if ! curl -fs -o /dev/null "http://127.0.0.1:$PORT/api/etat"; then
+VER_CODE="$(python3 -c 'from nexus import VERSION; print(VERSION)' 2>/dev/null)"
+VER_SERV="$(curl -fs "http://127.0.0.1:$PORT/api/etat" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("version",""))' 2>/dev/null)"
+
+if [[ -n "$VER_SERV" && "$VER_SERV" != "$VER_CODE" ]]; then
+  fuser -k "$PORT/tcp" >/dev/null 2>&1 || true
+  sleep 0.3
+  VER_SERV=""
+fi
+
+if [[ -z "$VER_SERV" ]]; then
   mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}"
   nohup python3 app.py >"${XDG_STATE_HOME:-$HOME/.local/state}/yt-nexus.log" 2>&1 &
   for _ in $(seq 50); do curl -fs -o /dev/null "http://127.0.0.1:$PORT/api/etat" && break; sleep 0.2; done

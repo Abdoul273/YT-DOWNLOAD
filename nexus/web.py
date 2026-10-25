@@ -693,24 +693,39 @@ def supprimer_fichier():
     return jsonify({"ok": True})
 
 
+_conversions_tiktok = {}
+
+
+@api.get("/fichiers/convertir-tiktok")
+def etat_conversion_tiktok():
+    chemin = request.args.get("chemin") or ""
+    return jsonify(_conversions_tiktok.get(chemin) or {"en_cours": False, "progres": 100})
+
+
 @api.post("/fichiers/convertir-tiktok")
 def convertir_fichier_tiktok():
     """Convertit en 1 clic une vidéo locale vers MP4 H.264 + AAC propre (ou 9:16) pour TikTok/Shorts."""
     if not shutil.which("ffmpeg"):
         return _erreur("ffmpeg n'est pas installé.")
     d = _corps()
-    racine, f = _chemin_sur(d.get("chemin"))
+    chemin_rel = d.get("chemin") or ""
+    racine, f = _chemin_sur(chemin_rel)
     if not f.is_file() or f == racine or f.suffix.lower() not in EXT_VIDEO:
         return _erreur("Vidéo introuvable.", 404)
+    if _conversions_tiktok.get(chemin_rel, {}).get("en_cours"):
+        return jsonify({"ok": True, "en_cours": True})
+
     vertical = d.get("vertical") or ""
     remplacer = bool(d.get("remplacer", True))
-    meta = miniatures.infos_fichier(f)
+    meta = miniatures.infos_fichier(f, forcer=True)
     vcodec = meta.get("vcodec") or ""
     acodec = meta.get("acodec") or ""
+    duree_s = max(1, int(meta.get("duree") or 0))
 
-    cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(f), "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn"]
+    cmd = ["ffmpeg", "-y", "-v", "error", "-progress", "pipe:1", "-nostats", "-i", str(f),
+           "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn"]
     if vertical == "flou":
-        cmd += shlex.split(formats.BASE_VIDEO_PUBLIABLE) + ["-filter_complex", formats.FILTRE_VERTICAL_FLOU]
+        cmd += shlex.split(formats.BASE_VIDEO_PUBLIABLE) + ["-vf", formats.FILTRE_VERTICAL_FLOU]
     elif vertical == "recadre":
         cmd += shlex.split(formats.BASE_VIDEO_PUBLIABLE) + ["-vf", formats.FILTRE_VERTICAL_RECADRE]
     elif vcodec in ("h264", "avc1", "avc"):
@@ -729,22 +744,45 @@ def convertir_fichier_tiktok():
     tmp = f.with_name(f".{f.stem}.tiktok.{os.getpid()}.mp4")
     cmd.append(str(tmp))
 
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if r.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
-            err = (r.stderr or "").strip().splitlines()
-            return _erreur(err[-1][:200] if err else "Échec de la conversion ffmpeg.", 500)
-        tmp.replace(cible)
-        if remplacer and not vertical and cible != f and f.exists():
-            f.unlink(missing_ok=True)
+    etat_conv = {"en_cours": True, "progres": 1, "erreur": "", "chemin": str(cible.relative_to(racine))}
+    _conversions_tiktok[chemin_rel] = etat_conv
+
+    def _travail():
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+            for ligne in proc.stdout:
+                if ligne.startswith("out_time_us=") and duree_s > 0:
+                    try:
+                        us = int(ligne.split("=", 1)[1].strip())
+                        etat_conv["progres"] = min(99, max(1, int(us / (duree_s * 1_000_000) * 100)))
+                    except ValueError:
+                        pass
+            _, err_out = proc.communicate(timeout=900)
+            if proc.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
+                lignes_err = (err_out or "").strip().splitlines()
+                etat_conv["erreur"] = lignes_err[-1][:200] if lignes_err else "Échec de la conversion ffmpeg."
+                return
+            tmp.replace(cible)
+            if remplacer and not vertical and cible != f and f.exists():
+                f.unlink(missing_ok=True)
+            miniatures.infos_fichier(cible, forcer=True)
             for t in taches.gestionnaire.taches.values():
                 if t.fichier and Path(t.fichier).resolve() == f:
                     taches.gestionnaire.maj(t, True, fichier=str(cible), taille_fichier=cible.stat().st_size)
-        return jsonify({"ok": True, "chemin": str(cible.relative_to(racine))})
-    except subprocess.TimeoutExpired:
-        return _erreur("Conversion trop longue (délai dépassé).", 504)
-    finally:
-        tmp.unlink(missing_ok=True)
+            etat_conv["progres"] = 100
+        except Exception as e:
+            etat_conv["erreur"] = str(e)[:200]
+        finally:
+            tmp.unlink(missing_ok=True)
+            etat_conv["en_cours"] = False
+
+    if d.get("async", True):
+        threading.Thread(target=_travail, daemon=True).start()
+        return jsonify({"ok": True, "en_cours": True, "chemin": etat_conv["chemin"]})
+    _travail()
+    if etat_conv["erreur"]:
+        return _erreur(etat_conv["erreur"], 500)
+    return jsonify({"ok": True, "en_cours": False, "chemin": etat_conv["chemin"]})
 
 
 @api.post("/fichiers/ouvrir")

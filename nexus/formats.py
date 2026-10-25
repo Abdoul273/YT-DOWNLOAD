@@ -118,6 +118,19 @@ def selecteur(opts, piste, originale, deux_pistes):
     h = str(opts.get("qualite") or "best")
     video = f"bv*[height<={h}]" if h.isdigit() else "bv*"
     choix = []
+    if opts.get("compatible"):
+        h_max = min(int(h), 1080) if h.isdigit() else 1080
+        v_avc = f"bv*[vcodec^=avc][height<={h_max}]"
+        a_aac = f"ba[acodec^=mp4a][language={piste}]" if piste else (
+            f"ba[acodec^=mp4a][language={originale}]" if originale else "ba[acodec^=mp4a]"
+        )
+        choix += [
+            f"{v_avc}+{a_aac}",
+            f"{v_avc}+{audio_voulu}",
+            f"{v_avc}+ba[acodec^=mp4a]",
+            f"{v_avc}+ba",
+            f"b[vcodec^=avc][acodec^=mp4a][height<={h_max}]",
+        ]
     if deux_pistes:
         choix.append(f"{video}+{audio_voulu}+ba[language={originale}]")
     choix += [f"{video}+{audio_voulu}", f"{video}+ba", "b" if not h.isdigit() else f"b[height<={h}]/b"]
@@ -153,16 +166,17 @@ def audio_publiable(a):
 # Réencodage ffmpeg de secours : H.264 High 8 bits 4:2:0, couleurs BT.709 propres,
 # plus grand côté ramené à 1920 px sans jamais agrandir, AAC stéréo 48 kHz.
 BASE_VIDEO_PUBLIABLE = (
-    "-c:v libx264 -preset veryfast -crf 20 -profile:v high -level:v 4.2 -pix_fmt yuv420p "
+    "-c:v libx264 -preset ultrafast -crf 20 -profile:v high -level:v 4.2 -pix_fmt yuv420p "
     "-color_primaries bt709 -color_trc bt709 -colorspace bt709"
 )
 FILTRE_ECHELLE_PUBLIABLE = (
     "scale=w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2"
 )
 FILTRE_VERTICAL_FLOU = (
-    "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bg];"
-    "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
-    "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"
+    "split[bg][fg];"
+    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bg2];"
+    "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg2];"
+    "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,setsar=1"
 )
 FILTRE_VERTICAL_RECADRE = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1"
 ARGS_VIDEO_PUBLIABLE = f'{BASE_VIDEO_PUBLIABLE} -vf "{FILTRE_ECHELLE_PUBLIABLE}"'
@@ -173,7 +187,7 @@ def args_conversion_publiable(conv_video=False, conv_audio=False, vertical="", s
     """Arguments ffmpeg pour CopyStream (conversion H.264/AAC, format 9:16 et purge métadonnées)."""
     args = []
     if vertical == "flou":
-        args.append(f'{BASE_VIDEO_PUBLIABLE} -filter_complex "{FILTRE_VERTICAL_FLOU}"')
+        args.append(f'{BASE_VIDEO_PUBLIABLE} -vf "{FILTRE_VERTICAL_FLOU}"')
     elif vertical == "recadre":
         args.append(f'{BASE_VIDEO_PUBLIABLE} -vf "{FILTRE_VERTICAL_RECADRE}"')
     elif conv_video:
