@@ -7,10 +7,8 @@ On en déduit un profil (chaînes, mots-clés, thématiques aimées), puis on va
 des candidats multi-sources — mix YouTube des vidéos favorites, nouveautés des chaînes,
 recherches sur les centres d'intérêt, tendances — classés et diversifiés.
 """
-import copy
 import json
 import math
-import os
 import random
 import re
 import threading
@@ -353,19 +351,15 @@ class GestionnaireGouts:
                 p = self.profil()
                 rnd = random.Random()
                 candidats = []
+                requetes_paralleles = []
 
                 # 1. Mix YouTube des vidéos aimées (tirage pondéré)
                 graines_retenues = self._tirage(p.graines, 3, rnd)
                 for g_sig, _ in graines_retenues:
                     gid = g_sig.get("id")
                     if gid:
-                        try:
-                            mix_url = f"https://www.youtube.com/watch?v={gid}&list=RD{gid}"
-                            vids = analyse.rechercher(mix_url, nombre=20)
-                            for r_idx, v in enumerate(vids):
-                                candidats.append((v, "mix", r_idx))
-                        except Exception:
-                            pass
+                        mix_url = f"https://www.youtube.com/watch?v={gid}&list=RD{gid}"
+                        requetes_paralleles.append(("mix", mix_url, None, 20))
 
                 # 2. Nouveautés des chaînes préférées
                 chaines_top = sorted(
@@ -376,34 +370,39 @@ class GestionnaireGouts:
                     nom_c = p.noms_chaines.get(c_key, c_key)
                     cid = p.ids_chaines.get(c_key)
                     url = f"https://www.youtube.com/channel/{cid}/videos" if cid else f"ytsearch10:{nom_c}"
-                    try:
-                        vids = analyse.rechercher(url, nombre=10)
-                        for r_idx, v in enumerate(vids):
-                            candidats.append((v, "chaine", r_idx))
-                    except Exception:
-                        pass
+                    requetes_paralleles.append(("chaine", url, None, 10))
 
                 # 3. Centres d'intérêt (recherches et mots forts)
                 interets = p.interets(6)
                 rnd.shuffle(interets)
                 for q in interets[:3]:
-                    try:
-                        vids = analyse.rechercher(q, filtres={"date": "mois"}, nombre=12)
-                        for r_idx, v in enumerate(vids):
-                            candidats.append((v, "interet", r_idx))
-                    except Exception:
-                        pass
+                    requetes_paralleles.append(("interet", q, {"date": "mois"}, 12))
 
-                # 4. Tendances
-                tendances_vids = []
-                if force or not self.tendances or (self._maintenant() - self._maj_tendances > 3 * 3600):
-                    tendances_vids = self._chercher_tendances()
-                    if tendances_vids:
-                        with self._verrou:
-                            self.tendances = tendances_vids
-                            self._maj_tendances = self._maintenant()
-                else:
-                    tendances_vids = self.tendances
+                # 4. Tendances + exécution parallèle de toutes les requêtes
+                besoin_tendances = force or not self.tendances or (self._maintenant() - self._maj_tendances > 3 * 3600)
+
+                def _exec_req(item):
+                    src, q_ou_url, flt, nb = item
+                    try:
+                        return src, analyse.rechercher(q_ou_url, filtres=flt, nombre=nb)
+                    except Exception:
+                        return src, []
+
+                with ThreadPoolExecutor(max_workers=6) as pool:
+                    fut_tendances = pool.submit(self._chercher_tendances) if besoin_tendances else None
+                    futs = [pool.submit(_exec_req, item) for item in requetes_paralleles]
+                    for fut in as_completed(futs):
+                        src, vids = fut.result()
+                        for r_idx, v in enumerate(vids):
+                            candidats.append((v, src, r_idx))
+                    if fut_tendances is not None:
+                        tendances_vids = fut_tendances.result()
+                        if tendances_vids:
+                            with self._verrou:
+                                self.tendances = tendances_vids
+                                self._maj_tendances = self._maintenant()
+                    else:
+                        tendances_vids = self.tendances
 
                 for r_idx, v in enumerate(tendances_vids):
                     candidats.append((v, "tendance", r_idx))
@@ -512,17 +511,20 @@ class GestionnaireGouts:
         ]
         random.shuffle(sujets)
         filtre = {"date": "semaine", "tri": "vues"}
-        listes = []
-        for s in sujets[:3]:
+
+        def _rech_sujet(s):
             try:
-                listes.append(analyse.rechercher(s, filtres=filtre, nombre=12))
+                return analyse.rechercher(s, filtres=filtre, nombre=12)
             except Exception:
-                pass
+                return []
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            listes = [lst for lst in pool.map(_rech_sujet, sujets[:3]) if lst]
         res = []
         for i in range(12):
-            for l in listes:
-                if i < len(l):
-                    res.append(l[i])
+            for lst in listes:
+                if i < len(lst):
+                    res.append(lst[i])
         # Déduplication
         vus = set()
         uniques = []

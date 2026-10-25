@@ -459,6 +459,14 @@ function carteVideo(v) {
 
     <div class="verre panneau anim" style="--i:2">
       ${v.direct ? h`<div class="etape"><div class="alerte">${brut(I.alerte)}<span>C'est un <b>direct en cours</b> : attends la fin du live pour le télécharger.</span></div></div>` : ""}
+      ${v.doublon ? h`<div class="etape"><div class="alerte info" style="align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px">${brut(I.ok)}<span>${v.doublon.etat === "termine"
+          ? h`<b>Déjà téléchargée sur ton disque</b>${v.doublon.pistes ? ` (${v.doublon.pistes})` : ""}${v.doublon.taille_fichier ? ` · ${taille(v.doublon.taille_fichier)}` : ""}. Tu peux la lire ou télécharger une autre version.`
+          : h`<b>Déjà présente dans la file</b> (${LIBELLES[v.doublon.etat] || v.doublon.etat}).`}</span></div>
+        ${v.doublon.etat === "termine" && v.doublon.fichier
+          ? h`<button type="button" class="btn petit principal" data-action="lire-doublon">${brut(I.lecture)} Lire le fichier</button>`
+          : h`<button type="button" class="btn petit secondaire" data-aller="en-cours">${brut(I.liste)} Voir la file</button>`}
+      </div></div>` : ""}
       <div class="etape">
         ${tete(I.type, "Que veux-tu télécharger ?")}
         <div class="segment">
@@ -658,6 +666,8 @@ function cartePlaylist(p) {
 }
 
 let videoApercue = null;
+let modeApercu = "direct"; // "direct" | "iframe"
+let reqApercuId = 0;
 
 function idVideo(url) {
   if (!url) return "";
@@ -692,6 +702,108 @@ async function chargerGouts(force = false) {
     E.gouts.chargement = false;
   } finally {
     if (E.vue === "recherche" && !P().resultat) rafraichirResultat();
+  }
+}
+
+function chargerApercuIframe(video) {
+  modeApercu = "iframe";
+  const btnMode = $("#btn-secours-mode");
+  if (btnMode) btnMode.textContent = "⚡ Flux direct (sans blocage)";
+  const infoZone = $("#apercu-secours-info");
+  if (infoZone) {
+    infoZone.innerHTML = html(h`<span class="pastille-info">YouTube</span><span>Si YouTube affiche une erreur (150/153), clique sur <b>Flux direct</b> à droite.</span>`);
+  }
+  const cadre = $("#apercu-media-cadre");
+  if (!cadre) return;
+  cadre.innerHTML = "";
+  const ytId = video.id || idVideo(video.url);
+  if (ytId) {
+    const iframe = document.createElement("iframe");
+    iframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&feature=oembed&rel=0&playsinline=1`;
+    iframe.title = video.titre || "Aperçu YouTube";
+    iframe.referrerPolicy = "no-referrer-when-downgrade";
+    iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+    iframe.allowFullscreen = true;
+    cadre.appendChild(iframe);
+  }
+}
+
+async function chargerApercuDirect(video, langue = "") {
+  modeApercu = "direct";
+  const jeton = ++reqApercuId;
+  const btnMode = $("#btn-secours-mode");
+  if (btnMode) btnMode.textContent = "Lecteur YouTube";
+  const cadre = $("#apercu-media-cadre");
+  if (!cadre) return;
+
+  const ytId = video.id || idVideo(video.url);
+  const videoUrl = video.url || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : "");
+  if (!videoUrl) return chargerApercuIframe(video);
+
+  cadre.innerHTML = html(h`
+    <div style="position:relative;width:100%;height:100%;display:grid;place-items:center;background:#08090f;color:#fff;overflow:hidden">
+      ${video.miniature ? h`<img src="${video.miniature}" alt="" referrerpolicy="no-referrer" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(18px) brightness(0.35);transform:scale(1.08)" />` : ""}
+      <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px;text-align:center">
+        <span class="rond"></span>
+        <span style="font-weight:700;font-size:.95rem">Ouverture du flux direct sans blocage…</span>
+        <span class="muet petit">Extraction de la vidéo et des pistes audio doublées</span>
+      </div>
+    </div>`);
+
+  try {
+    const qs = `url=${encodeURIComponent(videoUrl)}${langue ? `&langue=${encodeURIComponent(langue)}` : ""}`;
+    const res = await api(`/apercu-flux?${qs}`);
+    if (jeton !== reqApercuId || !videoApercue) return;
+
+    cadre.innerHTML = "";
+    const v = document.createElement("video");
+    v.controls = true;
+    v.autoplay = true;
+    v.playsInline = true;
+    v.style.cssText = "width:100%;height:100%;background:#000;outline:none";
+
+    if (res.mode === "separe" && res.video_url && res.audio_url) {
+      v.src = res.video_url;
+      const a = document.createElement("audio");
+      a.src = res.audio_url;
+      a.preload = "auto";
+      const sync = () => {
+        if (Math.abs(v.currentTime - a.currentTime) > 0.28) a.currentTime = v.currentTime;
+      };
+      v.addEventListener("play", () => { sync(); a.play().catch(() => {}); });
+      v.addEventListener("pause", () => a.pause());
+      v.addEventListener("seeking", () => { a.currentTime = v.currentTime; });
+      v.addEventListener("seeked", () => { a.currentTime = v.currentTime; if (!v.paused) a.play().catch(() => {}); });
+      v.addEventListener("waiting", () => a.pause());
+      v.addEventListener("playing", () => { sync(); a.play().catch(() => {}); });
+      v.addEventListener("ratechange", () => { a.playbackRate = v.playbackRate; });
+      v.addEventListener("volumechange", () => { a.muted = v.muted; a.volume = v.volume; });
+      v.addEventListener("timeupdate", sync);
+      cadre.append(v, a);
+    } else if (res.mixte_url || res.video_url) {
+      v.src = res.mixte_url || res.video_url;
+      cadre.appendChild(v);
+    } else {
+      return chargerApercuIframe(video);
+    }
+
+    const infoZone = $("#apercu-secours-info");
+    if (infoZone) {
+      if (res.pistes && res.pistes.length > 1) {
+        infoZone.innerHTML = html(h`
+          <span class="pastille-info">Audio</span>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            ${res.pistes.slice(0, 6).map((p) => h`
+              <button type="button" class="btn petit ${p.code === res.piste_active ? "principal" : "secondaire"}" data-apercu-langue="${p.code}" style="padding:3px 9px;font-size:.76rem">
+                ${p.drapeau} ${p.nom}${p.originale ? " (VO)" : ""}
+              </button>`)}
+          </div>`);
+      } else {
+        infoZone.innerHTML = html(h`<span class="pastille-info">Flux direct</span><span>Lecture directe active (sans restriction d'intégration YouTube).</span>`);
+      }
+    }
+  } catch {
+    if (jeton === reqApercuId && videoApercue) chargerApercuIframe(video);
   }
 }
 
@@ -735,33 +847,19 @@ function ouvrirApercu(video) {
   const lienSecours = $("#btn-secours-yt");
   if (lienSecours) lienSecours.href = videoUrl || "#";
 
-  const cadre = $("#apercu-media-cadre");
-  cadre.innerHTML = "";
-
-  if (ytId) {
-    const iframe = document.createElement("iframe");
-    iframe.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&feature=oembed&rel=0&playsinline=1`;
-    iframe.title = video.titre || "Aperçu YouTube";
-    iframe.referrerPolicy = "no-referrer-when-downgrade";
-    iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
-    iframe.allowFullscreen = true;
-    cadre.appendChild(iframe);
-  } else if (video.url) {
-    const v = document.createElement("video");
-    v.src = video.url;
-    v.controls = true;
-    v.autoplay = true;
-    cadre.appendChild(v);
-  }
-
   d.showModal();
+  chargerApercuDirect(video);
 }
 
 function fermerApercu() {
+  reqApercuId++;
   const d = $("#modale-apercu");
   if (!d) return;
   const cadre = $("#apercu-media-cadre");
-  if (cadre) cadre.innerHTML = "";
+  if (cadre) {
+    $$("video, audio", cadre).forEach((m) => { try { m.pause(); m.removeAttribute("src"); m.load(); } catch {} });
+    cadre.innerHTML = "";
+  }
   if (d.open) d.close();
   videoApercue = null;
 }
@@ -1204,6 +1302,7 @@ $("#contenu").addEventListener("click", (e) => {
   const a = el.dataset.action;
   if (a === "toutes-langues") { P().toutesLangues = !P().toutesLangues; return rafraichirResultat(); }
   if (a === "ouvrir-playlist") { E.p.playlist.saisie = r.playlist; aller("playlist"); return analyser(r.playlist, "playlist"); }
+  if (a === "lire-doublon" && r?.doublon?.fichier) { return lireChemin(r.doublon.fichier, r.doublon.titre || r.titre); }
   if (a === "telecharger") return envoyer([{ url: r.url, titre: r.titre, miniature: r.miniature, chaine: r.chaine, duree: r.duree }], el);
   if (a === "telecharger-selection") {
     const groupe = r.type === "playlist" ? r.titre : null;
@@ -1246,7 +1345,15 @@ const FILTRES = {
   pause: [(t) => t.statut === "pause", "En pause"],
   echecs: [(t) => ["erreur", "annule"].includes(t.statut), "Échecs"],
 };
-const tachesFile = () => [...E.taches.values()].filter((t) => t.statut !== "termine").sort((a, b) => a.cree - b.cree);
+const tachesFile = () => [...E.taches.values()].filter((t) => t.statut !== "termine").sort((a, b) => {
+  const actA = ACTIFS.has(a.statut) ? 1 : 0;
+  const actB = ACTIFS.has(b.statut) ? 1 : 0;
+  if (actA !== actB) return actB - actA;
+  const prioA = a.priorite || 0;
+  const prioB = b.priorite || 0;
+  if (prioA !== prioB) return prioB - prioA;
+  return a.cree - b.cree;
+});
 
 function vueFile() {
   const toutes = tachesFile();
@@ -1281,6 +1388,7 @@ const pourcent = (t) => (["telechargement", "pause", "traitement", "attente_rela
 function boutonsTache(t) {
   const b = (action, icone, titre, cls = "") => h`<button class="icone-btn ${cls}" data-t="${t.id}" data-act="${action}" title="${titre}" aria-label="${titre}">${brut(icone)}</button>`;
   const r = [];
+  if (["en_attente", "programme", "pause"].includes(t.statut)) r.push(b("prioriser", I.eclair, "Passer en premier (prioritaire)", "accent"));
   if (ACTIFS.has(t.statut) || ["en_attente", "programme"].includes(t.statut)) r.push(b("pause", I.pause, "Mettre en pause"));
   if (t.statut === "pause") r.push(b("reprendre", I.lecture, "Reprendre", "accent"));
   if (["erreur", "annule"].includes(t.statut)) r.push(b("relancer", I.relancer, "Réessayer", "accent"));
@@ -1305,6 +1413,7 @@ function carteTache(t, i = 0) {
       <h4 title="${t.titre}">${t.titre}</h4>
       <div class="sous-ligne">
         <span class="statut ${t.statut}"><span class="point"></span>${LIBELLES[t.statut] || t.statut}</span>
+        ${t.priorite > 0 && t.statut !== "termine" ? h`<span class="info-chip" style="color:var(--ambre);border-color:rgba(245,158,11,.35)">⚡ Prioritaire</span>` : ""}
         ${t.options?.type === "audio" ? h`<span class="info-chip">${(t.options.format_audio || "mp3").toUpperCase()}</span>` : ""}
         ${t.pistes ? h`<span class="info-chip">${t.pistes}</span>` : ""}
         ${t.groupe ? h`<span class="info-chip">${brut(I.liste.replace("<svg", '<svg style="width:12px;height:12px"'))}${t.groupe}</span>` : ""}
@@ -1325,7 +1434,7 @@ function carteTache(t, i = 0) {
 function majCarte(t, ancien) {
   const el = document.getElementById(`t-${t.id}`);
   if (!el) return false;
-  if (!ancien || ancien.statut !== t.statut || ancien.message !== t.message || ancien.erreur !== t.erreur || ancien.pistes !== t.pistes || ancien.titre !== t.titre || ancien.miniature !== t.miniature) {
+  if (!ancien || ancien.statut !== t.statut || ancien.priorite !== t.priorite || ancien.message !== t.message || ancien.erreur !== t.erreur || ancien.pistes !== t.pistes || ancien.titre !== t.titre || ancien.miniature !== t.miniature) {
     const tmp = document.createElement("div");
     tmp.innerHTML = html(carteTache(t));
     tmp.firstElementChild.classList.remove("anim");
@@ -1358,7 +1467,10 @@ $("#contenu").addEventListener("click", async (e) => {
   if (!t) return;
   const act = b.dataset.act;
   try {
-    if (["pause", "reprendre", "annuler", "relancer"].includes(act)) await api(`/telechargements/${t.id}/${act}`, { methode: "POST" });
+    if (["pause", "reprendre", "annuler", "relancer", "prioriser"].includes(act)) {
+      await api(`/telechargements/${t.id}/${act}`, { methode: "POST" });
+      if (act === "prioriser") toast("Placé en tête de file ⚡", "ok");
+    }
     else if (act === "lire") lire(t);
     else if (act === "retelecharger") { E.p.video.saisie = t.url; aller("video"); analyser(t.url, "video"); }
     else if (act === "ouvrir" || act === "dossier") await api(`/ouvrir/${t.id}`, { methode: "POST", corps: { dossier: act === "dossier" } });
@@ -3135,7 +3247,8 @@ function appliquer(maj) {
     if (E.vue === "en-cours") {
       const visible = t.statut !== "termine" && FILTRES[E.filtre][0](t);
       const avant = ancien && ancien.statut !== "termine" && FILTRES[E.filtre][0](ancien);
-      if (visible ? !majCarte(t, ancien) : avant) structure = true;
+      if (ancien && (ancien.priorite || 0) !== (t.priorite || 0)) structure = true;
+      else if (visible ? !majCarte(t, ancien) : avant) structure = true;
     } else if (E.vue === "historique" && (["termine", "erreur", "annule"].includes(t.statut) || ["termine", "erreur", "annule"].includes(ancien?.statut))) structure = true;
   }
   for (const id of maj.supprimees || []) if (E.taches.delete(id)) structure = true;
@@ -3237,6 +3350,17 @@ function initModaleApercu() {
   };
   $("#btn-apercu-telecharger")?.addEventListener("click", allerTelecharger);
   $("#btn-secours-analyser")?.addEventListener("click", allerTelecharger);
+  $("#btn-secours-mode")?.addEventListener("click", () => {
+    if (!videoApercue) return;
+    if (modeApercu === "direct") chargerApercuIframe(videoApercue);
+    else chargerApercuDirect(videoApercue);
+  });
+  $("#apercu-secours-info")?.addEventListener("click", (e) => {
+    const btnLang = e.target.closest("[data-apercu-langue]");
+    if (btnLang && videoApercue) {
+      chargerApercuDirect(videoApercue, btnLang.dataset.apercuLangue);
+    }
+  });
   $("#btn-apercu-pas-interesse")?.addEventListener("click", () => {
     if (videoApercue) {
       const v = videoApercue;

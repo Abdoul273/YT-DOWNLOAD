@@ -7,8 +7,11 @@ import shutil
 import subprocess
 import sys
 import threading
+import urllib.error
+import urllib.request
 from importlib import metadata
 from pathlib import Path
+from urllib.parse import quote
 
 from flask import Blueprint, Flask, Response, abort, jsonify, request, send_file, stream_with_context
 
@@ -196,6 +199,85 @@ def gouts_oublier_recherche():
     return jsonify({"ok": True})
 
 
+@api.get("/apercu-flux")
+def apercu_flux():
+    url = (request.args.get("url") or "").strip()
+    langue = (request.args.get("langue") or "").strip() or None
+    if not url:
+        return _erreur("URL manquante.")
+    try:
+        d = analyse.flux_direct(url, langue)
+    except analyse.ErreurAnalyse as e:
+        return _erreur(str(e), 422)
+    q_url = quote(url, safe="")
+    q_lang = quote(d["piste_active"] or "", safe="")
+    return jsonify({
+        "id": d["id"],
+        "titre": d["titre"],
+        "duree": d["duree"],
+        "pistes": d["pistes"],
+        "originale": d["originale"],
+        "piste_active": d["piste_active"],
+        "mode": d["mode"],
+        "mixte_url": f"/api/apercu-flux/media?url={q_url}&langue={q_lang}&flux=mixte" if d["mixte_url"] else None,
+        "video_url": f"/api/apercu-flux/media?url={q_url}&langue={q_lang}&flux=video" if d["video_url"] else None,
+        "audio_url": f"/api/apercu-flux/media?url={q_url}&langue={q_lang}&flux=audio" if d["audio_url"] else None,
+    })
+
+
+@api.get("/apercu-flux/media")
+def apercu_flux_media():
+    url = (request.args.get("url") or "").strip()
+    langue = (request.args.get("langue") or "").strip() or None
+    flux = request.args.get("flux") or "mixte"
+    if not url:
+        abort(400)
+    try:
+        d = analyse.flux_direct(url, langue)
+    except analyse.ErreurAnalyse:
+        abort(404)
+
+    cible = d["video_url"] if flux == "video" else d["audio_url"] if flux == "audio" else d["mixte_url"]
+    mime_defaut = d["video_mime"] if flux == "video" else d["audio_mime"] if flux == "audio" else d["mixte_mime"]
+    if not cible:
+        abort(404)
+
+    entetes = dict(d.get("headers") or {})
+    if "Range" in request.headers:
+        entetes["Range"] = request.headers["Range"]
+
+    req = urllib.request.Request(cible, headers=entetes)
+    try:
+        amont = urllib.request.urlopen(req, timeout=15)
+    except urllib.error.HTTPError as e:
+        return Response(status=e.code)
+    except Exception:
+        abort(502)
+
+    code_statut = getattr(amont, "status", 200)
+    rep_entetes = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=600"}
+    for h in ("Content-Length", "Content-Range"):
+        val = amont.headers.get(h)
+        if val:
+            rep_entetes[h] = val
+    type_mime = amont.headers.get("Content-Type") or mime_defaut
+
+    def generer():
+        try:
+            while True:
+                bloc = amont.read(65536)
+                if not bloc:
+                    break
+                yield bloc
+        finally:
+            try:
+                amont.close()
+            except Exception:
+                pass
+
+    return Response(stream_with_context(generer()), status=code_statut, mimetype=type_mime, headers=rep_entetes)
+
+
 # ── téléchargements ─────────────────────────────────────────────────
 OPTIONS_PERMISES = {
     "type", "qualite", "conteneur", "compatible", "sans_trace", "vertical", "decoupe",
@@ -230,7 +312,10 @@ def ajouter():
 @api.post("/telechargements/<id_>/<action>")
 def agir(id_, action):
     g = taches.gestionnaire
-    actions = {"pause": g.pause, "reprendre": g.reprendre, "annuler": g.annuler, "relancer": g.relancer}
+    actions = {
+        "pause": g.pause, "reprendre": g.reprendre,
+        "annuler": g.annuler, "relancer": g.relancer, "prioriser": g.prioriser,
+    }
     if action not in actions:
         abort(404)
     try:

@@ -43,12 +43,22 @@ PHASES_PP = {
 CHAMPS_SAUVES = (
     "id", "url", "titre", "miniature", "chaine", "duree", "groupe", "options", "statut",
     "progression", "telecharge", "total", "message", "erreur", "fichier", "taille_fichier",
-    "pistes", "cree", "fin", "programme", "tentatives", "phase",
+    "pistes", "cree", "fin", "programme", "tentatives", "phase", "priorite",
 )
 
 
 def _maintenant():
     return time.time()
+
+
+def _id_video(url_ou_id):
+    s = (url_ou_id or "").strip()
+    if not s:
+        return None
+    if re.fullmatch(r"[\w-]{11}", s):
+        return s
+    m = re.search(r"(?:v=|/shorts/|youtu\.be/|/embed/)([\w-]{11})", s)
+    return m.group(1) if m else None
 
 
 class Tache:
@@ -63,6 +73,7 @@ class Tache:
         self.groupe = groupe
         self.statut = "programme" if options.get("programme") else "en_attente"
         self.programme = options.get("programme")
+        self.priorite = int(options.get("priorite") or 0)
         self.progression = 0.0
         self.vitesse = 0
         self.eta = None
@@ -165,14 +176,58 @@ class Gestionnaire:
         miniatures.garder_toutes(t.miniature for t in self.taches.values())
 
     # ── actions ───────────────────────────────────────────────────────
+    def chercher_doublon(self, url_ou_id):
+        """Vérifie si la vidéo est déjà téléchargée (sur disque) ou déjà dans la file."""
+        vid = _id_video(url_ou_id)
+        cible_url = (url_ou_id or "").strip()
+        with self.verrou:
+            taches = list(self.taches.values())
+
+        def _meme(t):
+            if vid and _id_video(t.url) == vid:
+                return True
+            return bool(cible_url and t.url == cible_url)
+
+        # 1. Déjà terminé avec fichier présent sur le disque
+        for t in reversed(taches):
+            if t.statut == "termine" and t.fichier and _meme(t) and Path(t.fichier).is_file():
+                return {
+                    "etat": "termine", "id": t.id, "titre": t.titre,
+                    "fichier": t.fichier, "taille_fichier": t.taille_fichier,
+                    "pistes": t.pistes, "fin": t.fin,
+                }
+        # 2. En cours ou en attente dans la file
+        for t in reversed(taches):
+            if t.statut in (ACTIFS | {"pause"}) and _meme(t):
+                return {"etat": t.statut, "id": t.id, "titre": t.titre}
+        # 3. Fichier présent dans le dossier de téléchargement avec [id]
+        if vid:
+            try:
+                dossier = config.dossier_telechargement()
+                marqueur = f"[{vid}]"
+                for f in dossier.iterdir():
+                    if f.is_file() and marqueur in f.name and not f.name.endswith((".part", ".ytdl", ".srt", ".vtt")):
+                        st = f.stat()
+                        return {
+                            "etat": "termine", "id": None, "titre": f.stem,
+                            "fichier": str(f), "taille_fichier": st.st_size,
+                            "pistes": "", "fin": st.st_mtime,
+                        }
+            except OSError:
+                pass
+        return None
+
     def ajouter(self, elements, options):
         nouvelles = []
         with self.verrou:
             for e in elements:
                 if not e.get("url"):
                     continue
+                doublon = self.chercher_doublon(e["url"])
                 t = Tache(e["url"], dict(options), e.get("titre"), e.get("miniature"),
                           e.get("chaine"), e.get("duree"), e.get("groupe"))
+                if doublon and doublon["etat"] == "termine":
+                    t.message = "Déjà téléchargée (nouvelle copie)"
                 self.taches[t.id] = t
                 nouvelles.append(t)
                 self._touche(t)
@@ -185,6 +240,22 @@ class Gestionnaire:
         if not t:
             raise KeyError(id_)
         return t
+
+    def prioriser(self, id_):
+        with self.verrou:
+            t = self._get(id_)
+            if t.statut == "termine":
+                return
+            max_p = max((getattr(x, "priorite", 0) for x in self.taches.values()), default=0)
+            champs = {"priorite": max_p + 1, "arret": None}
+            if t.statut in ("pause", "erreur", "annule", "programme"):
+                if t.statut != "pause":
+                    t.tentatives = 0
+                    t.progression = 0
+                champs.update(statut="en_attente", erreur="", phase="", programme=None, message="Prioritaire · en tête de file")
+            elif t.statut == "en_attente":
+                champs["message"] = "Prioritaire · en tête de file"
+            self.maj(t, True, **champs)
 
     def pause(self, id_):
         t = self._get(id_)
@@ -301,15 +372,18 @@ class Gestionnaire:
                     for t in self.taches.values():
                         if t.statut == "programme" and (t.programme or 0) <= maintenant:
                             self.maj(t, statut="en_attente")
-                    for t in self.taches.values():
+                    attente = sorted(
+                        (t for t in self.taches.values() if t.statut == "en_attente"),
+                        key=lambda x: (-getattr(x, "priorite", 0), x.cree),
+                    )
+                    for t in attente:
                         if actives >= max_:
                             break
-                        if t.statut == "en_attente":
-                            t.statut, t.arret = "analyse", None
-                            t.reveil.clear()
-                            self._touche(t)
-                            actives += 1
-                            threading.Thread(target=self._executer, args=(t,), daemon=True).start()
+                        t.statut, t.arret = "analyse", None
+                        t.reveil.clear()
+                        self._touche(t)
+                        actives += 1
+                        threading.Thread(target=self._executer, args=(t,), daemon=True).start()
             except Exception:  # le répartiteur ne doit jamais mourir
                 time.sleep(2)
 

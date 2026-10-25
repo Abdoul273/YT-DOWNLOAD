@@ -139,14 +139,18 @@ def playlist_associee(url):
 
 
 def resume_video(info):
+    from . import taches
     pistes = formats.pistes_audio(info)
     originale = formats.langue_originale(info, pistes)
     r = config.lire_reglages()
     voulue = formats.trouver_piste(pistes, r["langue_audio"])
     qual, taille_audio = formats.qualites(info, voulue or originale)
+    url_vid = info.get("webpage_url") or info.get("original_url")
+    gest = getattr(taches, "gestionnaire", None)
+    doublon = gest.chercher_doublon(info.get("id") or url_vid) if gest else None
     return {
         "type": "video",
-        "id": info.get("id"), "url": info.get("webpage_url") or info.get("original_url"),
+        "id": info.get("id"), "url": url_vid,
         "titre": info.get("title"), "chaine": info.get("channel") or info.get("uploader"),
         "chaine_url": info.get("channel_url") or info.get("uploader_url"),
         "duree": info.get("duration"), "vues": info.get("view_count"),
@@ -160,6 +164,81 @@ def resume_video(info):
         "qualites": qual, "taille_audio": taille_audio,
         "sous_titres": formats.sous_titres_dispo(info),
         "playlist": playlist_associee(info.get("original_url") or ""),
+        "doublon": doublon,
+    }
+
+
+def flux_direct(url, langue=None):
+    """Sélectionne les flux HTTP directs (mixte ou vidéo+audio séparés) pour l'aperçu sans blocage."""
+    url = normaliser_url(url)
+    info = info_complete(url)
+    pistes = formats.pistes_audio(info)
+    originale = formats.langue_originale(info, pistes)
+    pref = langue or config.lire_reglages().get("langue_audio") or "fr"
+    cible = formats.trouver_piste(pistes, pref) if pref != "original" else originale
+    code_actif = cible or originale
+    entetes = info.get("http_headers") or {}
+
+    fmts = [
+        f for f in (info.get("formats") or [])
+        if (f.get("url") or "").startswith("http")
+        and (f.get("protocol") or "https") in ("https", "http")
+    ]
+
+    mixtes = [
+        f for f in fmts
+        if f.get("vcodec") not in (None, "none") and f.get("acodec") not in (None, "none")
+    ]
+    mixtes_lang = [
+        f for f in mixtes
+        if not code_actif or not f.get("language") or f.get("language") == code_actif
+        or (code_actif == originale and not f.get("language"))
+    ]
+    mixtes_lang.sort(key=lambda f: (f.get("ext") == "mp4", f.get("height") or 0, f.get("tbr") or 0))
+    meilleur_mixte = mixtes_lang[-1] if mixtes_lang else None
+
+    videos = [
+        f for f in fmts
+        if f.get("vcodec") not in (None, "none") and f.get("acodec") in (None, "none")
+        and (f.get("height") or 0) <= 720
+        and any((f.get("vcodec") or "").startswith(p) for p in ("avc1", "h264", "vp9", "vp09"))
+    ]
+    videos.sort(key=lambda f: ((f.get("vcodec") or "").startswith("avc1"), f.get("height") or 0, f.get("tbr") or 0))
+    meilleure_video = videos[-1] if videos else None
+
+    audios = [
+        f for f in fmts
+        if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
+        and (not code_actif or f.get("language") == code_actif or (code_actif == originale and not f.get("language")))
+    ]
+    if not audios:
+        audios = [f for f in fmts if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")]
+    audios.sort(key=lambda f: (f.get("ext") in ("m4a", "mp4"), f.get("abr") or f.get("tbr") or 0))
+    meilleur_audio = audios[-1] if audios else None
+
+    besoin_separe = bool(
+        cible and originale and cible != originale
+        and (not meilleur_mixte or meilleur_mixte.get("language") != cible)
+        and meilleure_video and meilleur_audio
+    )
+    if not meilleur_mixte and not (meilleure_video and meilleur_audio):
+        meilleur_mixte = mixtes[-1] if mixtes else None
+
+    return {
+        "id": info.get("id"),
+        "titre": info.get("title"),
+        "duree": info.get("duration"),
+        "pistes": pistes,
+        "originale": originale,
+        "piste_active": code_actif,
+        "mode": "separe" if (besoin_separe or (not meilleur_mixte and meilleure_video and meilleur_audio)) else "mixte",
+        "mixte_url": meilleur_mixte["url"] if meilleur_mixte else None,
+        "mixte_mime": f"video/{meilleur_mixte.get('ext') or 'mp4'}" if meilleur_mixte else "video/mp4",
+        "video_url": meilleure_video["url"] if meilleure_video else None,
+        "video_mime": f"video/{meilleure_video.get('ext') or 'mp4'}" if meilleure_video else "video/mp4",
+        "audio_url": meilleur_audio["url"] if meilleur_audio else None,
+        "audio_mime": "audio/mp4" if (meilleur_audio and meilleur_audio.get("ext") in ("m4a", "mp4")) else "audio/webm",
+        "headers": entetes,
     }
 
 

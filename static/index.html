@@ -313,18 +313,21 @@
       <div class="apercu-video-conteneur">
         <div class="apercu-video-cadre" id="apercu-media-cadre"></div>
         <div class="apercu-secours-barre">
-          <div class="apercu-secours-info">
-            <span class="pastille-info">Info</span>
-            <span>Si YouTube limite la lecture intégrée locale, regarde en 1 clic sur YouTube ou lance l'analyse complète.</span>
+          <div class="apercu-secours-info" id="apercu-secours-info">
+            <span class="pastille-info">Flux direct</span>
+            <span id="apercu-secours-texte">Lecture directe sans erreur YouTube (150/153) avec doublages audio.</span>
           </div>
           <div class="apercu-secours-actions">
+            <button class="btn petit secondaire" id="btn-secours-mode" type="button" title="Basculer entre le flux direct et le lecteur intégré YouTube">
+              Lecteur YouTube
+            </button>
             <a class="btn petit secondaire" id="btn-secours-yt" target="_blank" rel="noopener noreferrer">
               <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;color:#ff3333"><path d="m10 15 5-3-5-3v6z"/><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/></svg>
-              Ouvrir sur YouTube
+              YouTube
             </a>
-            <button class="btn petit principal" id="btn-secours-analyser">
+            <button class="btn petit principal" id="btn-secours-analyser" type="button">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="m10 8 6 4-6 4z"/><circle cx="12" cy="12" r="10"/></svg>
-              Lecteur & Doublages FR
+              Qualité & Télécharger
             </button>
           </div>
         </div>
@@ -391,6 +394,6 @@
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
   <div class="deposer" id="deposer" hidden>Dépose le lien ici</div>
-  <script type="module" src="/static/app.js?v=2.4"></script>
+  <script type="module" src="/static/app.js?v=2.5"></script>
 </body>
 </html>

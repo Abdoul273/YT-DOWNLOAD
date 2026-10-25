@@ -62,3 +62,41 @@ def test_mode_publiable():
     assert "libx264" in args_flou and "boxblur" in args_flou and "-map_metadata -1" in args_flou
     args_trace = formats.args_conversion_publiable(False, False, "", True)
     assert args_trace == "-map_metadata -1 -map_chapters -1"
+
+
+def test_id_video_et_priorite(monkeypatch):
+    from nexus import analyse, taches
+
+    assert taches._id_video("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert taches._id_video("https://youtu.be/dQw4w9WgXcQ?t=10") == "dQw4w9WgXcQ"
+    assert taches._id_video("dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+    t1 = taches.Tache("https://youtu.be/dQw4w9WgXcQ", {})
+    assert t1.priorite == 0 and "priorite" in t1.vue()
+
+    faux_info = {
+        "id": "dQw4w9WgXcQ",
+        "title": "Test Stream",
+        "duration": 120,
+        "language": "en-US",
+        "http_headers": {"User-Agent": "Test"},
+        "formats": [
+            {"format_id": "18", "url": "https://rr1.googlevideo.com/mixte.mp4", "ext": "mp4",
+             "vcodec": "avc1.42001E", "acodec": "mp4a.40.2", "height": 360, "protocol": "https"},
+            {"format_id": "136", "url": "https://rr1.googlevideo.com/vid720.mp4", "ext": "mp4",
+             "vcodec": "avc1.4d401f", "acodec": "none", "height": 720, "protocol": "https"},
+            {"format_id": "140-0", "url": "https://rr1.googlevideo.com/aud_en.m4a", "ext": "m4a",
+             "vcodec": "none", "acodec": "mp4a.40.2", "language": "en-US",
+             "format_note": "English original", "protocol": "https"},
+            {"format_id": "140-1", "url": "https://rr1.googlevideo.com/aud_fr.m4a", "ext": "m4a",
+             "vcodec": "none", "acodec": "mp4a.40.2", "language": "fr",
+             "format_note": "French dubbed", "protocol": "https"},
+        ],
+    }
+    monkeypatch.setattr(analyse, "info_complete", lambda url, frais=False: faux_info)
+    d_fr = analyse.flux_direct("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "fr")
+    assert d_fr["mode"] == "separe" and d_fr["piste_active"] == "fr"
+    assert d_fr["video_url"].endswith("vid720.mp4") and d_fr["audio_url"].endswith("aud_fr.m4a")
+
+    d_vo = analyse.flux_direct("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "original")
+    assert d_vo["mode"] == "mixte" and d_vo["mixte_url"].endswith("mixte.mp4")
