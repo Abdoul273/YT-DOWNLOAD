@@ -254,6 +254,8 @@ class _PageReglagesState extends State<PageReglages> {
                         choisie: r['format_audio'] == k, onTap: () => r['format_audio'] = k),
                 ]),
                 const SizedBox(height: 6),
+                inter('compatible', 'Prête à publier (TikTok, Reels, YouTube)',
+                    'MP4 H.264 + AAC, 1 piste audio, 1080p max — sans erreur de codec'),
                 inter('sponsorblock', 'SponsorBlock', 'Retirer les passages sponsorisés'),
                 inter('miniature', 'Miniature intégrée', 'Pochette dans le fichier'),
                 inter('metadonnees', 'Métadonnées et chapitres', 'Titre, chaîne, date, chapitres'),

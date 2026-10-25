@@ -151,10 +151,25 @@ List<String> tri(Json opts) {
   if (opts['type'] == 'audio') {
     return [(opts['format_audio'] == 'm4a' || opts['format_audio'] == 'mp3') ? 'ext:m4a' : 'acodec:opus'];
   }
+  // Prête à publier : H.264 + AAC d'abord (seul couple accepté partout : TikTok, Reels, YouTube…),
+  // la résolution ensuite. YouTube sert l'H.264 jusqu'en 1080p, le plafond de TikTok.
+  if (opts['compatible'] == true) return ['vcodec:h264', 'res', 'fps', 'acodec:aac', 'ext:mp4:m4a'];
   if (conteneur == 'mp4') return ['res', 'fps', 'ext:mp4:m4a'];
   if (conteneur == 'webm') return ['res', 'fps', 'ext:webm:webm'];
   return ['res', 'fps'];
 }
+
+/// Codecs acceptés par TikTok, Instagram, Facebook, YouTube… (vidéo H.264, audio AAC).
+/// Codec inconnu → considéré incompatible : mieux vaut convertir que voir l'envoi refusé.
+bool videoPubliable(String? v) =>
+    v == 'none' || v != null && (v.startsWith('avc1') || v.startsWith('avc3') || v == 'h264' || v == 'avc');
+bool audioPubliable(String? a) => a == 'none' || a != null && (a.startsWith('mp4a') || a == 'aac');
+
+/// Réencodage ffmpeg (libx264 est fourni par youtubedl-android) : H.264 High 8 bits 4:2:0,
+/// plus grand côté ramené à 1920 px sans jamais agrandir. AAC stéréo 48 kHz.
+const argsVideoPubliable = '-c:v libx264 -preset veryfast -crf 20 -profile:v high -level:v 4.2 -pix_fmt yuv420p '
+    '-vf "scale=w=\'min(1920,iw)\':h=\'min(1920,ih)\':force_original_aspect_ratio=decrease:force_divisible_by=2"';
+const argsAudioPubliable = '-c:a aac -b:a 192k -ar 48000 -ac 2';
 
 class SousTitres {
   final List<String> manuels;

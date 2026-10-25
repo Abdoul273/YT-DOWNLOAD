@@ -330,6 +330,7 @@ class _VueVideoState extends State<_VueVideo> {
   late bool _garderVo = reglages['garder_vo'];
   late String _qualite = reglages['qualite'];
   late String _conteneur = reglages['conteneur'];
+  late bool _compatible = reglages['compatible'] == true;
   late String _formatAudio = reglages['format_audio'];
   final Set<String> _sousTitres = {};
   bool _stAuto = false, _stFichier = false, _chapitres = false;
@@ -371,6 +372,7 @@ class _VueVideoState extends State<_VueVideo> {
       'type': _type,
       'qualite': _qualite,
       'conteneur': _conteneur,
+      'compatible': _compatible,
       'format_audio': _formatAudio,
       // langue voulue : la piste choisie ; si VO choisie alors qu'aucun doublage n'existe, on garde
       // le réglage pour déclencher les sous-titres de secours
@@ -463,7 +465,7 @@ class _VueVideoState extends State<_VueVideo> {
                   onTap: () => setState(() => _langue = p.originale ? 'original' : p.code)),
             if (v.pistes.isEmpty) Puce('🌐 Piste unique', choisie: true, onTap: () {}),
           ]),
-          if (doublee && _type == 'video')
+          if (doublee && _type == 'video' && !_compatible)
             _Interrupteur('Garder la VO en 2ᵉ piste', '${langues.drapeau(v.originale)} ${v.originaleNom ?? 'Originale'}',
                 _garderVo, (x) => setState(() => _garderVo = x)),
           const SizedBox(height: 14),
@@ -479,11 +481,16 @@ class _VueVideoState extends State<_VueVideo> {
               if (qualites.isEmpty) Puce('Meilleure', choisie: true, onTap: () {}),
             ]),
             const SizedBox(height: 16),
-            const Etiquette('Conteneur'),
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              for (final (k, l, s) in const [('mp4', 'MP4', 'compatible'), ('mkv', 'MKV', 'pistes nommées'), ('webm', 'WebM', 'VP9/AV1')])
-                Puce(l, sous: s, choisie: _conteneur == k, onTap: () => setState(() => _conteneur = k)),
-            ]),
+            _Interrupteur('Prête à publier', 'TikTok, Reels, YouTube : MP4 H.264 + AAC, sans erreur de codec',
+                _compatible, (x) => setState(() => _compatible = x)),
+            if (!_compatible) ...[
+              const SizedBox(height: 10),
+              const Etiquette('Conteneur'),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final (k, l, s) in const [('mp4', 'MP4', 'compatible'), ('mkv', 'MKV', 'pistes nommées'), ('webm', 'WebM', 'VP9/AV1')])
+                  Puce(l, sous: s, choisie: _conteneur == k, onTap: () => setState(() => _conteneur = k)),
+              ]),
+            ],
           ] else ...[
             const Etiquette('Format audio'),
             Wrap(spacing: 8, runSpacing: 8, children: [

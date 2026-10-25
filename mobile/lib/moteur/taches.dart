@@ -38,6 +38,7 @@ const phasesPp = {
   'FFmpegSplitChapters': 'Découpage en chapitres', 'SplitChapters': 'Découpage en chapitres',
   'FFmpegVideoRemuxer': 'Conversion du conteneur', 'FFmpegSubtitlesConvertor': 'Conversion des sous-titres',
   'FFmpegThumbnailsConvertor': 'Conversion de la miniature', 'ThumbnailsConvertor': 'Conversion de la miniature',
+  'CopyStream': 'Conversion pour TikTok / YouTube', 'FFmpegCopyStream': 'Conversion pour TikTok / YouTube',
 };
 
 double _maintenant() => DateTime.now().millisecondsSinceEpoch / 1000;
@@ -335,7 +336,7 @@ class Gestionnaire extends ChangeNotifier {
   Future<List<Tache>> ajouter(List<Ajout> elements, Map<String, dynamic> options, {bool retelcharger = false}) async {
     // Les options non précisées prennent les réglages actuels
     options = {
-      for (final k in const ['type', 'qualite', 'conteneur', 'format_audio', 'qualite_audio', 'langue_audio', 'garder_vo', 'sponsorblock'])
+      for (final k in const ['type', 'qualite', 'conteneur', 'format_audio', 'qualite_audio', 'langue_audio', 'garder_vo', 'sponsorblock', 'compatible'])
         k: reglages[k],
       ...options,
     };
@@ -779,9 +780,14 @@ class Gestionnaire extends ChangeNotifier {
       }
     }
 
+    // Prête à publier (TikTok, Reels, YouTube…) : MP4 H.264 + AAC, une seule piste audio,
+    // pas de pochette ni de piste de chapitres/sous-titres intégrée (refusées par ces plateformes).
+    final publiable = o['type'] != 'audio' && (o['compatible'] ?? reglages['compatible']) == true;
+    if (publiable) o = {...o, 'compatible': true, 'conteneur': 'mp4'};
+
     // Pistes audio
     final langue = (o['langue_audio'] ?? reglages['langue_audio']) as String;
-    final garderVo = (o['garder_vo'] ?? reglages['garder_vo']) == true && o['type'] != 'audio';
+    final garderVo = (o['garder_vo'] ?? reglages['garder_vo']) == true && o['type'] != 'audio' && !publiable;
     final (piste, originale, deux) = formats.planAudio(info, langue, garderVo);
     final sel = formats.selecteur(o, piste, originale, deux);
     final tri = formats.tri(o);
@@ -796,7 +802,8 @@ class Gestionnaire extends ChangeNotifier {
     final sim = await Natif.executer('${t.id}-sim', [
       '--load-info-json', cheminInfo, '--ignore-config', '--no-warnings',
       '-f', sel, '-S', tri.join(','), '--audio-multistreams', '--merge-output-format', conteneur,
-      '-O', '%(requested_formats)j', '-O', '%(format_id)s\t%(height)s\t%(language)s\t%(filesize,filesize_approx)s',
+      '-O', '%(requested_formats)j',
+      '-O', '%(format_id)s\t%(height)s\t%(language)s\t%(filesize,filesize_approx)s\t%(vcodec)s\t%(acodec)s',
     ]);
     if (t.arret != null) return (false, '', false);
     if (!sim.ok) {
@@ -813,9 +820,11 @@ class Gestionnaire extends ChangeNotifier {
     String libelle(String? hauteur, String? code, bool video) => video
         ? 'Vidéo ${hauteur ?? ''}p'.replaceAll(' p', '')
         : (code != null && code.isNotEmpty && code != 'NA' ? 'Audio ${langues.drapeau(code)} ${langues.nom(code)}' : 'Audio');
+    final codecs = <(String?, String?)>[]; // (vcodec, acodec) de chaque partie
     if (demandes != null) {
       for (final f in demandes.cast<Map>()) {
         final video = formats.estVideo(f.cast<String, dynamic>());
+        codecs.add((f['vcodec'] as String?, f['acodec'] as String?));
         t.parties.add((
           '${f['format_id']}',
           formats.taille(f.cast<String, dynamic>()),
@@ -825,8 +834,14 @@ class Gestionnaire extends ChangeNotifier {
     } else if (lignesSim.length > 1) {
       final c = lignesSim[1].split('\t');
       final h = c.length > 1 && c[1] != 'NA' ? c[1] : null;
+      String? codec(int i) => c.length > i && c[i].trim() != 'NA' ? c[i].trim() : null;
+      codecs.add((codec(4), codec(5)));
       t.parties.add((c[0], c.length > 3 ? int.tryParse(c[3]) ?? 0 : 0, libelle(h, c.length > 2 ? c[2] : null, h != null)));
     }
+    // Conversion seulement si YouTube n'a pas fourni directement de l'H.264 / AAC
+    final convVideo = publiable && codecs.any((c) => !formats.videoPubliable(c.$1));
+    final convAudio = publiable && codecs.any((c) => !formats.audioPubliable(c.$2));
+    final conversion = [if (convVideo) formats.argsVideoPubliable, if (convAudio) formats.argsAudioPubliable].join(' ');
 
     // Description des pistes et messages
     var msg = '';
@@ -845,7 +860,8 @@ class Gestionnaire extends ChangeNotifier {
         !langues.memeLangue(originale, langue) &&
         o['type'] != 'audio' &&
         reglages['sous_titres_secours'] == true;
-    if (secours) msg += ' → sous-titres intégrés';
+    if (secours) msg += publiable ? ' → sous-titres en fichier .srt' : ' → sous-titres intégrés';
+    if (convVideo) msg += '${msg.isEmpty ? '' : ' · '}Conversion H.264 pour TikTok / YouTube (plus long)';
     t
       ..titre = (info['title'] ?? t.titre) as String
       ..miniature = t.miniature ?? analyse.miniature(info)
@@ -861,7 +877,8 @@ class Gestionnaire extends ChangeNotifier {
     final espace = await _verifierEspace(t, o, info);
     if (t.arret != null) return (false, '', false);
     if (espace != null) return (false, espace, false);
-    final cmd = _commande(t, o, sel, tri, cheminInfo, piste ?? originale, deux ? originale : null, secours, langue);
+    final cmd = _commande(t, o, sel, tri, cheminInfo, piste ?? originale, deux ? originale : null, secours, langue,
+        publiable: publiable, conversion: conversion);
     return _lancer(t, cmd);
   }
 
@@ -897,7 +914,7 @@ class Gestionnaire extends ChangeNotifier {
   String _quote(String s) => "'${s.replaceAll("'", "'\"'\"'")}'";
 
   List<String> _commande(Tache t, Map<String, dynamic> o, String sel, List<String> tri, String cheminInfo,
-      String? piste, String? vo, bool secours, String langue) {
+      String? piste, String? vo, bool secours, String langue, {bool publiable = false, String conversion = ''}) {
     final r = reglages;
     final audio = o['type'] == 'audio';
     final conteneur = (o['conteneur'] ?? r['conteneur']) as String;
@@ -916,8 +933,12 @@ class Gestionnaire extends ChangeNotifier {
       ...r.argsAuth(),
     ];
     if ((r['limite_vitesse'] as String).isNotEmpty) cmd.addAll(['-r', r['limite_vitesse']]);
-    if (r['metadonnees'] == true) cmd.addAll(['--embed-metadata', '--embed-chapters']);
-    if (r['miniature'] == true && conteneur != 'webm') cmd.add('--embed-thumbnail');
+    if (r['metadonnees'] == true) {
+      // La piste de chapitres (texte) d'un MP4 fait échouer l'envoi sur TikTok/Instagram.
+      cmd.addAll(publiable ? ['--embed-metadata', '--no-embed-chapters'] : ['--embed-metadata', '--embed-chapters']);
+    }
+    // La pochette intégrée est un 2ᵉ flux vidéo (MJPEG) : « codec non pris en charge » sur les réseaux.
+    if (r['miniature'] == true && conteneur != 'webm' && !publiable) cmd.add('--embed-thumbnail');
 
     if (audio) {
       final fa = (o['format_audio'] ?? r['format_audio']) as String;
@@ -938,6 +959,14 @@ class Gestionnaire extends ChangeNotifier {
         }
         cmd.addAll(['--postprocessor-args', 'Merger:$pp']);
       }
+      if (conversion.isNotEmpty) {
+        // Passe ffmpeg sur le fichier final (fusionné, extrait ou fichier unique) avant métadonnées :
+        // fonctionne aussi avec --download-sections, où le Merger n'intervient pas.
+        cmd.addAll([
+          '--use-postprocessor', 'FFmpegCopyStream:when=post_process',
+          '--postprocessor-args', 'CopyStream:$conversion',
+        ]);
+      }
       final sousTitres = <String>[...((o['sous_titres'] as List?) ?? []).cast<String>()];
       if (secours) {
         final b = langues.base(langue);
@@ -946,7 +975,7 @@ class Gestionnaire extends ChangeNotifier {
       if (sousTitres.isNotEmpty) {
         cmd.addAll(['--write-subs', '--sub-langs', sousTitres.toSet().join(','), '--sleep-subtitles', '1']);
         if (secours || o['sous_titres_auto'] == true) cmd.add('--write-auto-subs');
-        cmd.addAll(o['sous_titres_fichier'] == true ? ['--convert-subs', 'srt'] : ['--embed-subs']);
+        cmd.addAll(o['sous_titres_fichier'] == true || publiable ? ['--convert-subs', 'srt'] : ['--embed-subs']);
       }
       if (o['chapitres_separes'] == true) {
         cmd.addAll(['--split-chapters', '-o', 'chapter:%(title)s/%(section_number)02d - %(section_title)s.%(ext)s']);

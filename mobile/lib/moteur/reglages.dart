@@ -17,6 +17,7 @@ const reglagesDefaut = <String, dynamic>{
   'type': 'video',
   'qualite': '1080',
   'conteneur': 'mp4',
+  'compatible': true, // prête à publier : MP4 H.264 + AAC accepté par TikTok, Reels, YouTube
   'format_audio': 'mp3',
   'qualite_audio': '0', // 0 = meilleure (VBR) ; sinon kbps
   'sponsorblock': false,
