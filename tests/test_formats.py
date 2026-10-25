@@ -58,3 +58,7 @@ def test_mode_publiable():
     assert formats.audio_publiable("mp4a.40.2")
     assert formats.audio_publiable("aac")
     assert not formats.audio_publiable("opus")
+    args_flou = formats.args_conversion_publiable(False, False, "flou", True)
+    assert "libx264" in args_flou and "boxblur" in args_flou and "-map_metadata -1" in args_flou
+    args_trace = formats.args_conversion_publiable(False, False, "", True)
+    assert args_trace == "-map_metadata -1 -map_chapters -1"

@@ -344,6 +344,13 @@ class Gestionnaire:
             return self.maj(t, True, statut="erreur", erreur=message, phase="", vitesse=0, eta=None)
 
     def _terminer(self, t, reglages):
+        if t.fichier and Path(t.fichier).exists():
+            try:
+                seg_s = int(t.options.get("decoupe") or 0)
+            except (TypeError, ValueError):
+                seg_s = 0
+            if seg_s >= 30 and t.options.get("type") != "audio":
+                self._decouper_en_parties(t, Path(t.fichier), seg_s)
         taille = 0
         if t.fichier and Path(t.fichier).exists():
             taille = Path(t.fichier).stat().st_size
@@ -358,6 +365,31 @@ class Gestionnaire:
             subprocess.Popen(["notify-send", "-a", "YT-NEXUS", "-i", "folder-download",
                               "Téléchargement terminé", t.titre],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _decouper_en_parties(self, t, chemin, seg_s):
+        """Découpe une vidéo longue en Parties (Partie 01, Partie 02…) prêtes à poster sur TikTok."""
+        if not shutil.which("ffmpeg"):
+            return
+        duree = t.duree or (miniatures.infos_fichier(chemin).get("duree") or 0)
+        if duree and duree <= seg_s + 5:
+            return
+        self.maj(t, statut="traitement", phase=f"Découpage en parties de {seg_s // 60 or seg_s} {'min' if seg_s >= 60 else 's'}…")
+        dossier_parties = chemin.parent / f"{chemin.stem} - Parties"
+        dossier_parties.mkdir(parents=True, exist_ok=True)
+        modele = str(dossier_parties / f"{chemin.stem} - Partie %02d{chemin.suffix}")
+        cmd = [
+            "ffmpeg", "-y", "-v", "error", "-i", str(chemin),
+            "-c", "copy", "-map", "0:v:0", "-map", "0:a:0?",
+            "-f", "segment", "-segment_time", str(seg_s), "-segment_start_number", "1",
+            "-reset_timestamps", "1", modele,
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=300)
+            nb = len(list(dossier_parties.glob(f"*{chemin.suffix}")))
+            if r.returncode == 0 and nb > 0:
+                t.message = (t.message + " · " if t.message else "") + f"{nb} parties créées dans « {dossier_parties.name} »"
+        except Exception:
+            pass
 
     def _une_tentative(self, t, reglages):
         """(réussi, message d'erreur, erreur passagère ?)"""
@@ -413,13 +445,12 @@ class Gestionnaire:
                 lib = f"Audio {langues.drapeau(code)} {langues.nom(code)}" if code else "Audio"
             t.parties.append((f.get("format_id"), f.get("filesize") or f.get("filesize_approx") or 0, lib))
 
-        # Conversion seulement si YouTube n'a pas fourni directement de l'H.264 / AAC
-        conv_video = publiable and any(not formats.video_publiable(v) for v, _ in codecs)
+        # Conversion seulement si YouTube n'a pas fourni directement de l'H.264 / AAC (ou si 9:16 demandé)
+        vertical = (o.get("vertical") or reglages["vertical"] or "") if o.get("type") != "audio" else ""
+        sans_trace = bool(o.get("sans_trace", reglages["sans_trace"])) if publiable else False
+        conv_video = (publiable and any(not formats.video_publiable(v) for v, _ in codecs)) or bool(vertical)
         conv_audio = publiable and any(not formats.audio_publiable(a) for _, a in codecs)
-        conversion = " ".join(
-            ([formats.ARGS_VIDEO_PUBLIABLE] if conv_video else [])
-            + ([formats.ARGS_AUDIO_PUBLIABLE] if conv_audio else [])
-        )
+        conversion = formats.args_conversion_publiable(conv_video, conv_audio, vertical, sans_trace)
 
         # Description des pistes et messages
         msg = ""
@@ -435,7 +466,9 @@ class Gestionnaire:
                    and o.get("type") != "audio" and reglages["sous_titres_secours"])
         if secours:
             msg += " → sous-titres en fichier .srt" if publiable else " → sous-titres intégrés"
-        if conv_video:
+        if vertical:
+            msg += (" · " if msg else "") + "Format vertical 9:16 (TikTok / Shorts)"
+        elif conv_video:
             msg += (" · " if msg else "") + "Conversion H.264 pour TikTok / YouTube (plus long)"
         total = sum(p[1] for p in t.parties)
         self.maj(t, titre=info.get("title") or t.titre, miniature=t.miniature or analyse._miniature(info),
@@ -448,11 +481,11 @@ class Gestionnaire:
         chemin_info.write_text(json.dumps(info))
         cmd = self._commande(t, o, reglages, sel, tri, dossier, modele, chemin_info,
                              piste or originale, originale if deux else None, secours, langue,
-                             publiable=publiable, conversion=conversion)
+                             publiable=publiable, sans_trace=sans_trace, conversion=conversion)
         return self._lancer(t, cmd)
 
     def _commande(self, t, o, r, sel, tri, dossier, modele, chemin_info, piste, vo, secours, langue,
-                  publiable=False, conversion=""):
+                  publiable=False, sans_trace=False, conversion=""):
         audio = o.get("type") == "audio"
         conteneur = o.get("conteneur") or r["conteneur"]
         cmd = config.commande_ytdlp() + [
@@ -470,7 +503,10 @@ class Gestionnaire:
         ] + config.args_auth(r)
         if r["limite_vitesse"]:
             cmd += ["-r", r["limite_vitesse"]]
-        if r["metadonnees"]:
+        if sans_trace:
+            # Purge toute l'empreinte YouTube (purl, comment, encoder, chapitres) pour éviter la pénalité d'algorithme
+            cmd += ["--no-embed-metadata", "--no-embed-chapters"]
+        elif r["metadonnees"]:
             # La piste de chapitres (texte) d'un MP4 fait échouer l'envoi sur TikTok/Instagram.
             cmd += ["--embed-metadata", "--no-embed-chapters"] if publiable else ["--embed-metadata", "--embed-chapters"]
         # La pochette intégrée est un 2e flux vidéo (MJPEG) : « codec non pris en charge » sur les réseaux.
@@ -484,16 +520,20 @@ class Gestionnaire:
                 cmd += ["--audio-format", fa, "--audio-quality", str(o.get("qualite_audio") or r["qualite_audio"])]
         else:
             cmd += ["--audio-multistreams", "--merge-output-format", conteneur]
+            pp_merger = ""
             if piste and conteneur != "webm":
                 # Pistes nommées ; seule la 1re (langue voulue) est « par défaut ».
                 def nommer(i, nom):  # title (mkv) + handler_name (mp4)
                     n = shlex.quote(nom)
                     return f" -metadata:s:a:{i} title={n} -metadata:s:a:{i} handler_name={n}"
-                pp = nommer(0, langues.nom(piste)).strip()
+                pp_merger = nommer(0, langues.nom(piste)).strip()
                 if vo:
-                    pp += nommer(1, langues.nom(vo) + " (VO)")
-                    pp += " -disposition:a 0 -disposition:a:0 default"
-                cmd += ["--postprocessor-args", f"Merger:{pp}"]
+                    pp_merger += nommer(1, langues.nom(vo) + " (VO)")
+                    pp_merger += " -disposition:a 0 -disposition:a:0 default"
+            if sans_trace:
+                pp_merger = (pp_merger + " -map_metadata -1 -map_chapters -1").strip()
+            if pp_merger:
+                cmd += ["--postprocessor-args", f"Merger:{pp_merger}"]
             if conversion:
                 # Passe ffmpeg sur le fichier final (fusionné, extrait ou fichier unique) avant métadonnées :
                 # fonctionne aussi avec --download-sections, où le Merger n'intervient pas.

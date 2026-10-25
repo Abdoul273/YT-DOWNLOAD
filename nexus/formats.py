@@ -152,12 +152,37 @@ def audio_publiable(a):
 
 # Réencodage ffmpeg de secours : H.264 High 8 bits 4:2:0, couleurs BT.709 propres,
 # plus grand côté ramené à 1920 px sans jamais agrandir, AAC stéréo 48 kHz.
-ARGS_VIDEO_PUBLIABLE = (
+BASE_VIDEO_PUBLIABLE = (
     "-c:v libx264 -preset veryfast -crf 20 -profile:v high -level:v 4.2 -pix_fmt yuv420p "
-    "-color_primaries bt709 -color_trc bt709 -colorspace bt709 "
-    "-vf \"scale=w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2\""
+    "-color_primaries bt709 -color_trc bt709 -colorspace bt709"
 )
+FILTRE_ECHELLE_PUBLIABLE = (
+    "scale=w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2"
+)
+FILTRE_VERTICAL_FLOU = (
+    "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bg];"
+    "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
+    "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"
+)
+FILTRE_VERTICAL_RECADRE = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1"
+ARGS_VIDEO_PUBLIABLE = f'{BASE_VIDEO_PUBLIABLE} -vf "{FILTRE_ECHELLE_PUBLIABLE}"'
 ARGS_AUDIO_PUBLIABLE = "-c:a aac -b:a 192k -ar 48000 -ac 2"
+
+
+def args_conversion_publiable(conv_video=False, conv_audio=False, vertical="", sans_trace=False):
+    """Arguments ffmpeg pour CopyStream (conversion H.264/AAC, format 9:16 et purge métadonnées)."""
+    args = []
+    if vertical == "flou":
+        args.append(f'{BASE_VIDEO_PUBLIABLE} -filter_complex "{FILTRE_VERTICAL_FLOU}"')
+    elif vertical == "recadre":
+        args.append(f'{BASE_VIDEO_PUBLIABLE} -vf "{FILTRE_VERTICAL_RECADRE}"')
+    elif conv_video:
+        args.append(ARGS_VIDEO_PUBLIABLE)
+    if conv_audio:
+        args.append(ARGS_AUDIO_PUBLIABLE)
+    if sans_trace:
+        args.append("-map_metadata -1 -map_chapters -1")
+    return " ".join(args)
 
 
 def sous_titres_dispo(info):

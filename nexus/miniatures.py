@@ -145,8 +145,12 @@ def _id_youtube(texte):
 
 
 def _extraire_meta(chemin):
-    """Lit durée, titre, chaîne, pistes audio et présence de pochette via ffprobe."""
-    meta = {"duree": None, "titre": None, "pistes": None, "yt_id": _id_youtube(chemin.name), "pochette": False}
+    """Lit durée, titre, chaîne, pistes audio, codecs et présence de pochette via ffprobe."""
+    meta = {
+        "duree": None, "titre": None, "pistes": None,
+        "yt_id": _id_youtube(chemin.name), "pochette": False,
+        "vcodec": None, "acodec": None, "nb_audios": 0, "publiable": None,
+    }
     if not shutil.which("ffprobe"):
         return meta
     try:
@@ -174,7 +178,23 @@ def _extraire_meta(chemin):
     streams = d.get("streams") or []
     meta["pochette"] = any((s.get("disposition") or {}).get("attached_pic") == 1 for s in streams)
 
+    videos = [s for s in streams if s.get("codec_type") == "video" and (s.get("disposition") or {}).get("attached_pic") != 1]
     audios = [s for s in streams if s.get("codec_type") == "audio"]
+    subs = [s for s in streams if s.get("codec_type") in ("subtitle", "data")]
+    if videos:
+        meta["vcodec"] = (videos[0].get("codec_name") or "").lower()
+    if audios:
+        meta["acodec"] = (audios[0].get("codec_name") or "").lower()
+    meta["nb_audios"] = len(audios)
+    if chemin.suffix.lower() in EXT_VIDEO and videos:
+        meta["publiable"] = bool(
+            chemin.suffix.lower() == ".mp4"
+            and meta["vcodec"] in ("h264", "avc1", "avc")
+            and (not audios or meta["acodec"] in ("aac", "mp4a"))
+            and len(audios) <= 1
+            and not meta["pochette"]
+            and not subs
+        )
     libelles = []
     bruit = ("soundhandler", "videohandler", "isomedia", "iso media", "gpac", "core media", "apple", "ffmpeg")
     for s in audios:

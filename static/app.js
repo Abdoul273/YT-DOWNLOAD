@@ -176,7 +176,8 @@ function choixParDefaut() {
   const r = R();
   return {
     type: r.type || "video", qualite: r.qualite || "1080", conteneur: r.conteneur || "mp4",
-    compatible: r.compatible ?? true,
+    compatible: r.compatible ?? true, sans_trace: r.sans_trace ?? true,
+    vertical: r.vertical || "", decoupe: r.decoupe || 0,
     format_audio: r.format_audio || "mp3", qualite_audio: r.qualite_audio || "0",
     langue_audio: null, garder_vo: r.garder_vo ?? true, sous_titres: [], sous_titres_auto: false,
     sous_titres_fichier: false, sponsorblock: r.sponsorblock || false, debut: "", fin: "",
@@ -522,12 +523,19 @@ function carteVideo(v) {
 function fichierFinal(v, { q, pisteSel, vo, manque }) {
   const c = C();
   const lignes = [];
-  if (c.type === "video") lignes.push([I.video, `Vidéo ${q?.libelle || ""}`.trim(), c.compatible ? "MP4 · H.264 + AAC" : (c.conteneur || "mp4").toUpperCase(), ""]);
+  if (c.type === "video") {
+    const descFmt = c.compatible
+      ? `MP4 · H.264 + AAC${c.vertical ? " · 9:16" : ""}`
+      : (c.conteneur || "mp4").toUpperCase();
+    lignes.push([I.video, `Vidéo ${q?.libelle || ""}`.trim(), descFmt, ""]);
+  }
   if (pisteSel) lignes.push([I.audio, `${pisteSel.drapeau} ${nomPiste(pisteSel)}`, c.type === "audio" ? (c.format_audio || "mp3").toUpperCase() : "Piste 1 · par défaut", "fr"]);
   if (vo) { const o = v.pistes.find((p) => p.originale); lignes.push([I.audio, `${o?.drapeau || "🎙️"} ${o ? nomPiste(o) : "VO"}`, "Piste 2 · VO", ""]); }
   const st = [...c.sous_titres];
   if (manque && C().langue_audio == null && c.type === "video" && R().sous_titres_secours && (v.sous_titres.auto || v.sous_titres.manuels.length)) st.unshift(R().langue_audio || "fr");
   if (st.length && c.type === "video") lignes.push([I.st, `Sous-titres ${[...new Set(st)].map((x) => x.toUpperCase()).join(", ")}`, c.sous_titres_fichier || c.compatible ? "fichiers .srt" : "intégrés", ""]);
+  if (c.compatible && c.sans_trace && c.type === "video") lignes.push([I.bouclier, "Sans empreinte YouTube", "Anti-blocage algo", ""]);
+  if (+c.decoupe > 0 && c.type === "video") lignes.push([I.ciseaux, `Découpée en parties`, `${+c.decoupe / 60} min / partie`, ""]);
   if (c.sponsorblock) lignes.push([I.bouclier, "Sans sponsors", "SponsorBlock", ""]);
   if (c.debut || c.fin) lignes.push([I.ciseaux, `Extrait ${c.debut || "0:00"} → ${c.fin || "fin"}`, "", ""]);
   return h`<div class="verre fichier-final">
@@ -548,12 +556,32 @@ function selecteurFormat() {
     </select></div>` : ""}`;
   }
   return h`
-  <label class="option" style="margin-bottom:${c.compatible ? "0" : "12px"}">
+  <label class="option" style="margin-bottom:12px">
     <span class="ic">${brut(I.etincelle)}</span>
     <span class="texte"><b>Prête à publier (TikTok, Reels, YouTube)</b><span>MP4 H.264 + AAC, piste unique, sans erreur de codec ni blocage</span></span>
     <input type="checkbox" class="interrupteur" data-opt="compatible" ${c.compatible ? "checked" : ""} />
   </label>
-  ${c.compatible ? "" : h`<div class="segment">
+  ${c.compatible ? h`
+  <div class="grille" style="margin-bottom:10px">
+    <div class="champ">
+      <label>Format d'image (TikTok / Shorts)</label>
+      <select class="entree" data-opt="vertical">
+        ${[["", "Original (16:9 ou natif)"], ["flou", "Vertical 9:16 (fond flouté)"], ["recadre", "Vertical 9:16 (recadré plein écran)"]].map(([k, l]) => h`<option value="${k}" ${String(c.vertical || "") === k ? "selected" : ""}>${l}</option>`)}
+      </select>
+    </div>
+    <div class="champ">
+      <label>Découpage auto en parties</label>
+      <select class="entree" data-opt="decoupe">
+        ${[[0, "Vidéo entière"], [60, "Parties de 1 min"], [120, "Parties de 2 min"], [180, "Parties de 3 min"]].map(([k, l]) => h`<option value="${k}" ${Number(c.decoupe || 0) === k ? "selected" : ""}>${l}</option>`)}
+      </select>
+    </div>
+  </div>
+  <label class="option">
+    <span class="ic">${brut(I.bouclier)}</span>
+    <span class="texte"><b>Purger l'empreinte YouTube (anti-blocage algorithme)</b><span>Efface les tags cachés (URL source, ID YouTube, encodeur) lus par TikTok</span></span>
+    <input type="checkbox" class="interrupteur" data-opt="sans_trace" ${c.sans_trace ? "checked" : ""} />
+  </label>
+  ` : h`<div class="segment">
     ${[["mp4", "MP4", "partout"], ["mkv", "MKV", "flexible"], ["webm", "WebM", "web"]].map(([k, l, d]) => h`<button data-conteneur="${k}" aria-pressed="${c.conteneur === k}">${l} <small>${d}</small></button>`)}
   </div>`}`;
 }
@@ -2759,10 +2787,16 @@ function listeFichiers() {
       <div class="corps">
         <div class="t" title="${f.titre}">${f.titre}</div>
         <div class="s">${taille(f.taille)} · ${quand(f.date)}</div>
-        ${f.pistes || f.dossier ? h`<div class="infos-carte">${f.pistes ? h`<span class="info-chip">${f.pistes}</span>` : ""}${f.dossier ? h`<span class="info-chip">${brut(I.dossier.replace("<svg", '<svg style="width:12px;height:12px"'))}${f.dossier}</span>` : ""}</div>` : ""}
+        <div class="infos-carte">
+          ${f.type === "video" && f.publiable === true ? h`<span class="info-chip" style="color:var(--vert)">✓ Prête TikTok</span>` : ""}
+          ${f.type === "video" && f.publiable === false ? h`<span class="info-chip" style="color:var(--ambre)" title="Codec ${ (f.vcodec || '').toUpperCase() } ou flux multiples : clique sur l'étincelle pour convertir">⚠ ${(f.vcodec || "Codec").toUpperCase()}</span>` : ""}
+          ${f.pistes ? h`<span class="info-chip">${f.pistes}</span>` : ""}
+          ${f.dossier ? h`<span class="info-chip">${brut(I.dossier.replace("<svg", '<svg style="width:12px;height:12px"'))}${f.dossier}</span>` : ""}
+        </div>
         <div class="actions-carte">
           ${local ? h`${b(f, "ouvrir", I.ouvrir, "Ouvrir avec le lecteur")}${b(f, "dossier", I.dossier, "Afficher dans le dossier")}` : ""}
           ${b(f, "enregistrer", I.enregistrer, "Enregistrer sur cet appareil")}
+          ${f.type === "video" ? b(f, "tiktok", I.etincelle, f.publiable ? "Convertir en 9:16 ou nettoyer pour TikTok" : "Rendre compatible TikTok / Shorts (H.264 + AAC)", f.publiable === false ? "accent" : "") : ""}
           <span class="espace"></span>
           ${b(f, "supprimer", I.poubelle, "Supprimer le fichier", "danger")}
         </div>
@@ -2793,6 +2827,24 @@ $("#contenu").addEventListener("click", async (e) => {
     if (act === "lire") lireChemin(f.chemin, f.titre);
     else if (act === "ouvrir" || act === "dossier") await api("/fichiers/ouvrir", { methode: "POST", corps: { chemin: f.chemin, dossier: act === "dossier" } });
     else if (act === "enregistrer") { const a = document.createElement("a"); a.href = `/api/fichiers/lire?chemin=${encodeURIComponent(f.chemin)}&enregistrer=1`; a.click(); }
+    else if (act === "tiktok") {
+      const mode = await choisir(
+        `Préparer « ${f.titre} » pour TikTok / Shorts`,
+        "Convertit en MP4 H.264 + AAC propre, 1 seule piste audio et purge l'empreinte YouTube.",
+        [
+          ["std", "MP4 H.264 (format original)"],
+          ["flou", "Vertical 9:16 (fond flouté)"],
+          ["recadre", "Vertical 9:16 (plein écran)"],
+        ]
+      );
+      if (!mode) return;
+      b.disabled = true;
+      toast("Conversion pour TikTok en cours…", "info");
+      const vertical = mode === "std" ? "" : mode;
+      await api("/fichiers/convertir-tiktok", { methode: "POST", corps: { chemin: f.chemin, vertical, remplacer: mode === "std" } });
+      toast("Vidéo prête à publier sur TikTok / YouTube !", "ok");
+      await chargerFichiers();
+    }
     else if (act === "supprimer") {
       const rep = await choisir(`Supprimer « ${f.titre} » ?`, `${taille(f.taille)} seront libérés. Cette action est définitive.`, [["oui", "Supprimer le fichier"]]);
       if (rep !== "oui") return;
@@ -2976,6 +3028,9 @@ function vueReglages() {
         ${sel("type", "Type par défaut", "", [["video", "Vidéo"], ["audio", "Audio seul"]])}
         ${sel("qualite", "Qualité par défaut", "", QUALITES)}
         ${bool("compatible", "Prête à publier (TikTok, Reels, YouTube)", "MP4 H.264 + AAC, 1 piste audio, 1080p max — sans erreur de codec")}
+        ${bool("sans_trace", "Purger l'empreinte YouTube", "Efface les métadonnées cachées (URL source, ID) pour éviter le blocage d'algorithme")}
+        ${sel("vertical", "Format d'image par défaut", "Pour TikTok, Shorts et Reels", [["", "Original (16:9 ou natif)"], ["flou", "Vertical 9:16 (fond flouté)"], ["recadre", "Vertical 9:16 (recadré plein écran)"]])}
+        ${sel("decoupe", "Découpage auto en parties", "Coupe les vidéos longues en plusieurs parties", [[0, "Désactivé (vidéo entière)"], [60, "Parties de 1 min"], [120, "Parties de 2 min"], [180, "Parties de 3 min"]])}
         ${sel("conteneur", "Format vidéo", "MP4 se lit partout (forcé en MP4 si « Prête à publier » est actif)", [["mp4", "MP4"], ["mkv", "MKV"], ["webm", "WebM"]])}
         ${sel("format_audio", "Format audio", "Pour le mode « audio seul »", [["mp3", "MP3"], ["m4a", "M4A"], ["opus", "Opus"], ["flac", "FLAC"], ["wav", "WAV"], ["original", "Original"]])}
         ${txt("modele_nom", "Nom des fichiers", "Modèle yt-dlp", "%(title)s [%(id)s].%(ext)s")}

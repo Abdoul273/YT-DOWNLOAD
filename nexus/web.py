@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from pathlib import Path
 
 from flask import Blueprint, Flask, Response, abort, jsonify, request, send_file, stream_with_context
 
-from . import VERSION, analyse, config, gouts, langues, miniatures, taches
+from . import VERSION, analyse, config, formats, gouts, langues, miniatures, taches
 
 api = Blueprint("api", __name__, url_prefix="/api")
 STATIQUE = config.RACINE / "static"
@@ -191,13 +192,14 @@ def gouts_bloquer_chaine():
 @api.post("/gouts/oublier-recherche")
 def gouts_oublier_recherche():
     d = _corps()
-    gouts.gestionnaire.oublier_recherche(d.get("q"))
+    gouts.gestionnaire.oublier_recherche(d.get("q") or d.get("requete"))
     return jsonify({"ok": True})
 
 
 # ── téléchargements ─────────────────────────────────────────────────
 OPTIONS_PERMISES = {
-    "type", "qualite", "conteneur", "compatible", "format_audio", "qualite_audio", "langue_audio", "garder_vo",
+    "type", "qualite", "conteneur", "compatible", "sans_trace", "vertical", "decoupe",
+    "format_audio", "qualite_audio", "langue_audio", "garder_vo",
     "sous_titres", "sous_titres_auto", "sous_titres_fichier", "sponsorblock", "debut", "fin",
     "chapitres_separes", "programme",
 }
@@ -460,7 +462,7 @@ def fichiers():
         st = f.stat()
         t = par_chemin.get(str(f))
         rel = f.relative_to(racine)
-        meta = miniatures.infos_fichier(f) if not t else {}
+        meta = miniatures.infos_fichier(f)
         avoir_vignette = bool(
             (t and t.get("miniature"))
             or meta.get("pochette")
@@ -476,6 +478,8 @@ def fichiers():
             "pistes": (t.get("pistes") if t else None) or meta.get("pistes"),
             "duree": (t.get("duree") if t else None) or meta.get("duree"),
             "titre": (t.get("titre") if t else None) or meta.get("titre") or f.stem,
+            "publiable": meta.get("publiable"),
+            "vcodec": meta.get("vcodec"),
         })
     res.sort(key=lambda x: x["date"], reverse=True)
     return jsonify({"fichiers": res, "dossier": str(racine)})
@@ -602,6 +606,60 @@ def supprimer_fichier():
         return _erreur("Fichier introuvable.", 404)
     f.unlink()
     return jsonify({"ok": True})
+
+
+@api.post("/fichiers/convertir-tiktok")
+def convertir_fichier_tiktok():
+    """Convertit en 1 clic une vidéo locale vers MP4 H.264 + AAC propre (ou 9:16) pour TikTok/Shorts."""
+    if not shutil.which("ffmpeg"):
+        return _erreur("ffmpeg n'est pas installé.")
+    d = _corps()
+    racine, f = _chemin_sur(d.get("chemin"))
+    if not f.is_file() or f == racine or f.suffix.lower() not in EXT_VIDEO:
+        return _erreur("Vidéo introuvable.", 404)
+    vertical = d.get("vertical") or ""
+    remplacer = bool(d.get("remplacer", True))
+    meta = miniatures.infos_fichier(f)
+    vcodec = meta.get("vcodec") or ""
+    acodec = meta.get("acodec") or ""
+
+    cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(f), "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn"]
+    if vertical == "flou":
+        cmd += shlex.split(formats.BASE_VIDEO_PUBLIABLE) + ["-filter_complex", formats.FILTRE_VERTICAL_FLOU]
+    elif vertical == "recadre":
+        cmd += shlex.split(formats.BASE_VIDEO_PUBLIABLE) + ["-vf", formats.FILTRE_VERTICAL_RECADRE]
+    elif vcodec in ("h264", "avc1", "avc"):
+        cmd += ["-c:v", "copy"]
+    else:
+        cmd += shlex.split(formats.BASE_VIDEO_PUBLIABLE) + ["-vf", formats.FILTRE_ECHELLE_PUBLIABLE]
+
+    if acodec in ("aac", "mp4a") and not vertical:
+        cmd += ["-c:a", "copy"]
+    else:
+        cmd += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
+
+    cmd += ["-map_metadata", "-1", "-map_chapters", "-1", "-movflags", "+faststart"]
+    suffixe = " (9-16)" if vertical else ""
+    cible = f.with_name(f"{f.stem}{suffixe}.mp4") if (remplacer and not vertical) else f.with_name(f"{f.stem}{suffixe or ' (TikTok)'}.mp4")
+    tmp = f.with_name(f".{f.stem}.tiktok.{os.getpid()}.mp4")
+    cmd.append(str(tmp))
+
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if r.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
+            err = (r.stderr or "").strip().splitlines()
+            return _erreur(err[-1][:200] if err else "Échec de la conversion ffmpeg.", 500)
+        tmp.replace(cible)
+        if remplacer and not vertical and cible != f and f.exists():
+            f.unlink(missing_ok=True)
+            for t in taches.gestionnaire.taches.values():
+                if t.fichier and Path(t.fichier).resolve() == f:
+                    taches.gestionnaire.maj(t, True, fichier=str(cible), taille_fichier=cible.stat().st_size)
+        return jsonify({"ok": True, "chemin": str(cible.relative_to(racine))})
+    except subprocess.TimeoutExpired:
+        return _erreur("Conversion trop longue (délai dépassé).", 504)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 @api.post("/fichiers/ouvrir")

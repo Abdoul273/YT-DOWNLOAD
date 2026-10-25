@@ -53,6 +53,9 @@ REGLAGES_DEFAUT = {
     "qualite": "1080",
     "conteneur": "mp4",
     "compatible": True,            # prête à publier : MP4 H.264 + AAC accepté par TikTok, Reels, YouTube
+    "sans_trace": True,            # purge l'empreinte YouTube (tags purl/comment/chapitres) pour TikTok/Shorts
+    "vertical": "",                # "" = original, "flou" = 9:16 fond flouté, "recadre" = 9:16 plein écran
+    "decoupe": 0,                  # 0 = entier, ou durée max par partie en secondes (60, 120, 180)
     "format_audio": "mp3",
     "qualite_audio": "0",          # 0 = meilleure (VBR) ; sinon kbps
     "sponsorblock": False,
