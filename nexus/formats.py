@@ -129,11 +129,35 @@ def tri(opts):
     conteneur = opts.get("conteneur") or "mp4"
     if opts.get("type") == "audio":
         return ["ext:m4a" if opts.get("format_audio") in ("m4a", "mp3") else "acodec:opus"]
+    # Prête à publier : H.264 + AAC d'abord (seul couple accepté partout : TikTok, Reels, YouTube…),
+    # la résolution ensuite. YouTube sert l'H.264 jusqu'en 1080p, le plafond de TikTok.
+    if opts.get("compatible"):
+        return ["vcodec:h264", "res", "fps", "acodec:aac", "ext:mp4:m4a"]
     if conteneur == "mp4":
         return ["res", "fps", "ext:mp4:m4a"]
     if conteneur == "webm":
         return ["res", "fps", "ext:webm:webm"]
     return ["res", "fps"]
+
+
+def video_publiable(v):
+    """Codec vidéo accepté sans recompression lourde par TikTok, Instagram, Facebook, YouTube (H.264)."""
+    return v == "none" or bool(v and (v.startswith(("avc1", "avc3")) or v in ("h264", "avc")))
+
+
+def audio_publiable(a):
+    """Codec audio accepté partout (AAC)."""
+    return a == "none" or bool(a and (a.startswith("mp4a") or a == "aac"))
+
+
+# Réencodage ffmpeg de secours : H.264 High 8 bits 4:2:0, couleurs BT.709 propres,
+# plus grand côté ramené à 1920 px sans jamais agrandir, AAC stéréo 48 kHz.
+ARGS_VIDEO_PUBLIABLE = (
+    "-c:v libx264 -preset veryfast -crf 20 -profile:v high -level:v 4.2 -pix_fmt yuv420p "
+    "-color_primaries bt709 -color_trc bt709 -colorspace bt709 "
+    "-vf \"scale=w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2\""
+)
+ARGS_AUDIO_PUBLIABLE = "-c:a aac -b:a 192k -ar 48000 -ac 2"
 
 
 def sous_titres_dispo(info):

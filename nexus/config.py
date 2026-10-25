@@ -50,8 +50,9 @@ REGLAGES_DEFAUT = {
     "garder_vo": True,             # garder la VO en 2e piste
     "sous_titres_secours": True,   # pas de doublage → sous-titres intégrés
     "type": "video",
-    "qualite": "best",
+    "qualite": "1080",
     "conteneur": "mp4",
+    "compatible": True,            # prête à publier : MP4 H.264 + AAC accepté par TikTok, Reels, YouTube
     "format_audio": "mp3",
     "qualite_audio": "0",          # 0 = meilleure (VBR) ; sinon kbps
     "sponsorblock": False,

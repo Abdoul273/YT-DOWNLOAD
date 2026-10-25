@@ -197,7 +197,7 @@ def gouts_oublier_recherche():
 
 # ── téléchargements ─────────────────────────────────────────────────
 OPTIONS_PERMISES = {
-    "type", "qualite", "conteneur", "format_audio", "qualite_audio", "langue_audio", "garder_vo",
+    "type", "qualite", "conteneur", "compatible", "format_audio", "qualite_audio", "langue_audio", "garder_vo",
     "sous_titres", "sous_titres_auto", "sous_titres_fichier", "sponsorblock", "debut", "fin",
     "chapitres_separes", "programme",
 }

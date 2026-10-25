@@ -37,6 +37,7 @@ PHASES_PP = {
     "SplitChapters": "Découpage en chapitres", "MoveFiles": "Finalisation",
     "FFmpegVideoRemuxer": "Conversion du conteneur", "FFmpegSubtitlesConvertor": "Conversion des sous-titres",
     "FFmpegThumbnailsConvertor": "Conversion de la miniature", "ThumbnailsConvertor": "Conversion de la miniature",
+    "CopyStream": "Conversion pour TikTok / YouTube", "FFmpegCopyStream": "Conversion pour TikTok / YouTube",
 }
 
 CHAMPS_SAUVES = (
@@ -360,7 +361,7 @@ class Gestionnaire:
 
     def _une_tentative(self, t, reglages):
         """(réussi, message d'erreur, erreur passagère ?)"""
-        o = t.options
+        o = dict(t.options)
         self.maj(t, statut="analyse", phase="Analyse de la vidéo", erreur="")
         try:
             info = analyse.info_complete(t.url)
@@ -371,14 +372,20 @@ class Gestionnaire:
         if info.get("live_status") == "is_live":
             return False, "Les directs en cours ne sont pas pris en charge : attends la fin du live.", False
 
+        # Prête à publier (TikTok, Reels, YouTube…) : MP4 H.264 + AAC, une seule piste audio,
+        # pas de pochette ni de piste de chapitres/sous-titres intégrée (refusées par ces plateformes).
+        publiable = o.get("type") != "audio" and bool(o.get("compatible", reglages["compatible"]))
+        if publiable:
+            o.update(compatible=True, conteneur="mp4")
+
         # Pistes audio
         langue = o.get("langue_audio") or reglages["langue_audio"]
-        garder_vo = o.get("garder_vo", reglages["garder_vo"]) and o.get("type") != "audio"
+        garder_vo = o.get("garder_vo", reglages["garder_vo"]) and o.get("type") != "audio" and not publiable
         piste, originale, deux = formats.plan_audio(info, langue, garder_vo)
         sel = formats.selecteur(o, piste, originale, deux)
         tri = formats.tri(o)
 
-        # Résolution exacte des formats (tailles, ordre des parties)
+        # Résolution exacte des formats (tailles, ordre des parties, codecs)
         dossier = config.dossier_telechargement(reglages)
         if t.groupe and reglages["sous_dossier_playlist"]:
             dossier = dossier / re.sub(r'[\\/:*?"<>|]+', "_", t.groupe).strip()[:120]
@@ -396,13 +403,23 @@ class Gestionnaire:
             return False, message, passagere
         parties = choisi.get("requested_formats") or [choisi]
         t.parties = []
+        codecs = []
         for f in parties:
+            codecs.append((f.get("vcodec"), f.get("acodec")))
             if formats._est_video(f):
                 lib = f"Vidéo {f.get('height') or ''}p".replace(" p", "")
             else:
                 code = f.get("language")
                 lib = f"Audio {langues.drapeau(code)} {langues.nom(code)}" if code else "Audio"
             t.parties.append((f.get("format_id"), f.get("filesize") or f.get("filesize_approx") or 0, lib))
+
+        # Conversion seulement si YouTube n'a pas fourni directement de l'H.264 / AAC
+        conv_video = publiable and any(not formats.video_publiable(v) for v, _ in codecs)
+        conv_audio = publiable and any(not formats.audio_publiable(a) for _, a in codecs)
+        conversion = " ".join(
+            ([formats.ARGS_VIDEO_PUBLIABLE] if conv_video else [])
+            + ([formats.ARGS_AUDIO_PUBLIABLE] if conv_audio else [])
+        )
 
         # Description des pistes et messages
         msg = ""
@@ -417,7 +434,9 @@ class Gestionnaire:
         secours = (not piste and langue != "original" and not langues.meme_langue(originale, langue)
                    and o.get("type") != "audio" and reglages["sous_titres_secours"])
         if secours:
-            msg += " → sous-titres intégrés"
+            msg += " → sous-titres en fichier .srt" if publiable else " → sous-titres intégrés"
+        if conv_video:
+            msg += (" · " if msg else "") + "Conversion H.264 pour TikTok / YouTube (plus long)"
         total = sum(p[1] for p in t.parties)
         self.maj(t, titre=info.get("title") or t.titre, miniature=t.miniature or analyse._miniature(info),
                  chaine=info.get("channel") or info.get("uploader") or t.chaine,
@@ -427,13 +446,15 @@ class Gestionnaire:
 
         chemin_info = config.CACHE_INFOS / f"{t.id}.json"
         chemin_info.write_text(json.dumps(info))
-        cmd = self._commande(t, reglages, sel, tri, dossier, modele, chemin_info,
-                             piste or originale, originale if deux else None, secours, langue)
+        cmd = self._commande(t, o, reglages, sel, tri, dossier, modele, chemin_info,
+                             piste or originale, originale if deux else None, secours, langue,
+                             publiable=publiable, conversion=conversion)
         return self._lancer(t, cmd)
 
-    def _commande(self, t, r, sel, tri, dossier, modele, chemin_info, piste, vo, secours, langue):
-        o = t.options
+    def _commande(self, t, o, r, sel, tri, dossier, modele, chemin_info, piste, vo, secours, langue,
+                  publiable=False, conversion=""):
         audio = o.get("type") == "audio"
+        conteneur = o.get("conteneur") or r["conteneur"]
         cmd = config.commande_ytdlp() + [
             "--load-info-json", str(chemin_info), "--ignore-config", "--no-simulate",
             "-f", sel, "-S", ",".join(tri),
@@ -450,8 +471,10 @@ class Gestionnaire:
         if r["limite_vitesse"]:
             cmd += ["-r", r["limite_vitesse"]]
         if r["metadonnees"]:
-            cmd += ["--embed-metadata", "--embed-chapters"]
-        if r["miniature"] and o.get("conteneur") != "webm":
+            # La piste de chapitres (texte) d'un MP4 fait échouer l'envoi sur TikTok/Instagram.
+            cmd += ["--embed-metadata", "--no-embed-chapters"] if publiable else ["--embed-metadata", "--embed-chapters"]
+        # La pochette intégrée est un 2e flux vidéo (MJPEG) : « codec non pris en charge » sur les réseaux.
+        if r["miniature"] and conteneur != "webm" and not publiable:
             cmd += ["--embed-thumbnail"]
 
         if audio:
@@ -460,7 +483,6 @@ class Gestionnaire:
             if fa != "original":
                 cmd += ["--audio-format", fa, "--audio-quality", str(o.get("qualite_audio") or r["qualite_audio"])]
         else:
-            conteneur = o.get("conteneur") or r["conteneur"]
             cmd += ["--audio-multistreams", "--merge-output-format", conteneur]
             if piste and conteneur != "webm":
                 # Pistes nommées ; seule la 1re (langue voulue) est « par défaut ».
@@ -472,6 +494,13 @@ class Gestionnaire:
                     pp += nommer(1, langues.nom(vo) + " (VO)")
                     pp += " -disposition:a 0 -disposition:a:0 default"
                 cmd += ["--postprocessor-args", f"Merger:{pp}"]
+            if conversion:
+                # Passe ffmpeg sur le fichier final (fusionné, extrait ou fichier unique) avant métadonnées :
+                # fonctionne aussi avec --download-sections, où le Merger n'intervient pas.
+                cmd += [
+                    "--use-postprocessor", "FFmpegCopyStream:when=post_process",
+                    "--postprocessor-args", f"CopyStream:{conversion}",
+                ]
             sous_titres = list(o.get("sous_titres") or [])
             if secours:
                 b = langues.base(langue)
@@ -481,7 +510,7 @@ class Gestionnaire:
                         "--sleep-subtitles", "1"]
                 if secours or o.get("sous_titres_auto"):
                     cmd += ["--write-auto-subs"]
-                if o.get("sous_titres_fichier"):
+                if o.get("sous_titres_fichier") or publiable:
                     cmd += ["--convert-subs", "srt"]
                 else:
                     cmd += ["--embed-subs"]

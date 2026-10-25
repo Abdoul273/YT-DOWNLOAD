@@ -46,3 +46,15 @@ def test_selecteur():
 def test_qualites_tailles():
     q, ta = formats.qualites(INFO_DOUBLEE, "fr")
     assert q[0]["hauteur"] == 1080 and q[0]["taille"] == 6000 and ta == 1000
+
+
+def test_mode_publiable():
+    assert formats.tri({"type": "video", "compatible": True}) == ["vcodec:h264", "res", "fps", "acodec:aac", "ext:mp4:m4a"]
+    assert formats.tri({"type": "video", "compatible": False, "conteneur": "mp4"}) == ["res", "fps", "ext:mp4:m4a"]
+    assert formats.video_publiable("avc1.640028")
+    assert formats.video_publiable("h264")
+    assert not formats.video_publiable("vp9")
+    assert not formats.video_publiable("av01.0.08M.08")
+    assert formats.audio_publiable("mp4a.40.2")
+    assert formats.audio_publiable("aac")
+    assert not formats.audio_publiable("opus")

@@ -175,7 +175,8 @@ const POPULAIRES = ["fr", "en", "es", "de", "it", "pt", "ar", "ja", "ko", "hi"];
 function choixParDefaut() {
   const r = R();
   return {
-    type: r.type || "video", qualite: r.qualite || "best", conteneur: r.conteneur || "mp4",
+    type: r.type || "video", qualite: r.qualite || "1080", conteneur: r.conteneur || "mp4",
+    compatible: r.compatible ?? true,
     format_audio: r.format_audio || "mp3", qualite_audio: r.qualite_audio || "0",
     langue_audio: null, garder_vo: r.garder_vo ?? true, sous_titres: [], sous_titres_auto: false,
     sous_titres_fichier: false, sponsorblock: r.sponsorblock || false, debut: "", fin: "",
@@ -420,12 +421,15 @@ function carteVideo(v) {
   const estOriginale = choisie === v.originale || choisie === "original";
   const pref = R().langue_audio || "fr";
   const manque = pref !== "original" && v.pistes.length > 0 && !v.piste_voulue;
-  const q = v.qualites.find((x) => String(x.hauteur) === String(c.qualite)) || v.qualites[0];
+  const qualites = c.compatible && c.type === "video" && v.qualites.some((x) => x.hauteur <= 1080)
+    ? v.qualites.filter((x) => x.hauteur <= 1080)
+    : v.qualites;
+  const q = qualites.find((x) => String(x.hauteur) === String(c.qualite)) || qualites[0];
   const tailleAudio = v.taille_audio || 0;
-  const vo = !estOriginale && c.garder_vo && c.type === "video";
+  const vo = !estOriginale && c.garder_vo && c.type === "video" && !c.compatible;
   let est = c.type === "audio" ? tailleAudio : (q?.taille || 0) + (vo ? tailleAudio : 0);
   if (c.debut || c.fin) est = 0;
-  const actif = (x) => String(c.qualite) === String(x.hauteur) || (c.qualite === "best" && x === v.qualites[0]) || (!v.qualites.some((y) => String(y.hauteur) === String(c.qualite)) && x === v.qualites[0]);
+  const actif = (x) => String(c.qualite) === String(x.hauteur) || (c.qualite === "best" && x === qualites[0]) || (!qualites.some((y) => String(y.hauteur) === String(c.qualite)) && x === qualites[0]);
   const pisteSel = v.pistes.find((p) => estChoisie(p, choisie));
   const nbLangues = v.pistes.length;
   const avance = c.sous_titres.length || c.sponsorblock || c.debut || c.fin || c.programme || c.chapitres_separes;
@@ -465,9 +469,9 @@ function carteVideo(v) {
       ${nbLangues > 1 || manque ? h`
       <div class="etape">
         ${tete(I.langue, "Langue audio", nbLangues > 1 ? `${nbLangues} pistes sur YouTube` : "")}
-        ${manque && C().langue_audio == null ? h`<div class="alerte info" style="margin-bottom:14px">${brut(I.info)}<span>Pas de doublage <b>${nomLangue(pref).toLowerCase()}</b> sur YouTube pour cette vidéo.${R().sous_titres_secours && c.type === "video" ? (v.sous_titres.auto || v.sous_titres.manuels.length ? " Elle sera téléchargée en VO avec les sous-titres intégrés." : " Pas de sous-titres non plus.") : ""}</span></div>` : ""}
+        ${manque && C().langue_audio == null ? h`<div class="alerte info" style="margin-bottom:14px">${brut(I.info)}<span>Pas de doublage <b>${nomLangue(pref).toLowerCase()}</b> sur YouTube pour cette vidéo.${R().sous_titres_secours && c.type === "video" ? (v.sous_titres.auto || v.sous_titres.manuels.length ? (c.compatible ? " Elle sera téléchargée en VO avec les sous-titres en fichier .srt." : " Elle sera téléchargée en VO avec les sous-titres intégrés.") : " Pas de sous-titres non plus.") : ""}</span></div>` : ""}
         ${nbLangues > 1 ? blocLangues(v, choisie) : ""}
-        ${!estOriginale && c.type === "video" ? h`
+        ${!estOriginale && c.type === "video" && !c.compatible ? h`
         <label class="option" style="margin-top:14px">
           <span class="ic">${brut(I.micro)}</span>
           <span class="texte"><b>Garder aussi la VO</b><span>${v.originale_nom || "Version originale"} en 2ᵉ piste — à choisir dans VLC, mpv ou ta TV</span></span>
@@ -475,10 +479,10 @@ function carteVideo(v) {
         </label>` : ""}
       </div>` : ""}
 
-      ${c.type === "video" && v.qualites.length ? h`
+      ${c.type === "video" && qualites.length ? h`
       <div class="etape">
         ${tete(I.qualite, "Qualité", "taille estimée")}
-        <div class="qualites">${v.qualites.map((x, i) => h`
+        <div class="qualites">${qualites.map((x, i) => h`
           <button class="qualite anim" style="--i:${i}" data-qualite="${x.hauteur}" aria-pressed="${actif(x)}">
             <b>${x.libelle}</b>
             <span class="ligne-q"><span class="taille">${x.taille ? taille(x.taille + (vo ? tailleAudio : 0)) : "—"}</span>${x.hdr ? h`<span class="tag ia">HDR</span>` : x.badge ? h`<span class="tag hd">${x.badge}</span>` : ""}</span>
@@ -497,7 +501,7 @@ function carteVideo(v) {
               ${v.sous_titres.auto_fr ? h`<button class="puce" data-st="fr" aria-pressed="${c.sous_titres.includes("fr")}">🇫🇷 Français <span class="tag ia">auto</span></button>` : ""}
               ${v.sous_titres.manuels.slice(0, 30).map((s) => h`<button class="puce" data-st="${s.code}" aria-pressed="${c.sous_titres.includes(s.code)}">${s.drapeau} ${nomPiste(s)}</button>`)}
             </div>
-            ${c.sous_titres.length ? h`<label class="option" style="margin-top:10px"><span class="texte"><b>Fichiers .srt séparés</b><span>Sinon intégrés directement dans la vidéo</span></span><input type="checkbox" class="interrupteur" data-opt="sous_titres_fichier" ${c.sous_titres_fichier ? "checked" : ""} /></label>` : ""}
+            ${c.sous_titres.length && !c.compatible ? h`<label class="option" style="margin-top:10px"><span class="texte"><b>Fichiers .srt séparés</b><span>Sinon intégrés directement dans la vidéo</span></span><input type="checkbox" class="interrupteur" data-opt="sous_titres_fichier" ${c.sous_titres_fichier ? "checked" : ""} /></label>` : ""}
           </div>` : ""}
           ${optionsAvancees(v.chapitres)}
         </div>
@@ -505,7 +509,7 @@ function carteVideo(v) {
 
       <div class="barre-action">
         <div class="recap">
-          ${c.type === "audio" ? h`<span>${brut(I.audio.replace("<svg", '<svg style="width:16px;height:16px;vertical-align:-3px"'))} Audio ${(c.format_audio || "mp3").toUpperCase()}</span>` : h`<span>${q?.libelle || "Meilleure"}</span><span class="sep"></span><span>${(c.conteneur || "mp4").toUpperCase()}</span>`}
+          ${c.type === "audio" ? h`<span>${brut(I.audio.replace("<svg", '<svg style="width:16px;height:16px;vertical-align:-3px"'))} Audio ${(c.format_audio || "mp3").toUpperCase()}</span>` : h`<span>${q?.libelle || "Meilleure"}</span><span class="sep"></span><span>${c.compatible ? "MP4 · Prête à publier" : (c.conteneur || "mp4").toUpperCase()}</span>`}
           ${pisteSel ? h`<span class="sep"></span><span>${pisteSel.drapeau} ${nomPiste(pisteSel)}${vo ? " + VO" : ""}</span>` : ""}
           ${est ? h`<span class="sep"></span><span class="poids">≈ ${taille(est)}</span>` : ""}
         </div>
@@ -518,12 +522,12 @@ function carteVideo(v) {
 function fichierFinal(v, { q, pisteSel, vo, manque }) {
   const c = C();
   const lignes = [];
-  if (c.type === "video") lignes.push([I.video, `Vidéo ${q?.libelle || ""}`.trim(), (c.conteneur || "mp4").toUpperCase(), ""]);
+  if (c.type === "video") lignes.push([I.video, `Vidéo ${q?.libelle || ""}`.trim(), c.compatible ? "MP4 · H.264 + AAC" : (c.conteneur || "mp4").toUpperCase(), ""]);
   if (pisteSel) lignes.push([I.audio, `${pisteSel.drapeau} ${nomPiste(pisteSel)}`, c.type === "audio" ? (c.format_audio || "mp3").toUpperCase() : "Piste 1 · par défaut", "fr"]);
   if (vo) { const o = v.pistes.find((p) => p.originale); lignes.push([I.audio, `${o?.drapeau || "🎙️"} ${o ? nomPiste(o) : "VO"}`, "Piste 2 · VO", ""]); }
   const st = [...c.sous_titres];
   if (manque && C().langue_audio == null && c.type === "video" && R().sous_titres_secours && (v.sous_titres.auto || v.sous_titres.manuels.length)) st.unshift(R().langue_audio || "fr");
-  if (st.length && c.type === "video") lignes.push([I.st, `Sous-titres ${[...new Set(st)].map((x) => x.toUpperCase()).join(", ")}`, c.sous_titres_fichier ? "fichiers .srt" : "intégrés", ""]);
+  if (st.length && c.type === "video") lignes.push([I.st, `Sous-titres ${[...new Set(st)].map((x) => x.toUpperCase()).join(", ")}`, c.sous_titres_fichier || c.compatible ? "fichiers .srt" : "intégrés", ""]);
   if (c.sponsorblock) lignes.push([I.bouclier, "Sans sponsors", "SponsorBlock", ""]);
   if (c.debut || c.fin) lignes.push([I.ciseaux, `Extrait ${c.debut || "0:00"} → ${c.fin || "fin"}`, "", ""]);
   return h`<div class="verre fichier-final">
@@ -543,9 +547,15 @@ function selecteurFormat() {
       ${[["0", "Meilleure qualité"], ["320K", "320 kbit/s"], ["256K", "256 kbit/s"], ["192K", "192 kbit/s"], ["128K", "128 kbit/s"]].map(([k, l]) => h`<option value="${k}" ${c.qualite_audio === k ? "selected" : ""}>${l}</option>`)}
     </select></div>` : ""}`;
   }
-  return h`<div class="segment">
+  return h`
+  <label class="option" style="margin-bottom:${c.compatible ? "0" : "12px"}">
+    <span class="ic">${brut(I.etincelle)}</span>
+    <span class="texte"><b>Prête à publier (TikTok, Reels, YouTube)</b><span>MP4 H.264 + AAC, piste unique, sans erreur de codec ni blocage</span></span>
+    <input type="checkbox" class="interrupteur" data-opt="compatible" ${c.compatible ? "checked" : ""} />
+  </label>
+  ${c.compatible ? "" : h`<div class="segment">
     ${[["mp4", "MP4", "partout"], ["mkv", "MKV", "flexible"], ["webm", "WebM", "web"]].map(([k, l, d]) => h`<button data-conteneur="${k}" aria-pressed="${c.conteneur === k}">${l} <small>${d}</small></button>`)}
-  </div>`;
+  </div>`}`;
 }
 
 function optionsAvancees(chapitres) {
@@ -594,7 +604,7 @@ function cartePlaylist(p) {
           <select class="entree" data-opt="qualite">${QUALITES.map(([k, l]) => h`<option value="${k}" ${String(c.qualite) === k ? "selected" : ""}>${l}</option>`)}</select></div>` : ""}
       </div>
       <div style="margin-top:16px">${selecteurFormat()}</div>
-      ${c.type === "video" && langue !== "original" ? h`<label class="option" style="margin-top:14px"><span class="ic">${brut(I.micro)}</span><span class="texte"><b>Garder aussi la VO</b><span>En 2ᵉ piste, quand un doublage existe</span></span><input type="checkbox" class="interrupteur" data-opt="garder_vo" ${c.garder_vo ? "checked" : ""} /></label>` : ""}
+      ${c.type === "video" && langue !== "original" && !c.compatible ? h`<label class="option" style="margin-top:14px"><span class="ic">${brut(I.micro)}</span><span class="texte"><b>Garder aussi la VO</b><span>En 2ᵉ piste, quand un doublage existe</span></span><input type="checkbox" class="interrupteur" data-opt="garder_vo" ${c.garder_vo ? "checked" : ""} /></label>` : ""}
     </div>
     <details class="avance" style="border-top:1px solid var(--trait)"><summary>${brut(I.reglage)} Options avancées${brut(I.chev.replace("<svg", '<svg class="chev"'))}</summary><div class="contenu-avance">${optionsAvancees()}</div></details>
     <div class="selection-barre" style="border-top:1px solid var(--trait)">
@@ -613,7 +623,7 @@ function cartePlaylist(p) {
       </label>`)}
     </div>
     <div class="barre-action">
-      <div class="recap"><span>${n} vidéo${n > 1 ? "s" : ""}</span><span class="sep"></span><span>${drapeauLangue(langue)} ${nomLangue(langue)}</span><span class="sep"></span><span>${c.type === "audio" ? (c.format_audio || "mp3").toUpperCase() : `${QUALITES.find(([k]) => k === String(c.qualite))?.[1] || c.qualite} · ${(c.conteneur || "mp4").toUpperCase()}`}</span></div>
+      <div class="recap"><span>${n} vidéo${n > 1 ? "s" : ""}</span><span class="sep"></span><span>${drapeauLangue(langue)} ${nomLangue(langue)}</span><span class="sep"></span><span>${c.type === "audio" ? (c.format_audio || "mp3").toUpperCase() : `${QUALITES.find(([k]) => k === String(c.qualite))?.[1] || c.qualite} · ${c.compatible ? "MP4 · Prête à publier" : (c.conteneur || "mp4").toUpperCase()}`}</span></div>
       <button class="btn principal grand" data-action="telecharger-selection" ${!n || E.envoi ? "disabled" : ""}>${brut(c.programme ? I.horloge : I.dl)} ${c.programme ? "Programmer" : "Tout télécharger"}</button>
     </div>
   </div>`;
@@ -2965,7 +2975,8 @@ function vueReglages() {
         ${sel("simultanes", "Téléchargements simultanés", "Plus = plus rapide si ta connexion suit", [1, 2, 3, 4, 5, 6, 8].map((n) => [n, n]))}
         ${sel("type", "Type par défaut", "", [["video", "Vidéo"], ["audio", "Audio seul"]])}
         ${sel("qualite", "Qualité par défaut", "", QUALITES)}
-        ${sel("conteneur", "Format vidéo", "MP4 se lit partout", [["mp4", "MP4"], ["mkv", "MKV"], ["webm", "WebM"]])}
+        ${bool("compatible", "Prête à publier (TikTok, Reels, YouTube)", "MP4 H.264 + AAC, 1 piste audio, 1080p max — sans erreur de codec")}
+        ${sel("conteneur", "Format vidéo", "MP4 se lit partout (forcé en MP4 si « Prête à publier » est actif)", [["mp4", "MP4"], ["mkv", "MKV"], ["webm", "WebM"]])}
         ${sel("format_audio", "Format audio", "Pour le mode « audio seul »", [["mp3", "MP3"], ["m4a", "M4A"], ["opus", "Opus"], ["flac", "FLAC"], ["wav", "WAV"], ["original", "Original"]])}
         ${txt("modele_nom", "Nom des fichiers", "Modèle yt-dlp", "%(title)s [%(id)s].%(ext)s")}
         ${bool("sous_dossier_playlist", "Un dossier par playlist")}
