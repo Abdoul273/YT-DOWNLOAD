@@ -3,8 +3,10 @@
 library;
 
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../moteur/analyse.dart' as analyse;
 import '../moteur/gouts.dart';
@@ -507,38 +509,144 @@ class _Resultat extends StatelessWidget {
   }
 
   void _menu(BuildContext context) {
+    HapticFeedback.lightImpact();
     final c = context.c;
     showModalBottomSheet(
       context: context,
-      useSafeArea: true,
-      backgroundColor: c.fond,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (ctx) {
-        Widget ligne(IconData i, String t, VoidCallback f, {Color? couleur}) => ListTile(
-              leading: Icon(i, color: couleur ?? c.t2),
-              title: Text(t, style: TextStyle(color: couleur ?? c.t1)),
-              onTap: () {
-                Navigator.pop(ctx);
-                f();
-              },
-            );
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            if (!e.direct) ligne(Icons.play_circle_outline_rounded, 'Aperçu', () => _FeuilleApercu.ouvrir(context, e)),
-            ligne(Icons.download_rounded, 'Télécharger', _ouvrir),
-            ligne(Icons.not_interested_rounded, 'Pas intéressé', () {
-              gouts.pasInteresse(e);
-              toast(context, 'Compris, on en tiendra compte');
-            }),
-            if (e.chaine != null)
-              ligne(Icons.block_rounded, 'Ne plus recommander « ${e.chaine} »', () {
-                gouts.bloquerChaine(e);
-                toast(context, 'Chaîne masquée des propositions');
-              }, couleur: c.rouge),
-          ]),
-        );
-      },
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withAlpha(c.sombre ? 140 : 80),
+      builder: (ctx) => ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            decoration: BoxDecoration(
+              color: c.sombre ? const Color(0xE8101224) : const Color(0xF4FFFFFF),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+              border: Border(
+                top: BorderSide(
+                  color: c.sombre ? c.indigo.withAlpha(85) : c.indigo.withAlpha(50),
+                  width: 1.2,
+                ),
+                left: BorderSide(color: c.trait),
+                right: BorderSide(color: c.trait),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withAlpha(c.sombre ? 110 : 30),
+                  blurRadius: 32,
+                  offset: const Offset(0, -6),
+                ),
+              ],
+            ),
+            child: SafeArea(
+              top: false,
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + MediaQuery.paddingOf(ctx).bottom),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 38,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 14),
+                        decoration: BoxDecoration(
+                          color: c.t3.withAlpha(90),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    Verre(
+                      padding: const EdgeInsets.all(10),
+                      rayon: 18,
+                      child: Row(
+                        children: [
+                          Miniature(e.miniature, largeur: 76, rayon: 10, texteDuree: e.direct ? 'DIRECT' : formaterDuree(e.duree)),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  e.titre,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontWeight: FontWeight.w800, color: c.t1, fontSize: 13.5, height: 1.25),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  [if (e.chaine != null) e.chaine, formaterVues(e.vues), ilYA(e.date)].where((s) => s != null && s.isNotEmpty).join(' · '),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: mono(context, taille: 11, couleur: c.t2),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (!e.direct)
+                      _LigneActionRecherche(
+                        icone: Icons.play_circle_outline_rounded,
+                        couleur: c.indigo,
+                        titre: 'Aperçu',
+                        sousTitre: 'Regarder avant de télécharger',
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _FeuilleApercu.ouvrir(context, e);
+                        },
+                      ),
+                    _LigneActionRecherche(
+                      icone: Icons.download_rounded,
+                      couleur: c.vert,
+                      titre: 'Télécharger',
+                      sousTitre: 'Analyser et choisir les options',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _ouvrir();
+                      },
+                    ),
+                    _LigneActionRecherche(
+                      icone: Icons.not_interested_rounded,
+                      couleur: c.t2,
+                      titre: 'Pas intéressé',
+                      sousTitre: 'Moins de propositions similaires',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        gouts.pasInteresse(e);
+                        toast(context, 'Compris, on en tiendra compte');
+                      },
+                    ),
+                    if (e.chaine != null) ...[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        child: Divider(color: c.trait, height: 10),
+                      ),
+                      _LigneActionRecherche(
+                        icone: Icons.block_rounded,
+                        couleur: c.rouge,
+                        titre: 'Ne plus recommander cette chaîne',
+                        sousTitre: '« ${e.chaine} » masquée des propositions',
+                        destructif: true,
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          gouts.bloquerChaine(e);
+                          toast(context, 'Chaîne masquée des propositions');
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -597,9 +705,32 @@ class _FeuilleApercu extends StatefulWidget {
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
-        backgroundColor: context.c.fond,
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-        builder: (_) => _FeuilleApercu(e),
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withAlpha(context.c.sombre ? 140 : 80),
+        builder: (_) => ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+            child: Container(
+              decoration: BoxDecoration(
+                color: context.c.sombre ? const Color(0xE8101224) : const Color(0xF4FFFFFF),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                border: Border(
+                  top: BorderSide(
+                    color: context.c.sombre ? context.c.indigo.withAlpha(85) : context.c.indigo.withAlpha(50),
+                    width: 1.2,
+                  ),
+                  left: BorderSide(color: context.c.trait),
+                  right: BorderSide(color: context.c.trait),
+                ),
+              ),
+              child: SafeArea(
+                top: false,
+                child: _FeuilleApercu(e),
+              ),
+            ),
+          ),
+        ),
       );
 
   @override
@@ -656,6 +787,86 @@ class _FeuilleApercuState extends State<_FeuilleApercu> {
           ouvrirLien(e.url!);
         }),
       ]),
+    );
+  }
+}
+
+class _LigneActionRecherche extends StatelessWidget {
+  final IconData icone;
+  final Color couleur;
+  final String titre;
+  final String? sousTitre;
+  final VoidCallback onTap;
+  final bool destructif;
+
+  const _LigneActionRecherche({
+    required this.icone,
+    required this.couleur,
+    required this.titre,
+    this.sousTitre,
+    required this.onTap,
+    this.destructif = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: couleur.withAlpha(c.sombre ? 32 : 24),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: couleur.withAlpha(c.sombre ? 60 : 40),
+                    width: 1,
+                  ),
+                ),
+                child: Icon(icone, color: couleur, size: 20),
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      titre,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                        color: destructif ? c.rouge : c.t1,
+                      ),
+                    ),
+                    if (sousTitre != null) ...[
+                      const SizedBox(height: 1.5),
+                      Text(
+                        sousTitre!,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: destructif ? c.rouge.withAlpha(190) : c.t3,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, color: c.t3.withAlpha(80), size: 18),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

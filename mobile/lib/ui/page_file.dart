@@ -1,7 +1,10 @@
 /// Onglet En cours : file de téléchargements en direct.
 library;
 
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../moteur/natif.dart';
 import '../moteur/erreurs.dart';
@@ -28,6 +31,11 @@ Future<bool> _confirmerRetrait(BuildContext context, String titre, String messag
     await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: ctx.c.sombre ? const Color(0xFF14162A) : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+          side: BorderSide(color: ctx.c.sombre ? ctx.c.indigo.withAlpha(50) : ctx.c.trait2),
+        ),
         icon: Icon(Icons.delete_outline_rounded, color: context.c.rouge),
         title: Text(titre),
         content: Text(message),
@@ -56,6 +64,139 @@ class _PageFileState extends State<PageFile> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _vue = null; // thème changé : on reconstruit
+  }
+
+  void _ouvrirMenuFile(BuildContext context) {
+    HapticFeedback.lightImpact();
+    final c = context.c;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withAlpha(c.sombre ? 140 : 80),
+      builder: (ctx) => ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            decoration: BoxDecoration(
+              color: c.sombre ? const Color(0xE8101224) : const Color(0xF4FFFFFF),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+              border: Border(
+                top: BorderSide(
+                  color: c.sombre ? c.indigo.withAlpha(85) : c.indigo.withAlpha(50),
+                  width: 1.2,
+                ),
+                left: BorderSide(color: c.trait),
+                right: BorderSide(color: c.trait),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withAlpha(c.sombre ? 110 : 30),
+                  blurRadius: 32,
+                  offset: const Offset(0, -6),
+                ),
+              ],
+            ),
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + MediaQuery.paddingOf(ctx).bottom),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 38,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 14),
+                        decoration: BoxDecoration(
+                          color: c.t3.withAlpha(90),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    Text(
+                      'Gestion de la file',
+                      style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800, color: c.t1),
+                    ),
+                    const SizedBox(height: 12),
+                    _ItemActionFile(
+                      icone: Icons.pause_circle_outline_rounded,
+                      couleur: c.ambre,
+                      titre: 'Tout mettre en pause',
+                      sousTitre: 'Suspendre les téléchargements actifs',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        gestionnaire.actionGlobale('pause_tout');
+                      },
+                    ),
+                    _ItemActionFile(
+                      icone: Icons.play_circle_outline_rounded,
+                      couleur: c.indigo,
+                      titre: 'Tout reprendre',
+                      sousTitre: 'Relancer les téléchargements en attente',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        gestionnaire.actionGlobale('reprendre_tout');
+                      },
+                    ),
+                    _ItemActionFile(
+                      icone: Icons.replay_rounded,
+                      couleur: c.cyan,
+                      titre: 'Relancer les échecs',
+                      sousTitre: 'Réessayer les téléchargements en erreur',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        gestionnaire.actionGlobale('relancer_erreurs');
+                      },
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      child: Divider(color: c.trait, height: 10),
+                    ),
+                    _ItemActionFile(
+                      icone: Icons.cleaning_services_rounded,
+                      couleur: c.vert,
+                      titre: 'Retirer les terminés',
+                      sousTitre: 'Conserver les fichiers mais vider la file',
+                      onTap: () async {
+                        Navigator.pop(ctx);
+                        final confirme = await _confirmerRetrait(
+                          context,
+                          'Nettoyer la liste ?',
+                          'Retirer les téléchargements terminés de la liste ? Les fichiers téléchargés seront conservés.',
+                          'Retirer',
+                        );
+                        if (confirme) gestionnaire.actionGlobale('vider_termines');
+                      },
+                    ),
+                    _ItemActionFile(
+                      icone: Icons.delete_sweep_rounded,
+                      couleur: c.rouge,
+                      titre: 'Retirer les échecs',
+                      sousTitre: 'Supprimer les téléchargements annulés ou en échec',
+                      destructif: true,
+                      onTap: () async {
+                        Navigator.pop(ctx);
+                        final confirme = await _confirmerRetrait(
+                          context,
+                          'Nettoyer les échecs ?',
+                          'Retirer les téléchargements en échec ou annulés de la liste ?',
+                          'Retirer',
+                        );
+                        if (confirme) gestionnaire.actionGlobale('vider_echecs');
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -104,25 +245,10 @@ class _PageFileState extends State<PageFile> {
                     ]),
                   ),
                 ),
-                PopupMenuButton<String>(
+                IconButton(
+                  tooltip: 'Options de la file',
                   icon: Icon(Icons.more_vert_rounded, color: c.t2),
-                  color: c.sombre ? const Color(0xFF14162A) : Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  onSelected: (action) async {
-                    if (action.startsWith('vider_')) {
-                      final confirme = await _confirmerRetrait(context, 'Nettoyer la liste ?',
-                        'Retirer les téléchargements ${action == 'vider_termines' ? 'terminés' : 'en échec ou annulés'} de la liste ? Les fichiers téléchargés seront conservés.', 'Retirer');
-                      if (!confirme || !context.mounted) return;
-                    }
-                    gestionnaire.actionGlobale(action);
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'pause_tout', child: Text('Tout mettre en pause')),
-                    PopupMenuItem(value: 'reprendre_tout', child: Text('Tout reprendre')),
-                    PopupMenuItem(value: 'relancer_erreurs', child: Text('Relancer les échecs')),
-                    PopupMenuItem(value: 'vider_termines', child: Text('Retirer les terminés')),
-                    PopupMenuItem(value: 'vider_echecs', child: Text('Retirer les échecs')),
-                  ],
+                  onPressed: () => _ouvrirMenuFile(context),
                 ),
               ]),
             ),
@@ -193,13 +319,63 @@ class CarteTache extends StatelessWidget {
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
-        builder: (ctx) => SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Padding(padding: const EdgeInsets.all(16), child: Text(audio ? 'Changer le format audio et réessayer' : 'Changer la qualité et réessayer')),
-          for (final q in audio ? const ['original', 'mp3', 'm4a', 'opus', 'flac', 'wav'] : const ['best', '1080', '720', '480', '360', '240', '144'])
-            ListTile(title: Text(audio ? (q == 'original' ? 'Format original' : q.toUpperCase()) : q == 'best' ? 'Meilleure disponible' : '${q}p'),
-              trailing: t.options[audio ? 'format_audio' : 'qualite'] == q ? const Icon(Icons.check_rounded) : null,
-              onTap: () => Navigator.pop(ctx, q)),
-        ])),
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withAlpha(context.c.sombre ? 140 : 80),
+        builder: (ctx) => ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+            child: Container(
+              decoration: BoxDecoration(
+                color: ctx.c.sombre ? const Color(0xE8101224) : const Color(0xF4FFFFFF),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                border: Border(
+                  top: BorderSide(
+                    color: ctx.c.sombre ? ctx.c.indigo.withAlpha(85) : ctx.c.indigo.withAlpha(50),
+                    width: 1.2,
+                  ),
+                  left: BorderSide(color: ctx.c.trait),
+                  right: BorderSide(color: ctx.c.trait),
+                ),
+              ),
+              child: SafeArea(
+                top: false,
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + MediaQuery.paddingOf(ctx).bottom),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 38,
+                          height: 4,
+                          margin: const EdgeInsets.only(bottom: 14),
+                          decoration: BoxDecoration(
+                            color: ctx.c.t3.withAlpha(90),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      Text(
+                        audio ? 'Changer le format audio et réessayer' : 'Changer la qualité et réessayer',
+                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: ctx.c.t1),
+                      ),
+                      const SizedBox(height: 12),
+                      for (final q in audio ? const ['original', 'mp3', 'm4a', 'opus', 'flac', 'wav'] : const ['best', '1080', '720', '480', '360', '240', '144'])
+                        ListTile(
+                          title: Text(audio ? (q == 'original' ? 'Format original' : q.toUpperCase()) : q == 'best' ? 'Meilleure disponible' : '${q}p'),
+                          trailing: t.options[audio ? 'format_audio' : 'qualite'] == q ? Icon(Icons.check_rounded, color: ctx.c.indigo) : null,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          onTap: () => Navigator.pop(ctx, q),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       );
       if (qualite != null) gestionnaire.changerQualite(t.id, qualite);
     }
@@ -370,4 +546,84 @@ class _Action extends StatelessWidget {
         padding: const EdgeInsets.only(left: 6),
         child: BoutonVerre(icone: icone, aide: aide, onTap: onTap),
       );
+}
+
+class _ItemActionFile extends StatelessWidget {
+  final IconData icone;
+  final Color couleur;
+  final String titre;
+  final String? sousTitre;
+  final VoidCallback onTap;
+  final bool destructif;
+
+  const _ItemActionFile({
+    required this.icone,
+    required this.couleur,
+    required this.titre,
+    this.sousTitre,
+    required this.onTap,
+    this.destructif = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: couleur.withAlpha(c.sombre ? 32 : 24),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: couleur.withAlpha(c.sombre ? 60 : 40),
+                    width: 1,
+                  ),
+                ),
+                child: Icon(icone, color: couleur, size: 20),
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      titre,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                        color: destructif ? c.rouge : c.t1,
+                      ),
+                    ),
+                    if (sousTitre != null) ...[
+                      const SizedBox(height: 1.5),
+                      Text(
+                        sousTitre!,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: destructif ? c.rouge.withAlpha(190) : c.t3,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, color: c.t3.withAlpha(80), size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

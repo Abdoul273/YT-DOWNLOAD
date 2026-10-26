@@ -210,31 +210,62 @@ class Verre extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.c;
     final br = BorderRadius.circular(rayon);
-    final base = teinte ?? c.verre;
+    final base = teinte ?? (c.sombre ? const Color(0x18141830) : c.verre);
+    final bord = bordure ??
+        Border.all(
+          color: c.sombre ? c.indigo.withAlpha(45) : c.indigo.withAlpha(25),
+          width: 1.1,
+        );
+
     Widget contenu = Padding(padding: padding, child: child);
-    if (onTap != null) contenu = InkWell(onTap: onTap, borderRadius: br, child: contenu);
-    Widget w = Material(
-      type: MaterialType.transparency,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
+    if (onTap != null) {
+      contenu = Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
           borderRadius: br,
-          border: bordure ?? Border.all(color: c.trait),
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [base.withAlpha((base.a * 255 * 1.6).clamp(0, 255).round()), base],
-          ),
+          child: contenu,
         ),
-        child: contenu,
+      );
+    }
+
+    Widget w = DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: br,
+        border: bord,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(c.sombre ? 40 : 10),
+            blurRadius: 18,
+            offset: const Offset(0, 5),
+            spreadRadius: -3,
+          ),
+          BoxShadow(
+            color: c.indigo.withAlpha(c.sombre ? 18 : 6),
+            blurRadius: 14,
+            offset: const Offset(0, 2),
+            spreadRadius: -4,
+          ),
+        ],
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            c.sombre
+                ? Color.alphaBlend(const Color(0x16FFFFFF), base)
+                : const Color(0xF4FFFFFF),
+            base,
+          ],
+        ),
       ),
+      child: ClipRRect(borderRadius: br, child: contenu),
     );
+
     if (flou > 0) {
       w = ClipRRect(
         borderRadius: br,
         child: BackdropFilter(filter: ImageFilter.blur(sigmaX: flou, sigmaY: flou), child: w),
       );
-    } else if (onTap != null) {
-      w = ClipRRect(borderRadius: br, child: w); // garde l'effet d'appui dans les coins arrondis
     }
     return w;
   }

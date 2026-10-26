@@ -2,6 +2,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -25,41 +26,82 @@ Future<bool> modifierCookies(BuildContext context) async {
   final ok = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: c.sombre ? const Color(0xFF10121F) : Colors.white,
-    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
-    builder: (ctx) => Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.viewInsetsOf(ctx).bottom + 20),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Cookies YouTube', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c.t1)),
-        const SizedBox(height: 6),
-        Text(
-          'Si YouTube demande de prouver que tu n’es pas un robot, ou pour les vidéos réservées aux adultes/membres : '
-          'exporte tes cookies au format Netscape (extension « Get cookies.txt LOCALLY » sur PC) et colle-les ici.',
-          style: TextStyle(color: c.t2, fontSize: 12.5),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: ctrl,
-          maxLines: 8,
-          style: mono(ctx, taille: 11, couleur: c.t1, poids: FontWeight.w500),
-          decoration: InputDecoration(
-            hintText: '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\t…',
-            hintStyle: mono(ctx, taille: 11, couleur: c.t3, poids: FontWeight.w500),
-            filled: true,
-            fillColor: c.verre2,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.black.withAlpha(c.sombre ? 140 : 80),
+    builder: (ctx) => ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          decoration: BoxDecoration(
+            color: c.sombre ? const Color(0xE8101224) : const Color(0xF4FFFFFF),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            border: Border(
+              top: BorderSide(
+                color: c.sombre ? c.indigo.withAlpha(85) : c.indigo.withAlpha(50),
+                width: 1.2,
+              ),
+              left: BorderSide(color: c.trait),
+              right: BorderSide(color: c.trait),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(c.sombre ? 110 : 30),
+                blurRadius: 32,
+                offset: const Offset(0, -6),
+              ),
+            ],
+          ),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, MediaQuery.viewInsetsOf(ctx).bottom + 20),
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Center(
+                  child: Container(
+                    width: 38,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 14),
+                    decoration: BoxDecoration(
+                      color: c.t3.withAlpha(90),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                Text('Cookies YouTube', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c.t1)),
+                const SizedBox(height: 6),
+                Text(
+                  'Si YouTube demande de prouver que tu n’es pas un robot, ou pour les vidéos réservées aux adultes/membres : '
+                  'exporte tes cookies au format Netscape (extension « Get cookies.txt LOCALLY » sur PC) et colle-les ici.',
+                  style: TextStyle(color: c.t2, fontSize: 12.5),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  maxLines: 8,
+                  style: mono(ctx, taille: 11, couleur: c.t1, poids: FontWeight.w500),
+                  decoration: InputDecoration(
+                    hintText: '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\t…',
+                    hintStyle: mono(ctx, taille: 11, couleur: c.t3, poids: FontWeight.w500),
+                    filled: true,
+                    fillColor: c.verre2,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(children: [
+                  BoutonVerre(icone: Icons.delete_outline_rounded, texte: 'Effacer', onTap: () {
+                    ctrl.clear();
+                    Navigator.pop(ctx, true);
+                  }),
+                  const SizedBox(width: 10),
+                  Expanded(child: BoutonGrad('Enregistrer', icone: Icons.check_rounded, onTap: () => Navigator.pop(ctx, true))),
+                ]),
+              ]),
+            ),
           ),
         ),
-        const SizedBox(height: 12),
-        Row(children: [
-          BoutonVerre(icone: Icons.delete_outline_rounded, texte: 'Effacer', onTap: () {
-            ctrl.clear();
-            Navigator.pop(ctx, true);
-          }),
-          const SizedBox(width: 10),
-          Expanded(child: BoutonGrad('Enregistrer', icone: Icons.check_rounded, onTap: () => Navigator.pop(ctx, true))),
-        ]),
-      ]),
+      ),
     ),
   );
   final contenu = ctrl.text;
@@ -132,11 +174,63 @@ class _PageReglagesState extends State<PageReglages> {
     if (verrouActif) {
       final action = await showModalBottomSheet<String>(
         context: context,
-        builder: (ctx) => SafeArea(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            ListTile(leading: const Icon(Icons.edit_rounded), title: const Text('Changer le code'), onTap: () => Navigator.pop(ctx, 'changer')),
-            ListTile(leading: const Icon(Icons.lock_open_rounded), title: const Text('Désactiver le verrouillage'), onTap: () => Navigator.pop(ctx, 'off')),
-          ]),
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withAlpha(context.c.sombre ? 140 : 80),
+        builder: (ctx) => ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+            child: Container(
+              decoration: BoxDecoration(
+                color: ctx.c.sombre ? const Color(0xE8101224) : const Color(0xF4FFFFFF),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                border: Border(
+                  top: BorderSide(color: ctx.c.sombre ? ctx.c.indigo.withAlpha(85) : ctx.c.indigo.withAlpha(50), width: 1.2),
+                  left: BorderSide(color: ctx.c.trait),
+                  right: BorderSide(color: ctx.c.trait),
+                ),
+              ),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Center(
+                      child: Container(
+                        width: 38,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 14),
+                        decoration: BoxDecoration(
+                          color: ctx.c.t3.withAlpha(90),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    ListTile(
+                      leading: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(color: ctx.c.indigo.withAlpha(30), borderRadius: BorderRadius.circular(12)),
+                        child: Icon(Icons.edit_rounded, color: ctx.c.indigo, size: 20),
+                      ),
+                      title: Text('Changer le code', style: TextStyle(fontWeight: FontWeight.w700, color: ctx.c.t1)),
+                      onTap: () => Navigator.pop(ctx, 'changer'),
+                    ),
+                    ListTile(
+                      leading: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(color: ctx.c.rouge.withAlpha(30), borderRadius: BorderRadius.circular(12)),
+                        child: Icon(Icons.lock_open_rounded, color: ctx.c.rouge, size: 20),
+                      ),
+                      title: Text('Désactiver le verrouillage', style: TextStyle(fontWeight: FontWeight.w700, color: ctx.c.rouge)),
+                      onTap: () => Navigator.pop(ctx, 'off'),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+          ),
         ),
       );
       if (action == 'off') {
