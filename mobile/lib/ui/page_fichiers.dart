@@ -1,6 +1,8 @@
 /// Onglet Fichiers : bibliothèque des téléchargements terminés.
 library;
 
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -175,6 +177,225 @@ class _PageFichiersState extends State<PageFichiers> {
       await gestionnaire.supprimer(t.id, fichier: true);
       if (mounted) toast(context, 'Fichier supprimé');
     }
+  }
+
+  void _ouvrirMenuFichier(Tache t, List<Tache> liste) {
+    HapticFeedback.lightImpact();
+    final c = context.c;
+    final f = t.fichierPrincipal;
+    final favs = _favoris;
+    final estFav = favs.contains(t.id);
+    final lisible = _lisible(t);
+    final audio = _estAudio(t);
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withAlpha(c.sombre ? 140 : 80),
+      builder: (ctx) => ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(ctx).height * 0.85,
+            ),
+            decoration: BoxDecoration(
+              color: c.sombre ? const Color(0xE8101224) : const Color(0xF4FFFFFF),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+              border: Border(
+                top: BorderSide(
+                  color: c.sombre ? c.indigo.withAlpha(85) : c.indigo.withAlpha(50),
+                  width: 1.2,
+                ),
+                left: BorderSide(color: c.trait),
+                right: BorderSide(color: c.trait),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withAlpha(c.sombre ? 110 : 30),
+                  blurRadius: 32,
+                  offset: const Offset(0, -6),
+                ),
+              ],
+            ),
+            child: SafeArea(
+              top: false,
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + MediaQuery.paddingOf(ctx).bottom),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 38,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 14),
+                        decoration: BoxDecoration(
+                          color: c.t3.withAlpha(90),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    Verre(
+                      padding: const EdgeInsets.all(10),
+                      rayon: 18,
+                      child: Row(
+                        children: [
+                          Stack(
+                            children: [
+                              Miniature(t.miniature, largeur: 76, rayon: 10, texteDuree: formaterDuree(t.duree)),
+                              Positioned(
+                                left: 4,
+                                top: 4,
+                                child: Container(
+                                  padding: const EdgeInsets.all(3),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withAlpha(160),
+                                    borderRadius: BorderRadius.circular(5),
+                                  ),
+                                  child: Icon(
+                                    audio ? Icons.headphones_rounded : Icons.movie_rounded,
+                                    size: 11,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  t.titre,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    color: c.t1,
+                                    fontSize: 13.5,
+                                    height: 1.25,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  [
+                                    if (t.chaine != null && t.chaine!.isNotEmpty) t.chaine,
+                                    if (t.pistes.isNotEmpty) t.pistes,
+                                    formaterTaille(t.tailleFichier),
+                                  ].whereType<String>().join(' · '),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: mono(context, taille: 11, couleur: c.t2),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (lisible)
+                      _ItemMenuFichier(
+                        icone: Icons.play_circle_fill_rounded,
+                        couleur: c.indigo,
+                        titre: 'Lire',
+                        sousTitre: audio ? 'Écouter dans le lecteur' : 'Regarder dans le lecteur',
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _lire(liste, t);
+                        },
+                      ),
+                    _ItemMenuFichier(
+                      icone: estFav ? Icons.star_rounded : Icons.star_outline_rounded,
+                      couleur: c.ambre,
+                      titre: estFav ? 'Retirer des favoris' : 'Ajouter aux favoris',
+                      sousTitre: estFav ? 'Enlever de la sélection des favoris' : 'Garder en accès rapide',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _basculerFavoris([t.id]);
+                      },
+                    ),
+                    _ItemMenuFichier(
+                      icone: Icons.checklist_rounded,
+                      couleur: c.bleu,
+                      titre: 'Sélectionner',
+                      sousTitre: 'Activer la sélection multiple',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _basculerSelection(t);
+                      },
+                    ),
+                    if (f != null) ...[
+                      _ItemMenuFichier(
+                        icone: Icons.open_in_new_rounded,
+                        couleur: c.cyan,
+                        titre: 'Ouvrir avec…',
+                        sousTitre: 'Choisir une autre application',
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          Natif.ouvrir(f.uri, f.mime);
+                        },
+                      ),
+                      _ItemMenuFichier(
+                        icone: Icons.share_rounded,
+                        couleur: c.vert,
+                        titre: 'Partager',
+                        sousTitre: 'Envoyer le fichier',
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          Natif.partager(f.uri, f.mime);
+                        },
+                      ),
+                    ],
+                    if (t.url.isNotEmpty)
+                      _ItemMenuFichier(
+                        icone: Icons.smart_display_rounded,
+                        couleur: const Color(0xFFFF0000),
+                        titre: 'Voir sur YouTube',
+                        sousTitre: 'Ouvrir la page originale',
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          Natif.ouvrirLien(t.url);
+                        },
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      child: Divider(color: c.trait, height: 10),
+                    ),
+                    _ItemMenuFichier(
+                      icone: Icons.playlist_remove_rounded,
+                      couleur: c.t2,
+                      titre: 'Retirer de la liste',
+                      sousTitre: 'Conserver le fichier sur le téléphone',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        gestionnaire.supprimer(t.id);
+                      },
+                    ),
+                    _ItemMenuFichier(
+                      icone: Icons.delete_outline_rounded,
+                      couleur: c.rouge,
+                      titre: 'Supprimer le fichier',
+                      sousTitre: 'Effacer définitivement du téléphone',
+                      destructif: true,
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _supprimer(t);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -354,7 +575,6 @@ class _PageFichiersState extends State<PageFichiers> {
                 separatorBuilder: (_, _) => const SizedBox(height: 10),
                 itemBuilder: (context, i) {
                   final t = liste[i];
-                  final f = t.fichierPrincipal!;
                   final choisi = _selection.contains(t.id);
                   final avancement = _avancement(t);
                   return GestureDetector(
@@ -413,41 +633,10 @@ class _PageFichiersState extends State<PageFichiers> {
                         ]),
                       ),
                       if (favs.contains(t.id)) Icon(Icons.star_rounded, size: 18, color: c.ambre),
-                      PopupMenuButton<String>(
+                      IconButton(
+                        tooltip: 'Options',
                         icon: Icon(Icons.more_vert_rounded, color: c.t2),
-                        color: c.sombre ? const Color(0xFF14162A) : Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        onSelected: (a) {
-                          switch (a) {
-                            case 'lire':
-                              _lire(liste, t);
-                            case 'favori':
-                              _basculerFavoris([t.id]);
-                            case 'selection':
-                              _basculerSelection(t);
-                            case 'ouvrir':
-                              Natif.ouvrir(f.uri, f.mime);
-                            case 'partager':
-                              Natif.partager(f.uri, f.mime);
-                            case 'youtube':
-                              Natif.ouvrirLien(t.url);
-                            case 'retirer':
-                              gestionnaire.supprimer(t.id);
-                            case 'supprimer':
-                              _supprimer(t);
-                          }
-                        },
-                        itemBuilder: (_) => [
-                          if (_lisible(t)) const PopupMenuItem(value: 'lire', child: Text('Lire')),
-                          PopupMenuItem(
-                              value: 'favori', child: Text(favs.contains(t.id) ? 'Retirer des favoris' : 'Ajouter aux favoris')),
-                          const PopupMenuItem(value: 'selection', child: Text('Sélectionner')),
-                          const PopupMenuItem(value: 'ouvrir', child: Text('Ouvrir avec…')),
-                          const PopupMenuItem(value: 'partager', child: Text('Partager')),
-                          const PopupMenuItem(value: 'youtube', child: Text('Voir sur YouTube')),
-                          const PopupMenuItem(value: 'retirer', child: Text('Retirer de la liste')),
-                          PopupMenuItem(value: 'supprimer', child: Text('Supprimer le fichier', style: TextStyle(color: c.rouge))),
-                        ],
+                        onPressed: () => _ouvrirMenuFichier(t, liste),
                       ),
                     ]),
                   ),
@@ -460,6 +649,86 @@ class _PageFichiersState extends State<PageFichiers> {
       ],
     );
       },
+    );
+  }
+}
+
+class _ItemMenuFichier extends StatelessWidget {
+  final IconData icone;
+  final Color couleur;
+  final String titre;
+  final String? sousTitre;
+  final VoidCallback onTap;
+  final bool destructif;
+
+  const _ItemMenuFichier({
+    required this.icone,
+    required this.couleur,
+    required this.titre,
+    this.sousTitre,
+    required this.onTap,
+    this.destructif = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: couleur.withAlpha(c.sombre ? 32 : 24),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: couleur.withAlpha(c.sombre ? 60 : 40),
+                    width: 1,
+                  ),
+                ),
+                child: Icon(icone, color: couleur, size: 20),
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      titre,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                        color: destructif ? c.rouge : c.t1,
+                      ),
+                    ),
+                    if (sousTitre != null) ...[
+                      const SizedBox(height: 1.5),
+                      Text(
+                        sousTitre!,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: destructif ? c.rouge.withAlpha(190) : c.t3,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, color: c.t3.withAlpha(80), size: 18),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
