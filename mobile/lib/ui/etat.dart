@@ -6,6 +6,10 @@ import 'package:flutter/foundation.dart';
 /// Onglet affiché : 0 Vidéo, 1 Recherche, 2 En cours, 3 Fichiers, 4 Réglages.
 final onglet = ValueNotifier<int>(0);
 
+/// Intercepteurs de retour arrière (geste ou bouton Android).
+/// Chaque fonction renvoie true si elle a consommé l'événement, false sinon.
+final intercepteursRetour = <bool Function()>[];
+
 /// Lien(s) à analyser dans l'onglet Vidéo (partage, recherche, presse-papiers).
 final lienAAnalyser = ValueNotifier<String?>(null);
 

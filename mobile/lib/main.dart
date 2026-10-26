@@ -167,6 +167,9 @@ class Accueil extends StatelessWidget {
       canPop: false,
       onPopInvokedWithResult: (popped, _) {
         if (popped) return;
+        for (final intercepteur in intercepteursRetour.reversed.toList()) {
+          if (intercepteur()) return;
+        }
         if (onglet.value != 0) {
           onglet.value = 0;
         } else {

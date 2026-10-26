@@ -2,10 +2,12 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../moteur/natif.dart';
 import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
+import 'etat.dart';
 import 'lecteur.dart';
 import 'theme.dart';
 
@@ -21,6 +23,44 @@ class _PageFichiersState extends State<PageFichiers> {
   String _groupe = ''; // playlist / dossier ('' = toutes)
   bool _favorisSeuls = false;
   final _selection = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    intercepteursRetour.add(_gererRetour);
+  }
+
+  @override
+  void dispose() {
+    intercepteursRetour.remove(_gererRetour);
+    super.dispose();
+  }
+
+  bool _gererRetour() {
+    if (onglet.value == 3 && _selection.isNotEmpty) {
+      _annulerSelection();
+      return true;
+    }
+    return false;
+  }
+
+  void _annulerSelection() {
+    HapticFeedback.lightImpact();
+    setState(_selection.clear);
+  }
+
+  void _basculerToutSelectionner(List<Tache> liste) {
+    if (liste.isEmpty) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      final tous = liste.every((t) => _selection.contains(t.id));
+      if (tous) {
+        _selection.clear();
+      } else {
+        _selection.addAll(liste.map((t) => t.id));
+      }
+    });
+  }
 
   static const _tris = {
     'recent': 'Plus récents',
@@ -40,9 +80,12 @@ class _PageFichiersState extends State<PageFichiers> {
     reglages['favoris'] = f.toList();
   }
 
-  void _basculerSelection(Tache t) => setState(() {
-        if (!_selection.remove(t.id)) _selection.add(t.id);
-      });
+  void _basculerSelection(Tache t) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      if (!_selection.remove(t.id)) _selection.add(t.id);
+    });
+  }
 
   /// Avancement de lecture (0‥1) pour la barre « reprendre », sinon null.
   double? _avancement(Tache t) {
@@ -158,61 +201,79 @@ class _PageFichiersState extends State<PageFichiers> {
           ..sort(_comparer);
         final total = termines.fold(0, (a, t) => a + t.tailleFichier);
         final selectionnes = liste.where((t) => _selection.contains(t.id)).toList();
-        return CustomScrollView(slivers: [
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            sliver: SliverToBoxAdapter(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                if (_selection.isNotEmpty)
-                  Verre(
-                    padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-                    child: Row(children: [
-                      IconButton(
-                        tooltip: 'Annuler la sélection',
-                        icon: Icon(Icons.close_rounded, color: c.t1),
-                        onPressed: () => setState(_selection.clear),
+        final tousSelectionnes = liste.isNotEmpty && liste.every((t) => _selection.contains(t.id));
+        return Column(
+          children: [
+            AnimatedSize(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOutCubic,
+              child: _selection.isEmpty
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+                      child: Verre(
+                        flou: 16,
+                        teinte: c.sombre ? const Color(0x286366F1) : const Color(0x186366F1),
+                        bordure: Border.all(color: c.indigo.withAlpha(120), width: 1.2),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                        child: Row(children: [
+                          IconButton(
+                            tooltip: 'Annuler la sélection',
+                            icon: Icon(Icons.close_rounded, color: c.t1),
+                            onPressed: _annulerSelection,
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text('${selectionnes.length} sélectionné${selectionnes.length > 1 ? 's' : ''}',
+                                style: TextStyle(fontWeight: FontWeight.w800, color: c.t1, fontSize: 15)),
+                          ),
+                          IconButton(
+                            tooltip: tousSelectionnes ? 'Tout désélectionner' : 'Tout sélectionner',
+                            icon: Icon(
+                              tousSelectionnes ? Icons.deselect_rounded : Icons.select_all_rounded,
+                              color: tousSelectionnes ? c.indigo : c.t1,
+                            ),
+                            onPressed: () => _basculerToutSelectionner(liste),
+                          ),
+                          IconButton(
+                            tooltip: 'Favoris',
+                            icon: Icon(Icons.star_rounded, color: c.ambre),
+                            onPressed: () => _basculerFavoris(selectionnes.map((t) => t.id)),
+                          ),
+                          IconButton(
+                            tooltip: 'Supprimer',
+                            icon: Icon(Icons.delete_outline_rounded, color: c.rouge),
+                            onPressed: () => _supprimerSelection(liste),
+                          ),
+                        ]),
                       ),
-                      Expanded(
-                        child: Text('${selectionnes.length} sélectionné${selectionnes.length > 1 ? 's' : ''}',
-                            style: TextStyle(fontWeight: FontWeight.w800, color: c.t1, fontSize: 15)),
-                      ),
-                      IconButton(
-                        tooltip: 'Tout sélectionner',
-                        icon: Icon(Icons.select_all_rounded, color: c.t1),
-                        onPressed: () => setState(() => _selection.addAll(liste.map((t) => t.id))),
-                      ),
-                      IconButton(
-                        tooltip: 'Favoris',
-                        icon: Icon(Icons.star_rounded, color: c.ambre),
-                        onPressed: () => _basculerFavoris(selectionnes.map((t) => t.id)),
-                      ),
-                      IconButton(
-                        tooltip: 'Supprimer',
-                        icon: Icon(Icons.delete_outline_rounded, color: c.rouge),
-                        onPressed: () => _supprimerSelection(liste),
-                      ),
-                    ]),
-                  )
-                else
-                Verre(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(gradient: gradVert, borderRadius: BorderRadius.circular(14)),
-                      child: const Icon(Icons.folder_rounded, color: Colors.white),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('${termines.length} fichier${termines.length > 1 ? 's' : ''}',
-                            style: TextStyle(fontWeight: FontWeight.w800, color: c.t1, fontSize: 16)),
-                        Text('Téléchargements/YT-NEXUS · ${formaterTaille(total)}',
-                            style: TextStyle(color: c.t2, fontSize: 12)),
-                      ]),
-                    ),
-                  ]),
-                ),
+            ),
+            Expanded(
+              child: CustomScrollView(slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Verre(
+                        padding: const EdgeInsets.all(14),
+                        child: Row(children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(gradient: gradVert, borderRadius: BorderRadius.circular(14)),
+                            child: const Icon(Icons.folder_rounded, color: Colors.white),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text('${termines.length} fichier${termines.length > 1 ? 's' : ''}',
+                                  style: TextStyle(fontWeight: FontWeight.w800, color: c.t1, fontSize: 16)),
+                              Text('Téléchargements/YT-NEXUS · ${formaterTaille(total)}',
+                                  style: TextStyle(color: c.t2, fontSize: 12)),
+                            ]),
+                          ),
+                        ]),
+                      ),
                 const SizedBox(height: 12),
                 TextField(
                   onChanged: (v) => setState(() => _requete = v),
@@ -394,7 +455,10 @@ class _PageFichiersState extends State<PageFichiers> {
                 },
               ),
             ),
-        ]);
+          ]),
+        ),
+      ],
+    );
       },
     );
   }
