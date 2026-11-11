@@ -7,6 +7,9 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageInstaller
 import android.content.res.Configuration
+import android.media.audiofx.BassBoost
+import android.media.audiofx.Equalizer
+import android.media.audiofx.LoudnessEnhancer
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -47,6 +50,9 @@ class MainActivity : FlutterActivity() {
     @Volatile private var pret = false
     private var pipAuto = false
     private var pipRatio = 16.0 / 9.0
+    private var egaliseur: Equalizer? = null
+    private var basses: BassBoost? = null
+    private var amplificateur: LoudnessEnhancer? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -287,6 +293,51 @@ class MainActivity : FlutterActivity() {
                     requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 7)
                 }
                 res.success(null)
+            }
+            "effetsAudio" -> {
+                val actif = appel.argument<Boolean>("actif") == true
+                val niveaux = appel.argument<List<Double>>("bandes") ?: emptyList()
+                val forceBasses = (appel.argument<Number>("basses")?.toInt() ?: 0).coerceIn(0, 1000)
+                val gainDb = (appel.argument<Number>("gain")?.toDouble() ?: 0.0).coerceIn(0.0, 15.0)
+                try {
+                    if (!actif && forceBasses == 0 && gainDb == 0.0) {
+                        egaliseur?.enabled = false
+                        basses?.enabled = false
+                        amplificateur?.enabled = false
+                    } else {
+                        if (egaliseur == null) egaliseur = Equalizer(0, 0)
+                        egaliseur?.let { eq ->
+                            eq.enabled = actif
+                            if (actif && niveaux.isNotEmpty()) {
+                                val min = eq.bandLevelRange[0].toInt()
+                                val max = eq.bandLevelRange[1].toInt()
+                                val nb = eq.numberOfBands.toInt()
+                                for (i in 0 until minOf(nb, niveaux.size)) {
+                                    val c = (niveaux[i].coerceIn(-1.0, 1.0) * (max - min) / 2.0 + (max + min) / 2.0)
+                                        .toInt().coerceIn(min, max).toShort()
+                                    eq.setBandLevel(i.toShort(), c)
+                                }
+                            }
+                        }
+                        if (forceBasses > 0) {
+                            if (basses == null) basses = BassBoost(0, 0)
+                            basses?.enabled = true
+                            basses?.setStrength(forceBasses.toShort())
+                        } else {
+                            basses?.enabled = false
+                        }
+                        if (gainDb > 0.0) {
+                            if (amplificateur == null) amplificateur = LoudnessEnhancer(0)
+                            amplificateur?.enabled = true
+                            amplificateur?.setTargetGain((gainDb * 100).toInt())
+                        } else {
+                            amplificateur?.enabled = false
+                        }
+                    }
+                    res.success(true)
+                } catch (e: Throwable) {
+                    res.success(false)
+                }
             }
             else -> res.notImplemented()
         }

@@ -9,6 +9,7 @@ import 'moteur/reglages.dart';
 import 'moteur/taches.dart';
 import 'ui/etat.dart';
 import 'ui/fenetre_maj.dart';
+import 'ui/lecteur_audio.dart';
 import 'ui/page_fichiers.dart';
 import 'ui/page_file.dart';
 import 'ui/page_recherche.dart';
@@ -227,7 +228,13 @@ class Accueil extends StatelessWidget {
             ]),
           ),
         ]),
-        bottomNavigationBar: const _Navigation(),
+        bottomNavigationBar: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            MiniLecteurAudio(),
+            _Navigation(),
+          ],
+        ),
       ),
     );
   }

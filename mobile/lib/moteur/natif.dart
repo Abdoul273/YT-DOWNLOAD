@@ -171,4 +171,19 @@ class Natif {
   static Future<String> reseau() async => await _canal.invokeMethod<String>('reseau') ?? 'autre';
 
   static Future<void> demanderNotifications() => _canal.invokeMethod('demanderNotifications');
+
+  /// Applique l'égaliseur matériel, le renforcement des basses (0‥1000) et l'amplificateur (0‥15 dB).
+  static Future<bool> effetsAudio({
+    required bool actif,
+    List<double> bandes = const [],
+    int basses = 0,
+    double gain = 0.0,
+  }) async =>
+      await _canal.invokeMethod<bool>('effetsAudio', {
+        'actif': actif,
+        'bandes': bandes,
+        'basses': basses,
+        'gain': gain,
+      }) ??
+      false;
 }

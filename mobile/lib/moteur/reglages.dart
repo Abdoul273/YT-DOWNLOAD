@@ -45,6 +45,15 @@ const reglagesDefaut = <String, dynamic>{
   'theme': 'sombre',
   'maj_auto': true,
   'derniere_maj': 0,
+  'audio_aleatoire': false,
+  'audio_repetition': 0, // 0: off, 1: liste, 2: titre
+  'audio_style_pochette': 'vinyle', // 'vinyle' | 'carte'
+  'audio_spectre': true,
+  'audio_eq_actif': false,
+  'audio_eq_profil': 'neutre',
+  'audio_eq_bandes': <double>[0.0, 0.0, 0.0, 0.0, 0.0],
+  'audio_basses': 0, // 0‥1000
+  'audio_gain': 0.0, // 0‥15 dB
 };
 
 class Reglages extends ChangeNotifier {

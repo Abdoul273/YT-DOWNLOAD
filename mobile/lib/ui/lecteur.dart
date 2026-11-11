@@ -24,13 +24,29 @@ import '../moteur/miniatures.dart' as miniatures;
 import '../moteur/natif.dart';
 import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
+import 'lecteur_audio.dart';
 import 'theme.dart';
 
-Future<void> ouvrirLecteur(BuildContext context, List<Tache> liste, int index) =>
-    Navigator.of(context).push(PageRouteBuilder(
-      pageBuilder: (_, _, _) => Lecteur(liste, index),
-      transitionsBuilder: (_, a, _, w) => FadeTransition(opacity: a, child: w),
-    ));
+bool _estFichierAudio(Tache t) =>
+    (t.fichierPrincipal?.mime.startsWith('audio') ?? false) || t.options['type'] == 'audio';
+
+Future<void> ouvrirLecteur(BuildContext context, List<Tache> liste, int index) {
+  if (liste.isEmpty) return Future.value();
+  final i = index.clamp(0, liste.length - 1);
+  final cible = liste[i];
+  if (_estFichierAudio(cible)) {
+    final audios = liste.where(_estFichierAudio).toList();
+    final idxAudio = audios.indexOf(cible);
+    return ouvrirLecteurAudio(context, liste: audios, index: idxAudio < 0 ? 0 : idxAudio);
+  }
+  if (moteurAudio.enLecture) moteurAudio.pause();
+  final videos = liste.where((t) => !_estFichierAudio(t)).toList();
+  final idxVideo = videos.indexOf(cible);
+  return Navigator.of(context).push(PageRouteBuilder(
+    pageBuilder: (_, _, _) => Lecteur(videos.isEmpty ? [cible] : videos, idxVideo < 0 ? 0 : idxVideo),
+    transitionsBuilder: (_, a, _, w) => FadeTransition(opacity: a, child: w),
+  ));
+}
 
 const _orientations = ['Automatique', 'Portrait', 'Paysage · deux sens'];
 

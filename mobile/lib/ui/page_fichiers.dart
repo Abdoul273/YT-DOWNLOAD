@@ -11,6 +11,7 @@ import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
 import 'etat.dart';
 import 'lecteur.dart';
+import 'lecteur_audio.dart';
 import 'theme.dart';
 
 class PageFichiers extends StatefulWidget {
@@ -304,12 +305,36 @@ class _PageFichiersState extends State<PageFichiers> {
                         icone: Icons.play_circle_fill_rounded,
                         couleur: c.indigo,
                         titre: 'Lire',
-                        sousTitre: audio ? 'Écouter dans le lecteur' : 'Regarder dans le lecteur',
+                        sousTitre: audio ? 'Écouter dans Onde Studio' : 'Regarder dans le lecteur vidéo',
                         onTap: () {
                           Navigator.pop(ctx);
                           _lire(liste, t);
                         },
                       ),
+                    if (audio && lisible) ...[
+                      _ItemMenuFichier(
+                        icone: Icons.playlist_play_rounded,
+                        couleur: c.violet,
+                        titre: 'Lire ensuite',
+                        sousTitre: 'Insérer juste après le morceau en cours',
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          moteurAudio.lireEnsuite(t);
+                          toast(context, 'Ajouté après le titre en cours');
+                        },
+                      ),
+                      _ItemMenuFichier(
+                        icone: Icons.queue_music_rounded,
+                        couleur: c.cyan,
+                        titre: 'Ajouter à la file musicale',
+                        sousTitre: 'Placer à la fin de la file d’attente',
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          moteurAudio.ajouterAFile(t);
+                          toast(context, 'Ajouté à la file musicale');
+                        },
+                      ),
+                    ],
                     _ItemMenuFichier(
                       icone: estFav ? Icons.star_rounded : Icons.star_outline_rounded,
                       couleur: c.ambre,
@@ -403,7 +428,7 @@ class _PageFichiersState extends State<PageFichiers> {
     final c = context.c;
     return ListenableBuilder(
       // Pas l'avancement des téléchargements en cours : seulement les changements de statut.
-      listenable: Listenable.merge([gestionnaire.statuts, reglages]),
+      listenable: Listenable.merge([gestionnaire.statuts, reglages, moteurAudio.morceauActif]),
       builder: (context, _) {
         final termines = gestionnaire.taches.where((t) => t.statut == 'termine' && t.fichiers.isNotEmpty).toList();
         final q = _requete.toLowerCase();
@@ -420,6 +445,7 @@ class _PageFichiersState extends State<PageFichiers> {
             .where((t) => !_favorisSeuls || favs.contains(t.id))
             .toList()
           ..sort(_comparer);
+        final audios = liste.where((t) => _estAudio(t) && _lisible(t)).toList();
         final total = termines.fold(0, (a, t) => a + t.tailleFichier);
         final selectionnes = liste.where((t) => _selection.contains(t.id)).toList();
         final tousSelectionnes = liste.isNotEmpty && liste.every((t) => _selection.contains(t.id));
@@ -552,6 +578,59 @@ class _PageFichiersState extends State<PageFichiers> {
                     ]),
                   ),
                 ],
+                if (audios.isNotEmpty && _type != 'video') ...[
+                  const SizedBox(height: 12),
+                  Verre(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+                    rayon: 20,
+                    teinte: c.sombre ? const Color(0x226366F1) : const Color(0x146366F1),
+                    bordure: Border.all(color: c.indigo.withAlpha(90)),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            gradient: gradBouton,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(Icons.graphic_eq_rounded, color: Colors.white, size: 20),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Onde Studio · ${audios.length} titre${audios.length > 1 ? 's' : ''}',
+                                style: TextStyle(fontWeight: FontWeight.w800, color: c.t1, fontSize: 13.5),
+                              ),
+                              Text(
+                                'Platine vinyle, égaliseur 5 bandes & paroles',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(color: c.t2, fontSize: 11),
+                              ),
+                            ],
+                          ),
+                        ),
+                        BoutonVerre(
+                          icone: Icons.shuffle_rounded,
+                          aide: 'Lecture aléatoire',
+                          couleur: c.indigo,
+                          onTap: () => ouvrirLecteurAudio(context, liste: audios, index: 0, melanger: true),
+                        ),
+                        const SizedBox(width: 6),
+                        BoutonVerre(
+                          icone: Icons.play_arrow_rounded,
+                          texte: 'Écouter',
+                          couleur: c.indigo,
+                          onTap: () => ouvrirLecteurAudio(context, liste: audios, index: 0),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ]),
             ),
           ),
@@ -576,12 +655,15 @@ class _PageFichiersState extends State<PageFichiers> {
                 itemBuilder: (context, i) {
                   final t = liste[i];
                   final choisi = _selection.contains(t.id);
+                  final enCoursAudio = moteurAudio.tache?.id == t.id;
                   final avancement = _avancement(t);
                   return GestureDetector(
                     onLongPress: () => _basculerSelection(t),
                     child: Verre(
                     padding: const EdgeInsets.all(10),
                     rayon: 20,
+                    teinte: enCoursAudio ? (c.sombre ? const Color(0x266366F1) : const Color(0x166366F1)) : null,
+                    bordure: enCoursAudio ? Border.all(color: c.indigo.withAlpha(150), width: 1.3) : null,
                     onTap: () => _lire(liste, t),
                     child: Row(children: [
                       if (_selection.isNotEmpty)
@@ -597,9 +679,15 @@ class _PageFichiersState extends State<PageFichiers> {
                           top: 5,
                           child: Container(
                             padding: const EdgeInsets.all(3),
-                            decoration: BoxDecoration(color: Colors.black.withAlpha(160), borderRadius: BorderRadius.circular(6)),
-                            child: Icon(_estAudio(t) ? Icons.headphones_rounded : Icons.movie_rounded,
-                                size: 12, color: Colors.white),
+                            decoration: BoxDecoration(
+                                color: enCoursAudio ? c.indigo : Colors.black.withAlpha(160),
+                                borderRadius: BorderRadius.circular(6)),
+                            child: Icon(
+                                enCoursAudio
+                                    ? Icons.graphic_eq_rounded
+                                    : (_estAudio(t) ? Icons.headphones_rounded : Icons.movie_rounded),
+                                size: 12,
+                                color: Colors.white),
                           ),
                         ),
                       ]),
@@ -609,7 +697,10 @@ class _PageFichiersState extends State<PageFichiers> {
                           Text(t.titre,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(fontWeight: FontWeight.w700, color: c.t1, fontSize: 13.5)),
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: enCoursAudio ? c.indigo : c.t1,
+                                  fontSize: 13.5)),
                           const SizedBox(height: 3),
                           Text(
                             [if (t.pistes.isNotEmpty) t.pistes, formaterTaille(t.tailleFichier)].join(' · '),

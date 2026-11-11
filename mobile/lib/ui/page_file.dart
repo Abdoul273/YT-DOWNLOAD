@@ -10,6 +10,7 @@ import '../moteur/natif.dart';
 import '../moteur/erreurs.dart';
 import '../moteur/taches.dart';
 import 'etat.dart';
+import 'lecteur.dart';
 import 'page_reglages.dart' show modifierCookies;
 import 'theme.dart';
 
@@ -413,7 +414,7 @@ class CarteTache extends StatelessWidget {
     return Verre(
       padding: const EdgeInsets.all(12),
       rayon: 20,
-      onTap: principal != null ? () => Natif.ouvrir(principal.uri, principal.mime) : null,
+      onTap: t.statut == 'termine' && principal != null ? () => ouvrirLecteur(context, [t], 0) : null,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Miniature(t.miniature, largeur: 112, rayon: 10, texteDuree: formaterDuree(t.duree)),
@@ -523,7 +524,7 @@ class CarteTache extends StatelessWidget {
           if (t.statut == 'erreur' || t.statut == 'annule')
             _Action(Icons.refresh_rounded, 'Relancer', () => g.relancer(t.id)),
           if (t.statut == 'termine' && principal != null) ...[
-            _Action(Icons.play_circle_outline_rounded, 'Ouvrir', () => Natif.ouvrir(principal.uri, principal.mime)),
+            _Action(Icons.play_circle_outline_rounded, 'Lire', () => ouvrirLecteur(context, [t], 0)),
             _Action(Icons.share_rounded, 'Partager', () => Natif.partager(principal.uri, principal.mime)),
           ],
           if (actifs.contains(t.statut) || t.statut == 'pause')
