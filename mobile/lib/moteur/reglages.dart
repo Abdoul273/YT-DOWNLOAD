@@ -54,6 +54,7 @@ const reglagesDefaut = <String, dynamic>{
   'audio_eq_bandes': <double>[0.0, 0.0, 0.0, 0.0, 0.0],
   'audio_basses': 0, // 0‥1000
   'audio_gain': 0.0, // 0‥15 dB
+  'paroles_audio': true, // télécharger les sous-titres synchronisés (.srt) en mode audio seul
 };
 
 class Reglages extends ChangeNotifier {

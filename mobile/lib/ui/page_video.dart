@@ -334,6 +334,7 @@ class _VueVideoState extends State<_VueVideo> {
   late String _formatAudio = reglages['format_audio'];
   final Set<String> _sousTitres = {};
   bool _stAuto = false, _stFichier = false, _chapitres = false;
+  bool _parolesInit = false;
   late bool _sponsor = reglages['sponsorblock'];
   final _debut = TextEditingController(), _fin = TextEditingController();
 
@@ -348,6 +349,27 @@ class _VueVideoState extends State<_VueVideo> {
     if (h != null && qs.isNotEmpty && !qs.any((q) => q.hauteur == h)) {
       final sous = qs.where((q) => q.hauteur <= h);
       _qualite = sous.isNotEmpty ? '${sous.first.hauteur}' : '${qs.last.hauteur}';
+    }
+    if (_type == 'audio') _preselectionnerParolesAudio();
+  }
+
+  void _preselectionnerParolesAudio() {
+    if (_parolesInit) return;
+    _parolesInit = true;
+    if (reglages['paroles_audio'] == false) return;
+    final v = widget.v;
+    final st = v.sousTitres;
+    final vo = langues.base(v.originale ?? 'en');
+    final pref = langues.base(reglages['langue_audio'] == 'original' ? vo : (reglages['langue_audio'] as String));
+    if (st.manuels.isNotEmpty) {
+      for (final m in st.manuels) {
+        if (langues.memeLangue(m, vo) || langues.memeLangue(m, pref)) _sousTitres.add(m);
+      }
+      if (_sousTitres.isEmpty) _sousTitres.add(st.manuels.first);
+    } else if (st.auto) {
+      _stAuto = true;
+      _sousTitres.add(vo);
+      if (pref != vo && st.autoFr) _sousTitres.add(pref);
     }
   }
 
@@ -443,7 +465,11 @@ class _VueVideoState extends State<_VueVideo> {
             const SizedBox(width: 10),
             Expanded(
                 child: Puce('🎧  Audio seul',
-                    choisie: _type == 'audio', onTap: () => setState(() => _type = 'audio'))),
+                    choisie: _type == 'audio',
+                    onTap: () => setState(() {
+                          _type = 'audio';
+                          _preselectionnerParolesAudio();
+                        }))),
           ]),
           const SizedBox(height: 18),
           Etiquette('Piste audio', fin: Text('${v.pistes.length} piste${v.pistes.length > 1 ? 's' : ''}', style: mono(context, taille: 11, couleur: c.t3))),
@@ -499,6 +525,68 @@ class _VueVideoState extends State<_VueVideo> {
             ]),
             const SizedBox(height: 6),
             Text('≈ ${formaterTaille(tailleAudio)}', style: mono(context, taille: 11, couleur: c.t3)),
+            const SizedBox(height: 16),
+            Etiquette(
+              'Paroles & sous-titres synchronisés',
+              fin: Text(
+                v.sousTitres.manuels.isNotEmpty
+                    ? '${v.sousTitres.manuels.length} langue${v.sousTitres.manuels.length > 1 ? 's' : ''}'
+                    : (v.sousTitres.auto ? 'Auto YouTube' : 'LRCLIB / NetEase'),
+                style: mono(context, taille: 11, couleur: v.sousTitres.manuels.isNotEmpty ? c.vert : c.indigo),
+              ),
+            ),
+            if (v.sousTitres.manuels.isNotEmpty) ...[
+              _Bandeau(
+                Icons.lyrics_rounded,
+                c.vert,
+                'Sous-titres synchronisés disponibles pour cet audio ! '
+                '${_sousTitres.isNotEmpty ? 'Ils seront téléchargés (.srt) et joueront directement dans l’onglet Paroles du lecteur.' : 'Sélectionne une langue ci-dessous pour les jouer dans l’onglet Paroles.'}',
+              ),
+              const SizedBox(height: 10),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final code in v.sousTitres.manuels)
+                  Puce('${langues.drapeau(code)} ${langues.nom(code)}',
+                      badge: 'SYNC',
+                      choisie: _sousTitres.contains(code),
+                      onTap: () => setState(() => _sousTitres.contains(code) ? _sousTitres.remove(code) : _sousTitres.add(code))),
+              ]),
+              if (v.sousTitres.auto)
+                _Interrupteur('Inclure aussi la traduction auto YouTube', 'Sous-titres synchronisés générés par YouTube', _stAuto,
+                    (x) => setState(() => _stAuto = x)),
+            ] else if (v.sousTitres.auto) ...[
+              _Bandeau(
+                Icons.subtitles_rounded,
+                c.indigo,
+                'Sous-titres synchronisés automatiques disponibles sur YouTube pour cet audio — '
+                '${_stAuto && _sousTitres.isNotEmpty ? 'activés : ce sont eux qui joueront dans l’onglet Paroles du lecteur.' : 'active-les pour les afficher dans l’onglet Paroles du lecteur.'}',
+              ),
+              const SizedBox(height: 10),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final code in <String>{
+                  langues.base(v.originale ?? 'en'),
+                  if (v.sousTitres.autoFr) 'fr',
+                  'en',
+                })
+                  Puce(
+                    '${langues.drapeau(code)} ${langues.nom(code)} (auto)',
+                    choisie: _stAuto && _sousTitres.contains(code),
+                    onTap: () => setState(() {
+                      if (_stAuto && _sousTitres.contains(code)) {
+                        _sousTitres.remove(code);
+                        if (_sousTitres.isEmpty) _stAuto = false;
+                      } else {
+                        _stAuto = true;
+                        _sousTitres.add(code);
+                      }
+                    }),
+                  ),
+              ]),
+            ] else
+              _Bandeau(
+                Icons.music_note_rounded,
+                c.t2,
+                'Aucun sous-titre YouTube sur cet audio : l’onglet Paroles du lecteur cherchera automatiquement les paroles synchronisées (mot-à-mot) sur LRCLIB et NetEase.',
+              ),
           ],
         ]),
       ),

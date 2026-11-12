@@ -451,7 +451,11 @@ class MainActivity : FlutterActivity() {
             val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: when (ext) {
                 "mkv" -> "video/x-matroska"
                 "opus" -> "audio/ogg"
-                "srt", "vtt" -> "text/plain"
+                "m4a" -> "audio/mp4"
+                "mp3" -> "audio/mpeg"
+                "flac" -> "audio/flac"
+                "wav" -> "audio/wav"
+                "srt", "vtt", "lrc" -> "text/plain"
                 else -> "application/octet-stream"
             }
             val valeurs = ContentValues().apply {

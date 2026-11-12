@@ -862,6 +862,36 @@ class Gestionnaire extends ChangeNotifier {
         reglages['sous_titres_secours'] == true;
     if (secours) msg += publiable ? ' → sous-titres en fichier .srt' : ' → sous-titres intégrés';
     if (convVideo) msg += '${msg.isEmpty ? '' : ' · '}Conversion H.264 pour TikTok / YouTube (plus long)';
+
+    // En mode audio seul : si des sous-titres synchronisés sont sélectionnés (ou en téléchargement de playlist
+    // quand la vidéo possède des sous-titres YouTube), on les récupère en .srt pour l'onglet Paroles du lecteur.
+    final stDispo = formats.sousTitresDispo(info);
+    final stExplicites = o['sous_titres'] as List?;
+    var stAudioAuto = false;
+    final stAudioLangs = <String>[];
+    if (o['type'] == 'audio') {
+      if (stExplicites != null) {
+        stAudioLangs.addAll(stExplicites.cast<String>());
+        stAudioAuto = o['sous_titres_auto'] == true;
+      } else if (reglages['paroles_audio'] != false && (stDispo.manuels.isNotEmpty || stDispo.auto)) {
+        final cibleLang = langues.base(piste ?? originale ?? (langue == 'original' ? 'fr' : langue));
+        final prefLang = langues.base(langue == 'original' ? 'fr' : langue);
+        for (final m in stDispo.manuels) {
+          if (langues.memeLangue(m, cibleLang) || langues.memeLangue(m, prefLang)) stAudioLangs.add(m);
+        }
+        if (stAudioLangs.isEmpty && stDispo.manuels.isNotEmpty) {
+          stAudioLangs.add(stDispo.manuels.first);
+        }
+        if (stAudioLangs.isEmpty && stDispo.auto) {
+          stAudioLangs.addAll({cibleLang, prefLang});
+          stAudioAuto = true;
+        }
+      }
+      if (stAudioLangs.isNotEmpty || stAudioAuto) {
+        msg += '${msg.isEmpty ? '' : ' · '}🎤 Paroles synchronisées (.srt)';
+      }
+    }
+
     t
       ..titre = (info['title'] ?? t.titre) as String
       ..miniature = t.miniature ?? analyse.miniature(info)
@@ -878,7 +908,7 @@ class Gestionnaire extends ChangeNotifier {
     if (t.arret != null) return (false, '', false);
     if (espace != null) return (false, espace, false);
     final cmd = _commande(t, o, sel, tri, cheminInfo, piste ?? originale, deux ? originale : null, secours, langue,
-        publiable: publiable, conversion: conversion);
+        publiable: publiable, conversion: conversion, stAudioLangs: stAudioLangs, stAudioAuto: stAudioAuto);
     return _lancer(t, cmd);
   }
 
@@ -914,7 +944,11 @@ class Gestionnaire extends ChangeNotifier {
   String _quote(String s) => "'${s.replaceAll("'", "'\"'\"'")}'";
 
   List<String> _commande(Tache t, Map<String, dynamic> o, String sel, List<String> tri, String cheminInfo,
-      String? piste, String? vo, bool secours, String langue, {bool publiable = false, String conversion = ''}) {
+      String? piste, String? vo, bool secours, String langue,
+      {bool publiable = false,
+      String conversion = '',
+      List<String> stAudioLangs = const [],
+      bool stAudioAuto = false}) {
     final r = reglages;
     final audio = o['type'] == 'audio';
     final conteneur = (o['conteneur'] ?? r['conteneur']) as String;
@@ -945,6 +979,11 @@ class Gestionnaire extends ChangeNotifier {
       cmd.add('-x');
       if (fa != 'original') {
         cmd.addAll(['--audio-format', fa, '--audio-quality', '${o['qualite_audio'] ?? r['qualite_audio']}']);
+      }
+      if (stAudioLangs.isNotEmpty) {
+        cmd.addAll(['--write-subs', '--sub-langs', stAudioLangs.toSet().join(','), '--sleep-subtitles', '1']);
+        if (stAudioAuto) cmd.add('--write-auto-subs');
+        cmd.addAll(['--convert-subs', 'srt']);
       }
     } else {
       cmd.addAll(['--audio-multistreams', '--merge-output-format', conteneur]);

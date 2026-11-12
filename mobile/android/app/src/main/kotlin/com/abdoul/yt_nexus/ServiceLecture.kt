@@ -10,7 +10,9 @@ import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
@@ -124,8 +126,10 @@ class ServiceLecture : Service() {
                     null
                 }
                 if (b != null && urlPochette == e.image) {
-                    pochette = b
-                    dernier?.let { instance?.appliquer(it) }
+                    Handler(Looper.getMainLooper()).post {
+                        pochette = b
+                        dernier?.let { instance?.appliquer(it) }
+                    }
                 }
             }
         }

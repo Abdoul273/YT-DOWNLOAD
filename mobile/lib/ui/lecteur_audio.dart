@@ -19,6 +19,7 @@ import '../moteur/gouts.dart';
 import '../moteur/langues.dart' as langues;
 import '../moteur/miniatures.dart' as miniatures;
 import '../moteur/natif.dart';
+import '../moteur/paroles.dart';
 import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
 import 'theme.dart';
@@ -36,13 +37,6 @@ const profilsEgaliseur = <String, (String, IconData, List<double>)>{
 
 const frequencesBandes = ['60 Hz', '230 Hz', '910 Hz', '3,6 kHz', '14 kHz'];
 
-/// Ligne de paroles synchronisées (issue d'un fichier .srt ou .vtt).
-class LigneParole {
-  final Duration debut, fin;
-  final String texte;
-  const LigneParole(this.debut, this.fin, this.texte);
-}
-
 /// Contrôleur global de lecture musicale.
 class MoteurAudio extends ChangeNotifier {
   VideoPlayerController? _ctrl;
@@ -54,7 +48,11 @@ class MoteurAudio extends ChangeNotifier {
   bool _enLecture = false;
   bool _signale = false;
   List<VideoAudioTrack> _pistes = [];
-  List<LigneParole> _paroles = [];
+  DonneesParoles? _donneesParoles;
+  DonneesParoles? _parolesEnLigne;
+  List<({String id, String label, FichierPublie fichier})> _sourcesLocales = [];
+  bool _rechercheParolesEnCours = false;
+  int _decalageParolesMs = 0;
   Duration? _a, _b;
   Timer? _sommeil;
   DateTime? _finSommeil;
@@ -113,7 +111,16 @@ class MoteurAudio extends ChangeNotifier {
   int get basses => _basses;
   double get gain => _gain;
   List<VideoAudioTrack> get pistes => _pistes;
-  List<LigneParole> get paroles => _paroles;
+  List<LigneParole> get paroles => _donneesParoles?.lignes ?? const [];
+  DonneesParoles? get donneesParoles => _donneesParoles;
+  DonneesParoles? get parolesEnLigne => _parolesEnLigne;
+  List<({String id, String label, FichierPublie fichier})> get sourcesLocales => _sourcesLocales;
+  bool get rechercheParolesEnCours => _rechercheParolesEnCours;
+  int get decalageParolesMs => _decalageParolesMs;
+  Duration get positionParoles {
+    final p = position + Duration(milliseconds: _decalageParolesMs);
+    return p < Duration.zero ? Duration.zero : p;
+  }
   Duration? get pointA => _a;
   Duration? get pointB => _b;
   int get sommeilMin => _sommeilMin;
@@ -249,7 +256,10 @@ class MoteurAudio extends ChangeNotifier {
     _ctrl = null;
     _erreur = null;
     _pistes = [];
-    _paroles = [];
+    _donneesParoles = null;
+    _parolesEnLigne = null;
+    _sourcesLocales = [];
+    _rechercheParolesEnCours = false;
     _signale = false;
     _a = _b = null;
     notifyListeners();
@@ -263,10 +273,17 @@ class MoteurAudio extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    final decMap = (reglages['decalages_paroles'] as Map?) ?? const {};
+    _decalageParolesMs = (decMap[t.id] as num?)?.toInt() ?? 0;
+
     final uri = Uri.parse(f.uri);
+    final opts = VideoPlayerOptions(allowBackgroundPlayback: true);
     final ctrl = uri.scheme == 'content'
-        ? VideoPlayerController.contentUri(uri)
-        : VideoPlayerController.file(File(f.chemin.isNotEmpty ? f.chemin : uri.toFilePath()));
+        ? VideoPlayerController.contentUri(uri, videoPlayerOptions: opts)
+        : VideoPlayerController.file(
+            File(f.chemin.isNotEmpty ? f.chemin : uri.toFilePath()),
+            videoPlayerOptions: opts,
+          );
     try {
       await ctrl.initialize();
     } catch (_) {
@@ -308,33 +325,205 @@ class MoteurAudio extends ChangeNotifier {
       }
     } catch (_) {}
 
-    final lyr = await _chargerParoles(t);
-    if (!perime() && lyr.isNotEmpty) {
-      _paroles = lyr;
+    _initialiserParolesPiste(t, gen);
+  }
+
+  Future<void> _initialiserParolesPiste(Tache t, int gen) async {
+    bool perime() => gen != _generation || !actif || tache?.id != t.id;
+    final locales = sourcesLocalesDisponibles(t);
+    _sourcesLocales = locales;
+    final cache = lireCacheParoles(t.id);
+
+    // 1. Si l'utilisateur a choisi des sous-titres YouTube (.srt / .vtt / .lrc) lors du téléchargement,
+    //    ils s'affichent immédiatement dans l'onglet Paroles (sauf si l'utilisateur a explicitement forcé
+    //    une autre source manuelle en cache).
+    final choixManuelEnLigne = cache != null &&
+        !cache.vide &&
+        (cache.idSource.startsWith('lrclib:') ||
+            cache.idSource.startsWith('netease:') ||
+            cache.idSource == 'import') &&
+        locales.isEmpty;
+
+    if (locales.isNotEmpty) {
+      final srcCible = locales.firstWhere(
+        (s) => cache != null && cache.idSource == s.id,
+        orElse: () => locales.first,
+      );
+      final local = await chargerFichierParolesLocal(
+        srcCible.fichier,
+        labelSource: srcCible.label,
+        dureeTotaleSec: t.duree,
+      );
+      if (perime()) return;
+      if (local != null && !local.vide) {
+        _donneesParoles = local;
+        notifyListeners();
+      }
+      // Si l'utilisateur avait sélectionné une source en ligne sur ce morceau, on la restaure
+      if (cache != null &&
+          !cache.vide &&
+          (cache.idSource.startsWith('lrclib:') ||
+              cache.idSource.startsWith('netease:') ||
+              cache.idSource == 'import')) {
+        _parolesEnLigne = cache;
+        _donneesParoles = cache;
+        notifyListeners();
+        return;
+      }
+    } else if (choixManuelEnLigne) {
+      _parolesEnLigne = cache;
+      _donneesParoles = cache;
       notifyListeners();
+      return;
+    }
+
+    // 2. Recherche automatique LRCLIB + NetEase (mot-à-mot YRC/KRC) en arrière-plan
+    if (cache != null && !cache.vide && !cache.idSource.startsWith('local:')) {
+      _parolesEnLigne = cache;
+      if (_donneesParoles == null || _donneesParoles!.vide) {
+        _donneesParoles = cache;
+      }
+      notifyListeners();
+      return;
+    }
+
+    _rechercheParolesEnCours = true;
+    notifyListeners();
+    final enLigne = await chercherParolesAutoEnLigne(t);
+    if (perime()) return;
+    _rechercheParolesEnCours = false;
+    if (enLigne != null && !enLigne.vide) {
+      sauverCacheParoles(t.id, enLigne);
+      _parolesEnLigne = enLigne;
+      // Si aucun sous-titre YouTube n'était présent (ou s'il était vide), afficher LRCLIB/NetEase
+      if (_donneesParoles == null || _donneesParoles!.vide) {
+        _donneesParoles = enLigne;
+      }
+    } else if (_donneesParoles == null) {
+      sauverCacheParoles(t.id, const DonneesParoles(source: 'Aucune'));
+    }
+    notifyListeners();
+  }
+
+  /// Change la source de paroles active (entre un fichier `.srt` YouTube et LRCLIB/NetEase).
+  Future<void> basculerSourceParoles(String idSource) async {
+    final t = tache;
+    if (t == null) return;
+    HapticFeedback.selectionClick();
+    if (idSource == 'en_ligne') {
+      if (_parolesEnLigne != null && !_parolesEnLigne!.vide) {
+        _donneesParoles = _parolesEnLigne;
+        sauverCacheParoles(t.id, _parolesEnLigne!);
+        notifyListeners();
+        return;
+      }
+      await relancerRechercheParoles(forcerEnLigne: true);
+      return;
+    }
+    for (final s in _sourcesLocales) {
+      if (s.id == idSource) {
+        final local = await chargerFichierParolesLocal(
+          s.fichier,
+          labelSource: s.label,
+          dureeTotaleSec: t.duree,
+        );
+        if (local != null) {
+          _donneesParoles = local;
+          sauverCacheParoles(t.id, local);
+          notifyListeners();
+        }
+        return;
+      }
     }
   }
 
-  Future<List<LigneParole>> _chargerParoles(Tache t) async {
-    final st = t.fichiers.where((f) => f.nom.endsWith('.srt') || f.nom.endsWith('.vtt')).toList();
-    if (st.isEmpty) return const [];
-    st.sort((a, b) => (b.nom.contains('.fr') ? 1 : 0).compareTo(a.nom.contains('.fr') ? 1 : 0));
-    final f = st.first;
-    try {
-      final texte = await Natif.lireTexte(f.uri) ?? '';
-      if (texte.trim().isEmpty) return const [];
-      final ClosedCaptionFile cap = f.nom.endsWith('.vtt') ? WebVTTCaptionFile(texte) : SubRipCaptionFile(texte);
-      final res = <LigneParole>[];
-      for (final c in cap.captions) {
-        final propre = c.text.replaceAll(RegExp(r'<[^>]*>'), '').trim();
-        if (propre.isEmpty) continue;
-        if (res.isNotEmpty && res.last.texte == propre) continue;
-        res.add(LigneParole(c.start, c.end, propre));
+  /// Force une nouvelle recherche automatique de paroles sur LRCLIB et NetEase.
+  Future<bool> relancerRechercheParoles({bool forcerEnLigne = false}) async {
+    final t = tache;
+    if (t == null || _rechercheParolesEnCours) return false;
+    _rechercheParolesEnCours = true;
+    notifyListeners();
+    final enLigne = await chercherParolesAutoEnLigne(t);
+    if (tache?.id != t.id) return false;
+    _rechercheParolesEnCours = false;
+    if (enLigne != null && !enLigne.vide) {
+      _parolesEnLigne = enLigne;
+      if (forcerEnLigne || _donneesParoles == null || _donneesParoles!.vide) {
+        _donneesParoles = enLigne;
+        sauverCacheParoles(t.id, enLigne);
       }
-      return res;
-    } catch (_) {
-      return const [];
+      notifyListeners();
+      return true;
     }
+    notifyListeners();
+    return false;
+  }
+
+  /// Applique un candidat de paroles choisi manuellement dans la feuille de recherche.
+  Future<bool> choisirParolesManuelles(CandidatParoles c) async {
+    final t = tache;
+    if (t == null) return false;
+    _rechercheParolesEnCours = true;
+    notifyListeners();
+    final res = await choisirCandidatParoles(t, c);
+    if (tache?.id != t.id) return false;
+    _rechercheParolesEnCours = false;
+    if (res != null && !res.vide) {
+      _parolesEnLigne = res;
+      _donneesParoles = res;
+      ajusterDecalageParoles(0, reinitialiser: true);
+      notifyListeners();
+      return true;
+    }
+    notifyListeners();
+    return false;
+  }
+
+  /// Importe un texte LRC ou texte brut collé par l'utilisateur.
+  void importerParoles(String texte) {
+    final t = tache;
+    if (t == null || texte.trim().isEmpty) return;
+    final res = importerTexteParoles(t, texte);
+    _parolesEnLigne = res;
+    _donneesParoles = res;
+    ajusterDecalageParoles(0, reinitialiser: true);
+    notifyListeners();
+  }
+
+  /// Ajuste le décalage temporel des paroles (en millisecondes) pour le morceau en cours.
+  void ajusterDecalageParoles(int deltaMs, {bool reinitialiser = false}) {
+    final t = tache;
+    if (t == null) return;
+    HapticFeedback.selectionClick();
+    if (reinitialiser) {
+      _decalageParolesMs = 0;
+    } else {
+      _decalageParolesMs = (_decalageParolesMs + deltaMs).clamp(-60000, 60000);
+    }
+    final map = Map<String, dynamic>.from((reglages['decalages_paroles'] as Map?) ?? {});
+    if (_decalageParolesMs == 0) {
+      map.remove(t.id);
+    } else {
+      map[t.id] = _decalageParolesMs;
+    }
+    reglages.ecrireSansPrevenir('decalages_paroles', map);
+    notifyListeners();
+  }
+
+  /// Cale immédiatement le début d'une ligne de paroles sur la position audio actuelle (comme Onde « Caler »).
+  void calerParoleSurVoix(Duration debutLigne) {
+    final t = tache;
+    if (t == null) return;
+    HapticFeedback.mediumImpact();
+    _decalageParolesMs = (debutLigne.inMilliseconds - position.inMilliseconds).clamp(-60000, 60000);
+    final map = Map<String, dynamic>.from((reglages['decalages_paroles'] as Map?) ?? {});
+    if (_decalageParolesMs == 0) {
+      map.remove(t.id);
+    } else {
+      map[t.id] = _decalageParolesMs;
+    }
+    reglages.ecrireSansPrevenir('decalages_paroles', map);
+    notifyListeners();
   }
 
   void _maj() {
@@ -363,7 +552,7 @@ class MoteurAudio extends ChangeNotifier {
     final fini = _repetition != 2 &&
         v.isInitialized &&
         v.duration > Duration.zero &&
-        v.position >= v.duration &&
+        (v.isCompleted || v.position >= v.duration) &&
         !v.isPlaying;
     if (fini) {
       _effacerPosition();
@@ -1176,8 +1365,11 @@ class _PageLecteurAudioState extends State<PageLecteurAudio> with TickerProvider
                             1 => _VueParoles(
                                 key: const ValueKey('paroles'),
                                 paroles: moteurAudio.paroles,
-                                position: pos,
-                                onTapLigne: moteurAudio.allerA,
+                                position: moteurAudio.positionParoles,
+                                onTapLigne: (d) => moteurAudio.allerA(
+                                  d - Duration(milliseconds: moteurAudio.decalageParolesMs),
+                                ),
+                                onOuvrirRecherche: () => _ouvrirRechercheParoles(context, t),
                               ),
                             2 => _VueFileInline(key: const ValueKey('file')),
                             _ => _zoneCentralePochette(t, c),
@@ -1262,7 +1454,14 @@ class _PageLecteurAudioState extends State<PageLecteurAudio> with TickerProvider
                 if (_panneau != 0)
                   Expanded(
                     child: _panneau == 1
-                        ? _VueParoles(paroles: moteurAudio.paroles, position: pos, onTapLigne: moteurAudio.allerA)
+                        ? _VueParoles(
+                            paroles: moteurAudio.paroles,
+                            position: moteurAudio.positionParoles,
+                            onTapLigne: (d) => moteurAudio.allerA(
+                              d - Duration(milliseconds: moteurAudio.decalageParolesMs),
+                            ),
+                            onOuvrirRecherche: () => _ouvrirRechercheParoles(context, t),
+                          )
                         : const _VueFileInline(),
                   )
                 else ...[
@@ -1350,7 +1549,10 @@ class _PageLecteurAudioState extends State<PageLecteurAudio> with TickerProvider
   }
 
   Widget _selecteurMode(Couleurs c, Tache t) {
-    final nbParoles = moteurAudio.paroles.length;
+    final nbParoles = moteurAudio.paroles.where((l) => !l.estPause).length;
+    final labelParoles = moteurAudio.rechercheParolesEnCours && nbParoles == 0
+        ? 'Paroles…'
+        : (nbParoles > 0 ? 'Paroles ($nbParoles)' : 'Paroles');
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
       child: Container(
@@ -1364,7 +1566,7 @@ class _PageLecteurAudioState extends State<PageLecteurAudio> with TickerProvider
         child: Row(
           children: [
             _ongletMode(0, Icons.album_rounded, 'Platine', c),
-            _ongletMode(1, Icons.lyrics_rounded, nbParoles > 0 ? 'Paroles ($nbParoles)' : 'Paroles', c),
+            _ongletMode(1, Icons.lyrics_rounded, labelParoles, c),
             _ongletMode(2, Icons.queue_music_rounded, 'File (${moteurAudio.file.length})', c),
           ],
         ),
@@ -1511,53 +1713,142 @@ class _PageLecteurAudioState extends State<PageLecteurAudio> with TickerProvider
       );
 
   Widget _infosTitre(Tache t, Couleurs c, bool estFav) {
-    return Row(
+    final apercu = _panneau == 0 ? _apercuParoleEnDirect(c) : null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                t.titre,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 19,
-                  fontWeight: FontWeight.w800,
-                  height: 1.2,
-                ),
+        if (apercu != null) ...[
+          apercu,
+          const SizedBox(height: 8),
+        ],
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    t.titre,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                      height: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    t.chaine ?? 'Artiste inconnu',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: c.indigo,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 5),
-              Text(
-                t.chaine ?? 'Artiste inconnu',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: c.indigo,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 8),
-        IconButton(
-          tooltip: estFav ? 'Retirer des favoris' : 'Ajouter aux favoris',
-          onPressed: () => _basculerFavori(t.id),
-          icon: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 220),
-            transitionBuilder: (w, a) => ScaleTransition(scale: a, child: w),
-            child: Icon(
-              estFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-              key: ValueKey(estFav),
-              color: estFav ? c.rose : Colors.white70,
-              size: 26,
             ),
-          ),
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: estFav ? 'Retirer des favoris' : 'Ajouter aux favoris',
+              onPressed: () => _basculerFavori(t.id),
+              icon: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                transitionBuilder: (w, a) => ScaleTransition(scale: a, child: w),
+                child: Icon(
+                  estFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                  key: ValueKey(estFav),
+                  color: estFav ? c.rose : Colors.white70,
+                  size: 26,
+                ),
+              ),
+            ),
+          ],
         ),
       ],
+    );
+  }
+
+  Widget? _apercuParoleEnDirect(Couleurs c) {
+    final paroles = moteurAudio.paroles;
+    if (paroles.isEmpty) return null;
+    final pos = moteurAudio.positionParoles;
+    LigneParole? active;
+    for (var i = 0; i < paroles.length; i++) {
+      final l = paroles[i];
+      if (pos >= l.debut) active = l;
+    }
+    if (active == null || active.estPause || active.texte.trim().isEmpty) return null;
+
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        setState(() => _panneau = 1);
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: Colors.white.withAlpha(16),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: c.indigo.withAlpha(85), width: 0.9),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.lyrics_rounded, size: 15, color: c.cyan),
+            const SizedBox(width: 8),
+            Expanded(
+              child: active.mots.isNotEmpty
+                  ? Text.rich(
+                      TextSpan(
+                        children: [
+                          for (var i = 0; i < active.mots.length; i++)
+                            TextSpan(
+                              text: '${active.mots[i].texte}${i < active.mots.length - 1 ? ' ' : ''}',
+                              style: TextStyle(
+                                fontFamily: 'PlusJakartaSans',
+                                fontSize: 12.5,
+                                fontWeight: pos >= active.mots[i].debut ? FontWeight.w800 : FontWeight.w600,
+                                color: (pos >= active.mots[i].debut && pos <= active.mots[i].fin)
+                                    ? c.cyan
+                                    : (pos > active.mots[i].fin ? Colors.white : Colors.white60),
+                              ),
+                            ),
+                        ],
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  : Text(
+                      active.texte,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+            ),
+            const SizedBox(width: 6),
+            const Icon(Icons.chevron_right_rounded, size: 16, color: Colors.white54),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _ouvrirRechercheParoles(BuildContext context, Tache t) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _FeuilleRechercheParoles(tache: t),
     );
   }
 
@@ -2490,40 +2781,345 @@ class _PeintreSpectre extends CustomPainter {
       old.phase != phase || old.enLecture != enLecture || old.avancement != avancement;
 }
 
-class _VueParoles extends StatelessWidget {
+class _VueParoles extends StatefulWidget {
   final List<LigneParole> paroles;
   final Duration position;
   final ValueChanged<Duration> onTapLigne;
+  final VoidCallback onOuvrirRecherche;
 
   const _VueParoles({
     super.key,
     required this.paroles,
     required this.position,
     required this.onTapLigne,
+    required this.onOuvrirRecherche,
   });
+
+  @override
+  State<_VueParoles> createState() => _VueParolesState();
+}
+
+class _VueParolesState extends State<_VueParoles> {
+  final _scroll = ScrollController();
+  List<GlobalKey> _cles = const [];
+  int _dernierActif = -1;
+  bool _defilementLibre = false;
+  Timer? _minuteurReprise;
+
+  @override
+  void initState() {
+    super.initState();
+    _preparerCles();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _centrerLigneActive(instantane: true));
+  }
+
+  @override
+  void didUpdateWidget(covariant _VueParoles oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.paroles.length != widget.paroles.length) {
+      _preparerCles();
+      _dernierActif = -1;
+      _defilementLibre = false;
+    }
+    final actif = _calculerActif();
+    if (actif != _dernierActif) {
+      _dernierActif = actif;
+      if (!_defilementLibre && actif >= 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _centrerLigneActive());
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _minuteurReprise?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _preparerCles() {
+    _cles = List.generate(widget.paroles.length, (_) => GlobalKey());
+  }
+
+  int _calculerActif() {
+    var actif = -1;
+    final pos = widget.position;
+    for (var i = 0; i < widget.paroles.length; i++) {
+      if (pos >= widget.paroles[i].debut) {
+        actif = i;
+      } else {
+        break;
+      }
+    }
+    return actif;
+  }
+
+  void _centrerLigneActive({bool instantane = false}) {
+    if (!mounted) return;
+    final idx = _dernierActif;
+    if (idx < 0 || idx >= _cles.length) return;
+    final ctx = _cles[idx].currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(
+      ctx,
+      alignment: 0.32,
+      duration: instantane ? Duration.zero : const Duration(milliseconds: 360),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _activerDefilementLibre() {
+    if (!_defilementLibre) {
+      setState(() => _defilementLibre = true);
+    }
+    _minuteurReprise?.cancel();
+    _minuteurReprise = Timer(const Duration(seconds: 4), () {
+      if (!mounted) return;
+      setState(() => _defilementLibre = false);
+      _centrerLigneActive();
+    });
+  }
+
+  String _formaterDecalage(int ms) {
+    if (ms == 0) return "0s";
+    final s = ms / 1000.0;
+    final signe = s > 0 ? "+" : "";
+    return "$signe${s.toStringAsFixed(1)}s";
+  }
 
   @override
   Widget build(BuildContext context) {
     final c = context.c;
-    if (paroles.isEmpty) {
+    final donnees = moteurAudio.donneesParoles;
+    final paroles = widget.paroles;
+    final actif = _calculerActif();
+
+    return Column(
+      children: [
+        _barreOutilsParoles(c, donnees),
+        Expanded(
+          child: _corpsParoles(c, donnees, paroles, actif),
+        ),
+      ],
+    );
+  }
+
+  Widget _barreOutilsParoles(Couleurs c, DonneesParoles? donnees) {
+    final sourcesLocales = moteurAudio.sourcesLocales;
+    final decMs = moteurAudio.decalageParolesMs;
+    final sourceActive = donnees?.source ?? "";
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                if (sourcesLocales.isNotEmpty) ...[
+                  for (final f in sourcesLocales)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: _puceSource(
+                        c: c,
+                        icone: Icons.subtitles_rounded,
+                        label: f.label,
+                        actif: donnees?.idSource == f.id,
+                        onTap: () => moteurAudio.basculerSourceParoles(f.id),
+                      ),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: _puceSource(
+                      c: c,
+                      icone: Icons.cloud_done_rounded,
+                      label: moteurAudio.parolesEnLigne != null
+                          ? "Karaoké (${moteurAudio.parolesEnLigne!.source})"
+                          : "LRCLIB / NetEase",
+                      actif: donnees != null && !donnees.idSource.startsWith("local:"),
+                      onTap: () => moteurAudio.basculerSourceParoles("en_ligne"),
+                    ),
+                  ),
+                ] else if (sourceActive.isNotEmpty) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: c.indigo.withAlpha(32),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: c.indigo.withAlpha(110)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          donnees?.motAMot == true ? Icons.auto_awesome_rounded : Icons.lyrics_rounded,
+                          size: 13,
+                          color: c.cyan,
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          donnees?.motAMot == true ? "$sourceActive · Mot-à-mot" : sourceActive,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                _boutonOutil(
+                  label: "-0.5s",
+                  onTap: () => moteurAudio.ajusterDecalageParoles(-500),
+                ),
+                const SizedBox(width: 4),
+                _boutonOutil(
+                  label: "-0.1s",
+                  onTap: () => moteurAudio.ajusterDecalageParoles(-100),
+                ),
+                const SizedBox(width: 4),
+                _boutonOutil(
+                  label: _formaterDecalage(decMs),
+                  actif: decMs != 0,
+                  couleurActive: c.cyan,
+                  onTap: () => moteurAudio.ajusterDecalageParoles(0, reinitialiser: true),
+                ),
+                const SizedBox(width: 4),
+                _boutonOutil(
+                  label: "+0.1s",
+                  onTap: () => moteurAudio.ajusterDecalageParoles(100),
+                ),
+                const SizedBox(width: 4),
+                _boutonOutil(
+                  label: "+0.5s",
+                  onTap: () => moteurAudio.ajusterDecalageParoles(500),
+                ),
+                const SizedBox(width: 6),
+                _boutonOutil(
+                  icone: Icons.manage_search_rounded,
+                  label: "Chercher",
+                  actif: true,
+                  couleurActive: c.indigo,
+                  onTap: widget.onOuvrirRecherche,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _puceSource({
+    required Couleurs c,
+    required IconData icone,
+    required String label,
+    required bool actif,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          gradient: actif ? gradBouton : null,
+          color: actif ? null : Colors.white.withAlpha(18),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: actif ? Colors.white38 : Colors.white12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icone, size: 13, color: Colors.white),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: actif ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _boutonOutil({
+    IconData? icone,
+    required String label,
+    bool actif = false,
+    Color? couleurActive,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: actif ? (couleurActive ?? Colors.white).withAlpha(42) : Colors.white.withAlpha(16),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: actif ? (couleurActive ?? Colors.white).withAlpha(140) : Colors.white12,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icone != null) ...[
+              Icon(icone, size: 13, color: Colors.white),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                color: actif ? Colors.white : Colors.white70,
+                fontSize: 11,
+                fontWeight: actif ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _corpsParoles(Couleurs c, DonneesParoles? donnees, List<LigneParole> paroles, int actif) {
+    if (moteurAudio.rechercheParolesEnCours && paroles.isEmpty && (donnees?.texteBrut.isEmpty ?? true)) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(32),
+          padding: const EdgeInsets.all(28),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.lyrics_outlined, color: Colors.white38, size: 48),
-              const SizedBox(height: 12),
+              SizedBox(
+                width: 34,
+                height: 34,
+                child: CircularProgressIndicator(strokeWidth: 2.8, color: c.cyan),
+              ),
+              const SizedBox(height: 14),
               const Text(
-                'Aucune parole synchronisée pour ce titre',
+                "Recherche des paroles synchronisées…",
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15),
               ),
               const SizedBox(height: 6),
               const Text(
-                'Télécharge avec les sous-titres activés pour afficher les paroles synchronisées ici.',
+                "Inspection des sous-titres YouTube, LRCLIB et NetEase Karaoké",
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white54, fontSize: 12.5),
+                style: TextStyle(color: Colors.white60, fontSize: 12),
               ),
             ],
           ),
@@ -2531,42 +3127,651 @@ class _VueParoles extends StatelessWidget {
       );
     }
 
-    var actif = -1;
-    for (var i = 0; i < paroles.length; i++) {
-      if (position >= paroles[i].debut && position <= paroles[i].fin + const Duration(seconds: 2)) {
-        actif = i;
-      } else if (position >= paroles[i].debut) {
-        actif = i;
-      }
+    if (donnees?.instrumental == true) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.piano_rounded, color: c.cyan, size: 46),
+              const SizedBox(height: 12),
+              const Text(
+                "♪ Morceau instrumental",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: widget.onOuvrirRecherche,
+                icon: const Icon(Icons.search_rounded, size: 16),
+                label: const Text("Chercher une autre version"),
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-      itemCount: paroles.length,
-      itemBuilder: (context, i) {
-        final l = paroles[i];
-        final courant = i == actif;
-        return GestureDetector(
-          onTap: () {
-            HapticFeedback.selectionClick();
-            onTapLigne(l.debut);
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 220),
-              style: TextStyle(
-                fontFamily: 'PlusJakartaSans',
-                fontSize: courant ? 20 : 15.5,
-                fontWeight: courant ? FontWeight.w800 : FontWeight.w600,
-                color: courant ? c.indigo : Colors.white.withAlpha(i < actif ? 95 : 150),
-                height: 1.35,
-              ),
-              child: Text(l.texte),
+    if (paroles.isEmpty && (donnees?.texteBrut.trim().isNotEmpty ?? false)) {
+      return Column(
+        children: [
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.amber.withAlpha(28),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.amber.withAlpha(110)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline_rounded, size: 15, color: Colors.amber),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    "Paroles non synchronisées — appuie sur Chercher pour une version karaoké",
+                    style: TextStyle(color: Colors.white, fontSize: 11.5),
+                  ),
+                ),
+                TextButton(
+                  onPressed: widget.onOuvrirRecherche,
+                  child: const Text("Chercher"),
+                ),
+              ],
             ),
           ),
-        );
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              child: Text(
+                donnees!.texteBrut,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  height: 1.55,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (paroles.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.lyrics_outlined, color: Colors.white38, size: 48),
+              const SizedBox(height: 12),
+              const Text(
+                "Aucune parole synchronisée trouvée automatiquement",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                "Tu peux lancer une recherche manuelle sur LRCLIB / NetEase ou coller un fichier .lrc / .srt.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white60, fontSize: 12.5),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  FilledButton.icon(
+                    onPressed: widget.onOuvrirRecherche,
+                    icon: const Icon(Icons.search_rounded, size: 17),
+                    label: const Text("Chercher des paroles"),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: moteurAudio.relancerRechercheParoles,
+                    icon: const Icon(Icons.refresh_rounded, size: 17),
+                    label: const Text("Réessayer auto"),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Stack(
+      children: [
+        NotificationListener<UserScrollNotification>(
+          onNotification: (n) {
+            _activerDefilementLibre();
+            return false;
+          },
+          child: SingleChildScrollView(
+            controller: _scroll,
+            padding: const EdgeInsets.fromLTRB(22, 18, 22, 110),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < paroles.length; i++)
+                  _construireLigneParole(c, paroles[i], i, actif),
+              ],
+            ),
+          ),
+        ),
+        if (_defilementLibre)
+          Positioned(
+            right: 18,
+            bottom: 14,
+            child: GestureDetector(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                _minuteurReprise?.cancel();
+                setState(() => _defilementLibre = false);
+                _centrerLigneActive();
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+                decoration: BoxDecoration(
+                  gradient: gradBouton,
+                  borderRadius: BorderRadius.circular(22),
+                  boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4))],
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.my_location_rounded, size: 15, color: Colors.white),
+                    SizedBox(width: 6),
+                    Text(
+                      "Suivre la voix",
+                      style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _construireLigneParole(Couleurs c, LigneParole l, int i, int actif) {
+    final courant = i == actif;
+    final passe = i < actif;
+    final cle = i < _cles.length ? _cles[i] : null;
+
+    if (l.estPause) {
+      if (!courant) return SizedBox(key: cle, height: 6);
+      final pos = widget.position;
+      final totalMs = max(1, (l.fin - l.debut).inMilliseconds);
+      final ecouleMs = (pos - l.debut).inMilliseconds.clamp(0, totalMs);
+      final prog = ecouleMs / totalMs;
+      return Container(
+        key: cle,
+        margin: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: c.indigo.withAlpha(28),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: c.cyan.withAlpha(90)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.music_note_rounded, size: 18, color: c.cyan),
+            const SizedBox(width: 8),
+            for (var p = 0; p < 3; p++)
+              Container(
+                width: 9,
+                height: 9,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: prog >= (p + 1) / 4
+                      ? c.cyan
+                      : Colors.white.withAlpha(75),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    final pos = widget.position;
+
+    return GestureDetector(
+      key: cle,
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        HapticFeedback.selectionClick();
+        widget.onTapLigne(l.debut);
       },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: EdgeInsets.symmetric(
+          horizontal: courant ? 14 : 10,
+          vertical: courant ? 11 : 7,
+        ),
+        decoration: BoxDecoration(
+          color: courant ? Colors.white.withAlpha(22) : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+          border: courant ? Border.all(color: c.indigo.withAlpha(110), width: 1) : null,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: courant && l.mots.isNotEmpty
+                  ? Text.rich(
+                      TextSpan(
+                        children: [
+                          for (var mIdx = 0; mIdx < l.mots.length; mIdx++)
+                            _spanMotKaraoke(c, l.mots[mIdx], mIdx == l.mots.length - 1, pos),
+                        ],
+                      ),
+                    )
+                  : Text(
+                      l.texte,
+                      style: TextStyle(
+                        fontFamily: "PlusJakartaSans",
+                        fontSize: courant ? 21 : 16,
+                        fontWeight: courant ? FontWeight.w800 : FontWeight.w600,
+                        color: courant
+                            ? Colors.white
+                            : Colors.white.withAlpha(passe ? 85 : 155),
+                        height: 1.35,
+                      ),
+                    ),
+            ),
+            if (courant) ...[
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () {
+                  HapticFeedback.mediumImpact();
+                  moteurAudio.calerParoleSurVoix(l.debut);
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: c.indigo.withAlpha(55),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: c.cyan.withAlpha(120)),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.tune_rounded, size: 12, color: Colors.white),
+                      SizedBox(width: 4),
+                      Text(
+                        "Caler",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  InlineSpan _spanMotKaraoke(Couleurs c, MotParole m, bool dernier, Duration pos) {
+    final chante = pos > m.fin;
+    final enCours = pos >= m.debut && pos <= m.fin;
+    final Color couleur;
+    if (enCours) {
+      couleur = c.cyan;
+    } else if (chante) {
+      couleur = Colors.white;
+    } else {
+      couleur = Colors.white.withAlpha(130);
+    }
+
+    return TextSpan(
+      text: dernier ? m.texte : "${m.texte} ",
+      style: TextStyle(
+        fontFamily: "PlusJakartaSans",
+        fontSize: 21,
+        fontWeight: (enCours || chante) ? FontWeight.w800 : FontWeight.w700,
+        color: couleur,
+        height: 1.35,
+        shadows: enCours
+            ? [
+                Shadow(color: c.cyan.withAlpha(160), blurRadius: 14),
+                Shadow(color: c.indigo.withAlpha(120), blurRadius: 24),
+              ]
+            : null,
+      ),
+    );
+  }
+}
+
+class _FeuilleRechercheParoles extends StatefulWidget {
+  final Tache tache;
+  const _FeuilleRechercheParoles({required this.tache});
+
+  @override
+  State<_FeuilleRechercheParoles> createState() => _FeuilleRechercheParolesState();
+}
+
+class _FeuilleRechercheParolesState extends State<_FeuilleRechercheParoles> {
+  late final TextEditingController _ctrlRequete;
+  final TextEditingController _ctrlImport = TextEditingController();
+  List<CandidatParoles> _resultats = const [];
+  bool _chargement = false;
+  bool _modeImport = false;
+  String? _erreur;
+
+  @override
+  void initState() {
+    super.initState();
+    final prop = propositionRecherche(widget.tache);
+    _ctrlRequete = TextEditingController(text: [prop.$1, prop.$2].where((s) => s.isNotEmpty).join(" - "));
+    _lancerRecherche();
+  }
+
+  @override
+  void dispose() {
+    _ctrlRequete.dispose();
+    _ctrlImport.dispose();
+    super.dispose();
+  }
+
+  Future<void> _lancerRecherche() async {
+    final q = _ctrlRequete.text.trim();
+    if (q.isEmpty) return;
+    setState(() {
+      _chargement = true;
+      _erreur = null;
+    });
+    try {
+      final res = await chercherParolesManuellement(
+        q,
+        duree: widget.tache.duree,
+      );
+      if (!mounted) return;
+      setState(() {
+        _resultats = res;
+        _chargement = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _erreur = "Erreur réseau : $e";
+        _chargement = false;
+      });
+    }
+  }
+
+  String _fmtDuree(double s) {
+    if (s <= 0) return "";
+    final m = s ~/ 60;
+    final sec = (s % 60).round().toString().padLeft(2, "0");
+    return "$m:$sec";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final padBas = MediaQuery.of(context).viewInsets.bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: padBas),
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.82,
+        ),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0E1022),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+          border: Border.all(color: Colors.white12),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 42,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Icon(Icons.lyrics_rounded, color: c.cyan, size: 22),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    "Paroles & Karaoké (LRCLIB · NetEase)",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () => setState(() => _modeImport = !_modeImport),
+                  icon: Icon(_modeImport ? Icons.search_rounded : Icons.paste_rounded, size: 16),
+                  label: Text(_modeImport ? "Recherche" : "Coller LRC/SRT"),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (_modeImport) ...[
+              TextField(
+                controller: _ctrlImport,
+                maxLines: 6,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: "Colle ici des paroles .lrc ([00:12.34] ...), .srt ou du texte brut…",
+                  hintStyle: const TextStyle(color: Colors.white38),
+                  filled: true,
+                  fillColor: Colors.white.withAlpha(14),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Colors.white24),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () async {
+                    final txt = _ctrlImport.text.trim();
+                    if (txt.isEmpty) return;
+                    moteurAudio.importerParoles(txt);
+                    if (context.mounted) Navigator.of(context).pop();
+                  },
+                  icon: const Icon(Icons.check_rounded),
+                  label: const Text("Enregistrer ces paroles"),
+                ),
+              ),
+            ] else ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _ctrlRequete,
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => _lancerRecherche(),
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                      decoration: InputDecoration(
+                        hintText: "Artiste - Titre…",
+                        hintStyle: const TextStyle(color: Colors.white38),
+                        prefixIcon: const Icon(Icons.search_rounded, color: Colors.white54),
+                        isDense: true,
+                        filled: true,
+                        fillColor: Colors.white.withAlpha(16),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _chargement ? null : _lancerRecherche,
+                    child: const Text("Go"),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (_chargement)
+                const Padding(
+                  padding: EdgeInsets.all(28),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (_erreur != null)
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(_erreur!, style: TextStyle(color: c.rouge)),
+                )
+              else if (_resultats.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(
+                    child: Text(
+                      "Aucun résultat pour cette requête. Essaie avec « Artiste Titre » simplifié.",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white60),
+                    ),
+                  ),
+                )
+              else
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: _resultats.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (ctx, i) {
+                      final r = _resultats[i];
+                      return InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () async {
+                          HapticFeedback.selectionClick();
+                          await moteurAudio.choisirParolesManuelles(r);
+                          if (context.mounted) Navigator.of(context).pop();
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withAlpha(14),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: r.motAMot
+                                  ? c.cyan.withAlpha(120)
+                                  : (r.synchro ? c.indigo.withAlpha(90) : Colors.white12),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      r.titre,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                  if (r.duree > 0)
+                                    Text(
+                                      _fmtDuree(r.duree),
+                                      style: mono(context, taille: 11, couleur: Colors.white60),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                [r.artiste, if (r.album.isNotEmpty) r.album].join(" · "),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                              ),
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 4,
+                                children: [
+                                  _badgeCandidat(
+                                    r.source,
+                                    r.source == "NetEase" ? c.rose : c.indigo,
+                                  ),
+                                  if (r.motAMot)
+                                    _badgeCandidat("Karaoké mot-à-mot", c.cyan)
+                                  else if (r.synchro)
+                                    _badgeCandidat("Synchronisées", c.vert)
+                                  else
+                                    _badgeCandidat("Texte seul", Colors.white38),
+                                ],
+                              ),
+                              if (r.extrait.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  r.extrait,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white54,
+                                    fontSize: 11.5,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _badgeCandidat(String texte, Color couleur) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: couleur.withAlpha(38),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: couleur.withAlpha(130), width: 0.8),
+      ),
+      child: Text(
+        texte,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 }

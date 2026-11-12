@@ -188,10 +188,11 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     }
     final uri = Uri.parse(f.uri);
     final sousTitres = _chargerSousTitres();
+    final opts = VideoPlayerOptions(allowBackgroundPlayback: true);
     final ctrl = uri.scheme == 'content'
-        ? VideoPlayerController.contentUri(uri, closedCaptionFile: sousTitres)
+        ? VideoPlayerController.contentUri(uri, closedCaptionFile: sousTitres, videoPlayerOptions: opts)
         : VideoPlayerController.file(File(f.chemin.isNotEmpty ? f.chemin : uri.toFilePath()),
-            closedCaptionFile: sousTitres);
+            closedCaptionFile: sousTitres, videoPlayerOptions: opts);
     try {
       await ctrl.initialize();
     } catch (e) {
@@ -426,7 +427,11 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       c.seekTo(_a ?? Duration.zero);
     }
     // Fin : morceau suivant (avec compte à rebours pour les vidéos)
-    final fini = !_boucle && v.isInitialized && v.duration > Duration.zero && v.position >= v.duration && !v.isPlaying;
+    final fini = !_boucle &&
+        v.isInitialized &&
+        v.duration > Duration.zero &&
+        (v.isCompleted || v.position >= v.duration) &&
+        !v.isPlaying;
     if (fini && _aSuivant && _auto && !_compteAnnule && _compteur == null) {
       _effacerPosition();
       if (_audio) {
