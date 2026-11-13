@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yt_nexus/moteur/natif.dart';
 import 'package:yt_nexus/moteur/reglages.dart';
 import 'package:yt_nexus/moteur/taches.dart';
+import 'package:yt_nexus/ui/lecteur_audio.dart';
 import 'package:yt_nexus/ui/page_reglages.dart';
 import 'package:yt_nexus/ui/theme.dart';
 
@@ -88,5 +90,48 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Wi-Fi uniquement'), findsOneWidget);
     expect(find.text('Lecteur vidéo & gestes'), findsNothing);
+  });
+
+  test('extraction de palette audio adaptative depuis RGBA', () {
+    // Monochrome sombre -> null (repli sur les couleurs du thème)
+    final sombre = Uint8List.fromList([
+      for (var i = 0; i < 64; i++) ...[12, 12, 14, 255],
+    ]);
+    expect(calculerPaletteAudioDepuisRgba(sombre), isNull);
+
+    // Pochette bicolore bleu électrique + corail -> 2 couleurs contrastées et distinctes
+    final colore = Uint8List.fromList([
+      for (var i = 0; i < 48; i++) ...[28, 120, 245, 255],
+      for (var i = 0; i < 24; i++) ...[240, 75, 110, 255],
+    ]);
+    final pal = calculerPaletteAudioDepuisRgba(colore);
+    expect(pal, isNotNull);
+    expect(pal!.primaire, isNot(equals(pal.secondaire)));
+    final hsvP = HSVColor.fromColor(pal.primaire);
+    expect(hsvP.saturation, greaterThanOrEqualTo(0.54));
+    expect(hsvP.value, inInclusiveRange(0.54, 0.80));
+  });
+
+  testWidgets('MoteurAudio enchaîne les 3 styles visuels sans perte d’état', (tester) async {
+    final initial = moteurAudio.stylePochette;
+    addTearDown(() => moteurAudio.choisirStylePochette(initial));
+
+    moteurAudio.choisirStylePochette('vinyle');
+    expect(moteurAudio.stylePochette, 'vinyle');
+    moteurAudio.basculerStylePochette();
+    expect(moteurAudio.stylePochette, 'carte');
+    moteurAudio.basculerStylePochette();
+    expect(moteurAudio.stylePochette, 'onde');
+    moteurAudio.basculerStylePochette();
+    expect(moteurAudio.stylePochette, 'vinyle');
+  });
+
+  testWidgets('MiniLecteurAudio reste masqué quand aucune piste n’est ouverte', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: construireTheme(true),
+      home: const Scaffold(bottomNavigationBar: MiniLecteurAudio()),
+    ));
+    expect(find.byType(MiniLecteurAudio), findsOneWidget);
+    expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
   });
 }

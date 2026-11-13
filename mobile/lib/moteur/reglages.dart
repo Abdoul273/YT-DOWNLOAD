@@ -62,7 +62,7 @@ const reglagesDefaut = <String, dynamic>{
   'derniere_maj': 0,
   'audio_aleatoire': false,
   'audio_repetition': 0, // 0: off, 1: liste, 2: titre
-  'audio_style_pochette': 'vinyle', // 'vinyle' | 'carte'
+  'audio_style_pochette': 'vinyle', // 'vinyle' | 'carte' | 'onde'
   'audio_spectre': true,
   'audio_eq_actif': false,
   'audio_eq_profil': 'neutre',
