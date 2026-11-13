@@ -1,7 +1,10 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yt_nexus/moteur/natif.dart';
 import 'package:yt_nexus/moteur/reglages.dart';
 import 'package:yt_nexus/moteur/taches.dart';
+import 'package:yt_nexus/ui/page_reglages.dart';
+import 'package:yt_nexus/ui/theme.dart';
 
 void main() {
   test('extraction et normalisation des chapitres yt-dlp', () {
@@ -65,5 +68,25 @@ void main() {
     expect(reglagesDefaut['lecteur_nuit'], 0.0);
     expect(reglagesDefaut['lecteur_miroir'], isFalse);
     expect(reglagesDefaut['lecteur_reprendre'], isTrue);
+  });
+
+  testWidgets('PageReglages filtre par catégories et par recherche sans débordement', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: construireTheme(true),
+      home: const Scaffold(body: PageReglages()),
+    ));
+
+    expect(find.text('Apparence & Confort'), findsOneWidget);
+    expect(find.text('Médias & Qualité par défaut'), findsOneWidget);
+
+    await tester.tap(find.text('Lecteur'));
+    await tester.pumpAndSettle();
+    expect(find.text('Lecteur vidéo & gestes'), findsOneWidget);
+    expect(find.text('Apparence & Confort'), findsNothing);
+
+    await tester.enterText(find.byType(TextField), 'wifi');
+    await tester.pumpAndSettle();
+    expect(find.text('Wi-Fi uniquement'), findsOneWidget);
+    expect(find.text('Lecteur vidéo & gestes'), findsNothing);
   });
 }
