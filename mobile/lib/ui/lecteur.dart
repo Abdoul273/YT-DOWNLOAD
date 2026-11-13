@@ -23,8 +23,83 @@ import '../moteur/natif.dart';
 import '../moteur/paroles.dart';
 import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
+import 'etat.dart';
 import 'lecteur_audio.dart';
 import 'theme.dart';
+
+/// Élément unifié lisible par [Lecteur] : fichier téléchargé ([Tache]) ou flux streaming YouTube.
+class MediaLecteur {
+  final String id;
+  final String clePrefs;
+  final String titre;
+  final String url;
+  final String? chaine;
+  final String? chaineId;
+  final String? miniature;
+  final int? duree;
+  final bool direct;
+  final Tache? tache;
+  final analyse.ResumeVideo? resume;
+
+  const MediaLecteur({
+    required this.id,
+    required this.clePrefs,
+    required this.titre,
+    required this.url,
+    this.chaine,
+    this.chaineId,
+    this.miniature,
+    this.duree,
+    this.direct = false,
+    this.tache,
+    this.resume,
+  });
+
+  bool get estStream => tache == null;
+
+  factory MediaLecteur.depuisTache(Tache t) => MediaLecteur(
+        id: t.id,
+        clePrefs: t.id,
+        titre: t.titre,
+        url: t.url,
+        chaine: t.chaine,
+        miniature: t.miniature,
+        duree: t.duree,
+        tache: t,
+      );
+
+  factory MediaLecteur.depuisEntree(analyse.Entree e, {analyse.ResumeVideo? resume}) {
+    final cleId = e.id ?? '${(e.url ?? e.titre).hashCode}';
+    return MediaLecteur(
+      id: e.id ?? e.url ?? e.titre,
+      clePrefs: 'stream:$cleId',
+      titre: resume?.titre ?? e.titre,
+      url: resume?.url ?? e.url ?? '',
+      chaine: resume?.chaine ?? e.chaine,
+      chaineId: e.chaineId ?? resume?.info['channel_id'] as String?,
+      miniature: resume?.miniature ?? e.miniature,
+      duree: resume?.duree ?? e.duree,
+      direct: resume?.direct ?? e.direct,
+      resume: resume,
+    );
+  }
+
+  factory MediaLecteur.depuisResume(analyse.ResumeVideo v) {
+    final cleId = (v.info['id'] as String?) ?? '${v.url.hashCode}';
+    return MediaLecteur(
+      id: (v.info['id'] as String?) ?? v.url,
+      clePrefs: 'stream:$cleId',
+      titre: v.titre,
+      url: v.url,
+      chaine: v.chaine,
+      chaineId: v.info['channel_id'] as String?,
+      miniature: v.miniature,
+      duree: v.duree,
+      direct: v.direct,
+      resume: v,
+    );
+  }
+}
 
 bool _estFichierAudio(Tache t) =>
     (t.fichierPrincipal?.mime.startsWith('audio') ?? false) || t.options['type'] == 'audio';
@@ -41,8 +116,49 @@ Future<void> ouvrirLecteur(BuildContext context, List<Tache> liste, int index) {
   if (moteurAudio.enLecture) moteurAudio.pause();
   final videos = liste.where((t) => !_estFichierAudio(t)).toList();
   final idxVideo = videos.indexOf(cible);
+  final items = [for (final t in (videos.isEmpty ? [cible] : videos)) MediaLecteur.depuisTache(t)];
   return Navigator.of(context).push(PageRouteBuilder(
-    pageBuilder: (_, _, _) => Lecteur(videos.isEmpty ? [cible] : videos, idxVideo < 0 ? 0 : idxVideo),
+    pageBuilder: (_, _, _) => Lecteur(items, idxVideo < 0 ? 0 : idxVideo),
+    transitionsBuilder: (_, a, _, w) => FadeTransition(opacity: a, child: w),
+  ));
+}
+
+/// Ouvre le lecteur principal complet directement en streaming sans publicité.
+Future<void> ouvrirLecteurStream(
+  BuildContext context, {
+  required List<analyse.Entree> entrees,
+  int index = 0,
+  analyse.ResumeVideo? resumeInitial,
+  VideoPlayerController? controleurInitial,
+  analyse.SourceApercu? sourceInitiale,
+  List<analyse.SourceApercu>? qualitesInitiales,
+  void Function(VideoPlayerController ctrl, analyse.SourceApercu? source)? surRetourControleur,
+}) {
+  final valides = [
+    for (final e in entrees)
+      if (e.url != null && e.url!.isNotEmpty) e,
+  ];
+  if (valides.isEmpty && resumeInitial == null) return Future.value();
+  if (moteurAudio.enLecture) moteurAudio.pause();
+
+  final items = valides.isEmpty
+      ? [MediaLecteur.depuisResume(resumeInitial!)]
+      : [
+          for (var i = 0; i < valides.length; i++)
+            MediaLecteur.depuisEntree(valides[i], resume: i == index ? resumeInitial : null),
+        ];
+  final idx = valides.isEmpty ? 0 : index.clamp(0, items.length - 1);
+
+  return Navigator.of(context).push(PageRouteBuilder(
+    opaque: true,
+    pageBuilder: (_, _, _) => Lecteur(
+      items,
+      idx,
+      controleurInitial: controleurInitial,
+      sourceInitiale: sourceInitiale,
+      qualitesInitiales: qualitesInitiales,
+      surRetourControleur: surRetourControleur,
+    ),
     transitionsBuilder: (_, a, _, w) => FadeTransition(opacity: a, child: w),
   ));
 }
@@ -56,9 +172,22 @@ const _couleursSt = <String, (String, Color)>{
 };
 
 class Lecteur extends StatefulWidget {
-  final List<Tache> liste;
+  final List<MediaLecteur> liste;
   final int index;
-  const Lecteur(this.liste, this.index, {super.key});
+  final VideoPlayerController? controleurInitial;
+  final analyse.SourceApercu? sourceInitiale;
+  final List<analyse.SourceApercu>? qualitesInitiales;
+  final void Function(VideoPlayerController ctrl, analyse.SourceApercu? source)? surRetourControleur;
+
+  const Lecteur(
+    this.liste,
+    this.index, {
+    super.key,
+    this.controleurInitial,
+    this.sourceInitiale,
+    this.qualitesInitiales,
+    this.surRetourControleur,
+  });
 
   @override
   State<Lecteur> createState() => _LecteurState();
@@ -67,9 +196,11 @@ class Lecteur extends StatefulWidget {
 class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   VideoPlayerController? _ctrl;
   int _generation = 0;
-  late final List<Tache> _file = List<Tache>.of(widget.liste);
+  late final List<MediaLecteur> _file = List<MediaLecteur>.of(widget.liste);
   late int _index = widget.index.clamp(0, math.max(0, _file.length - 1));
   String? _erreur;
+  String _etapeChargement = 'Chargement…';
+  bool _controleurInitialConsomme = false;
 
   bool _controles = true;
   bool _verrou = false;
@@ -85,6 +216,15 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   List<VideoAudioTrack> _pistes = [];
   List<ChapitreVideo> _chapitres = [];
   bool _chargeChapitresEnLigne = false;
+
+  // Streaming : résolutions à la volée & métadonnées YouTube
+  Map<String, dynamic>? _infoStreamActif;
+  List<analyse.SourceApercu> _qualitesStream = [];
+  analyse.SourceApercu? _sourceStream;
+  String? _changementQualite;
+  List<analyse.PisteSousTitreStream> _sourcesStStream = [];
+  final _cacheStStream = <String, DonneesParoles>{};
+  bool _chargeStStream = false;
 
   // Sous-titres multi-pistes synchronisés + style
   List<({String id, String label, FichierPublie fichier})> _sourcesSt = [];
@@ -175,10 +315,16 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
 
   void _retenir(String cle, dynamic v) => reglages.ecrireSansPrevenir(cle, v);
 
-  Tache get _tache => _file[_index];
-  bool get _audio => _tache.fichierPrincipal?.mime.startsWith('audio') ?? false;
+  MediaLecteur get _item => _file[_index];
+  Tache? get _tache => _item.tache;
+  bool get _estStream => _item.estStream;
+  bool get _audio => _tache?.fichierPrincipal?.mime.startsWith('audio') ?? false;
   bool get _aSuivant => _index < _file.length - 1;
-  bool get _aSousTitres => _sourcesSt.isNotEmpty;
+  bool get _aSousTitres => _sourcesSt.isNotEmpty || _sourcesStStream.isNotEmpty;
+  bool get _estLive {
+    final c = _ctrl;
+    return _item.direct && (c == null || !c.value.isInitialized || c.value.duration == Duration.zero);
+  }
 
   @override
   void initState() {
@@ -212,7 +358,18 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     WakelockPlus.disable();
     Natif.mediaArreter();
     Natif.pipAuto(false, 16 / 9);
-    _ctrl?.dispose();
+    final c = _ctrl;
+    c?.removeListener(_maj);
+    if (c != null &&
+        widget.surRetourControleur != null &&
+        _index == widget.index &&
+        _erreur == null &&
+        c.value.isInitialized &&
+        !c.value.hasError) {
+      widget.surRetourControleur!(c, _sourceStream);
+    } else {
+      c?.dispose();
+    }
     Natif.luminosite(-1);
     SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -238,34 +395,48 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       _finSommeil = null;
     }
 
+    if (_item.estStream) {
+      await _chargerStream(generation, ancien, perime);
+      return;
+    }
+
+    final tache = _tache!;
     // Chapitres sauvegardés ou déjà en cache RAM
-    var ch = List<ChapitreVideo>.of(_tache.chapitres);
-    if (ch.isEmpty && _tache.url.startsWith('http')) {
-      final enCache = analyse.infoEnCache(_tache.url);
+    var ch = List<ChapitreVideo>.of(tache.chapitres);
+    if (ch.isEmpty && tache.url.startsWith('http')) {
+      final enCache = analyse.infoEnCache(tache.url);
       if (enCache != null) {
         ch = extraireChapitresInfo(enCache);
-        if (ch.isNotEmpty) gestionnaire.mettreAJourChapitres(_tache, ch);
+        if (ch.isNotEmpty) gestionnaire.mettreAJourChapitres(tache, ch);
       }
     }
 
-    final sourcesSt = sourcesLocalesDisponibles(_tache);
+    final sourcesSt = sourcesLocalesDisponibles(tache);
     final decMap = (reglages['decalages_st'] as Map?) ?? const {};
-    final stIdPref = ((reglages['pistes_st'] as Map?) ?? const {})[_tache.id] as String?;
+    final stIdPref = ((reglages['pistes_st'] as Map?) ?? const {})[_item.clePrefs] as String?;
 
     setState(() {
       _ctrl = null;
       _erreur = null;
+      _etapeChargement = 'Ouverture du fichier…';
       _pistes = [];
       _chapitres = ch;
       _chargeChapitresEnLigne = false;
+      _infoStreamActif = null;
+      _qualitesStream = [];
+      _sourceStream = null;
+      _changementQualite = null;
+      _sourcesStStream = [];
+      _chargeStStream = false;
       _sourcesSt = sourcesSt;
+      _sousTitresActifs = _pref<bool>('lecteur_st', true);
       _donneesSt = null;
       _idStActif = sourcesSt.isEmpty
           ? null
           : sourcesSt.any((s) => s.id == stIdPref)
               ? stIdPref
               : sourcesSt.first.id;
-      _stDecalageMs = (decMap[_tache.id] as num?)?.toInt() ?? 0;
+      _stDecalageMs = (decMap[_item.clePrefs] as num?)?.toInt() ?? 0;
       _signale = false;
       _compteAnnule = false;
       _a = _b = null;
@@ -275,7 +446,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
 
     await ancien?.dispose();
     if (perime()) return;
-    final f = _tache.fichierPrincipal;
+    final f = tache.fichierPrincipal;
     if (f == null) {
       setState(() => _erreur = 'Fichier introuvable');
       return;
@@ -310,7 +481,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     await ctrl.setLooping(_boucle);
     await ctrl.setPlaybackSpeed(_vitesse);
     await ctrl.setVolume(_volume);
-    final pos = ((reglages['positions'] as Map?) ?? {})[_tache.id];
+    final pos = ((reglages['positions'] as Map?) ?? {})[_item.clePrefs];
     if (_reprendreAuto && pos is int && pos > 10000 && pos < ctrl.value.duration.inMilliseconds * 0.95) {
       await ctrl.seekTo(Duration(milliseconds: pos));
     }
@@ -335,6 +506,342 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     } catch (_) {}
   }
 
+  Future<void> _chargerStream(int generation, VideoPlayerController? ancien, bool Function() perime) async {
+    final item = _item;
+    final decMap = (reglages['decalages_st'] as Map?) ?? const {};
+    final stIdPref = ((reglages['pistes_st'] as Map?) ?? const {})[item.clePrefs] as String?;
+    final stActifs = _pref<bool>('lecteur_stream_st', false);
+
+    // Transfert instantané depuis Apercu inline (zéro coupure)
+    final pret = !_controleurInitialConsomme &&
+        _index == widget.index &&
+        widget.controleurInitial != null &&
+        widget.controleurInitial!.value.isInitialized &&
+        !widget.controleurInitial!.value.hasError;
+
+    if (pret) {
+      _controleurInitialConsomme = true;
+      final ctrl = widget.controleurInitial!;
+      final info = item.resume?.info ?? analyse.infoEnCache(item.url);
+      final ch = info != null ? extraireChapitresInfo(info) : <ChapitreVideo>[];
+      final stStream = info != null ? analyse.sousTitresStreaming(info) : <analyse.PisteSousTitreStream>[];
+      final qBase = widget.qualitesInitiales != null && widget.qualitesInitiales!.isNotEmpty
+          ? List<analyse.SourceApercu>.of(widget.qualitesInitiales!)
+          : (info != null ? analyse.sourcesApercu(info) : <analyse.SourceApercu>[]);
+      final stId = stStream.isEmpty
+          ? null
+          : (stIdPref != null && stStream.any((s) => s.id == stIdPref))
+              ? stIdPref
+              : stStream.first.id;
+
+      ctrl.removeListener(_maj);
+      await ctrl.setLooping(_boucle);
+      await ctrl.setPlaybackSpeed(_vitesse);
+      await ctrl.setVolume(_volume);
+      if (perime()) return;
+
+      ctrl.addListener(_maj);
+      setState(() {
+        _ctrl = ctrl;
+        _erreur = null;
+        _pistes = [];
+        _chapitres = ch;
+        _chargeChapitresEnLigne = false;
+        _infoStreamActif = info;
+        _qualitesStream = qBase;
+        _sourceStream = widget.sourceInitiale ?? (qBase.isNotEmpty ? qBase.first : null);
+        _changementQualite = null;
+        _sourcesSt = const [];
+        _sourcesStStream = stStream;
+        _sousTitresActifs = stActifs;
+        _donneesSt = null;
+        _idStActif = stId;
+        _chargeStStream = false;
+        _stDecalageMs = (decMap[item.clePrefs] as num?)?.toInt() ?? 0;
+        _signale = false;
+        _compteAnnule = false;
+        _a = _b = null;
+        _zoom = 1.0;
+        _panZoom = Offset.zero;
+      });
+      _orienter();
+      if (!ctrl.value.isPlaying) await ctrl.play();
+      if (perime()) return;
+      _appliquerEffetsAudio();
+      _synchro();
+      _programmerMasquage();
+      if (info != null) _enrichirQualitesStream(info, generation);
+      if (stActifs && stId != null) {
+        final cibleSt = stStream.firstWhere((s) => s.id == stId, orElse: () => stStream.first);
+        unawaited(_chargerPisteSousTitresStream(cibleSt, generation, silencieux: true));
+      }
+      try {
+        final p = await ctrl.getAudioTracks();
+        if (!perime()) setState(() => _pistes = p);
+      } catch (_) {}
+      return;
+    }
+
+    _controleurInitialConsomme = true;
+    setState(() {
+      _ctrl = null;
+      _erreur = null;
+      _etapeChargement = 'Analyse du flux vidéo…';
+      _pistes = [];
+      _chapitres = const [];
+      _chargeChapitresEnLigne = false;
+      _infoStreamActif = null;
+      _qualitesStream = const [];
+      _sourceStream = null;
+      _changementQualite = null;
+      _sourcesSt = const [];
+      _sourcesStStream = const [];
+      _sousTitresActifs = stActifs;
+      _donneesSt = null;
+      _idStActif = null;
+      _chargeStStream = false;
+      _stDecalageMs = (decMap[item.clePrefs] as num?)?.toInt() ?? 0;
+      _signale = false;
+      _compteAnnule = false;
+      _a = _b = null;
+      _zoom = 1.0;
+      _panZoom = Offset.zero;
+    });
+
+    await ancien?.dispose();
+    if (perime()) return;
+
+    final infoInit = item.resume?.info ?? analyse.infoEnCache(item.url);
+    final etapes = <Future<Map<String, dynamic>> Function()>[
+      if (infoInit != null) () async => infoInit else () => analyse.infoComplete(item.url),
+      () => analyse.infoComplete(item.url, frais: true),
+      () => analyse.infoApercuSecours(item.url),
+    ];
+
+    Object? derniere;
+    var aucunFlux = true;
+    for (final etape in etapes) {
+      try {
+        final info = await etape();
+        if (perime()) return;
+        final sources = analyse.sourcesApercu(info);
+        if (sources.isNotEmpty) aucunFlux = false;
+
+        // Ordonner selon la préférence utilisateur sans retarder le démarrage.
+        final qPref = _pref<String>('lecteur_stream_qualite', 'auto');
+        final ordonnees = List<analyse.SourceApercu>.of(sources);
+        if (qPref != 'auto') {
+          final hPref = int.tryParse(qPref);
+          if (hPref != null) {
+            final idxMatch = ordonnees.indexWhere((s) => s.hauteur == hPref);
+            if (idxMatch > 0) ordonnees.insert(0, ordonnees.removeAt(idxMatch));
+          }
+        }
+
+        for (final src in ordonnees) {
+          if (perime()) return;
+          if (mounted) setState(() => _etapeChargement = 'Mise en mémoire tampon (${src.libelle})…');
+          final urlPlay = await src.urlExecutable();
+          final ctrl = VideoPlayerController.networkUrl(
+            Uri.parse(urlPlay),
+            httpHeaders: src.entetes,
+            formatHint: src.hls ? VideoFormat.hls : null,
+            videoPlayerOptions: VideoPlayerOptions(allowBackgroundPlayback: true),
+          );
+          try {
+            await ctrl.initialize().timeout(const Duration(seconds: 20));
+          } catch (_) {
+            ctrl.dispose();
+            continue;
+          }
+          if (perime()) {
+            ctrl.dispose();
+            return;
+          }
+          final ch = extraireChapitresInfo(info);
+          final stStream = analyse.sousTitresStreaming(info);
+          final stId = stStream.isEmpty
+              ? null
+              : (stIdPref != null && stStream.any((s) => s.id == stIdPref))
+                  ? stIdPref
+                  : stStream.first.id;
+
+          await ctrl.setLooping(_boucle);
+          await ctrl.setPlaybackSpeed(_vitesse);
+          await ctrl.setVolume(_volume);
+          if (!item.direct && _reprendreAuto && ctrl.value.duration > Duration.zero) {
+            final pos = ((reglages['positions'] as Map?) ?? {})[item.clePrefs];
+            if (pos is int && pos > 10000 && pos < ctrl.value.duration.inMilliseconds * 0.95) {
+              await ctrl.seekTo(Duration(milliseconds: pos));
+            }
+          }
+          if (perime()) {
+            ctrl.dispose();
+            return;
+          }
+          if (!item.direct && _reprendreAuto && ctrl.value.position.inMilliseconds > 10000) {
+            _indiquer('Reprise à ${_temps(ctrl.value.position)}', Icons.history_rounded);
+          }
+
+          ctrl.addListener(_maj);
+          setState(() {
+            _ctrl = ctrl;
+            _infoStreamActif = info;
+            _qualitesStream = sources;
+            _sourceStream = src;
+            _chapitres = ch;
+            _sourcesStStream = stStream;
+            _idStActif = stId;
+          });
+          _orienter();
+          await ctrl.play();
+          if (perime()) return;
+          _appliquerEffetsAudio();
+          _synchro();
+          _programmerMasquage();
+          gouts.signal('apercu', url: item.url, titre: item.titre, chaine: item.chaine, chaineId: item.chaineId);
+          _enrichirQualitesStream(info, generation);
+          if (stActifs && stId != null) {
+            final cibleSt = stStream.firstWhere((s) => s.id == stId, orElse: () => stStream.first);
+            unawaited(_chargerPisteSousTitresStream(cibleSt, generation, silencieux: true));
+          }
+          try {
+            final p = await ctrl.getAudioTracks();
+            if (!perime()) setState(() => _pistes = p);
+          } catch (_) {}
+          return;
+        }
+      } catch (e) {
+        derniere = e;
+      }
+    }
+
+    if (!perime()) {
+      setState(() {
+        _erreur = aucunFlux && derniere == null
+            ? 'Aucun flux lisible directement pour cette vidéo.'
+            : 'Lecture streaming impossible${derniere == null ? '' : ' (${'$derniere'.split('\n').first})'}.';
+      });
+    }
+  }
+
+  Future<void> _enrichirQualitesStream(Map<String, dynamic> info, int generation) async {
+    final completes = await analyse.resoudreQualitesStreaming(info);
+    if (!mounted || generation != _generation || completes.isEmpty) return;
+    setState(() => _qualitesStream = completes);
+  }
+
+  Future<void> _changerQualiteStream(analyse.SourceApercu cible) async {
+    if (_changementQualite != null) return;
+    if (_sourceStream?.id == cible.id) return;
+    final oldCtrl = _ctrl;
+    if (oldCtrl == null) return;
+    final generation = _generation;
+
+    _retenir('lecteur_stream_qualite', cible.adaptatif ? 'auto' : '${cible.hauteur}');
+    setState(() => _changementQualite = cible.libelle);
+    _indiquer('Passage en ${cible.libelle}…', Icons.hd_rounded);
+
+    final pos = oldCtrl.value.position;
+    final enCours = oldCtrl.value.isPlaying;
+    VideoPlayerController? nouv;
+    try {
+      final urlPlay = await cible.urlExecutable();
+      nouv = VideoPlayerController.networkUrl(
+        Uri.parse(urlPlay),
+        httpHeaders: cible.entetes,
+        formatHint: cible.hls ? VideoFormat.hls : null,
+        videoPlayerOptions: VideoPlayerOptions(allowBackgroundPlayback: true),
+      );
+      await nouv.initialize().timeout(const Duration(seconds: 20));
+      if (!mounted || generation != _generation) {
+        nouv.dispose();
+        return;
+      }
+      if (!_estLive && pos > Duration.zero && nouv.value.duration > Duration.zero) {
+        final ciblePos = pos > nouv.value.duration ? nouv.value.duration : pos;
+        await nouv.seekTo(ciblePos);
+      }
+      await nouv.setLooping(_boucle);
+      await nouv.setPlaybackSpeed(_vitesse);
+      await nouv.setVolume(_volume);
+      if (enCours) await nouv.play();
+      if (!mounted || generation != _generation) {
+        nouv.dispose();
+        return;
+      }
+
+      oldCtrl.removeListener(_maj);
+      nouv.addListener(_maj);
+      setState(() {
+        _ctrl = nouv;
+        _sourceStream = cible;
+        _changementQualite = null;
+      });
+      unawaited(oldCtrl.dispose());
+      _appliquerEffetsAudio();
+      _synchro();
+      _programmerMasquage();
+      HapticFeedback.selectionClick();
+      _indiquer('Qualité · ${cible.libelle}', Icons.hd_rounded);
+      try {
+        final p = await nouv.getAudioTracks();
+        if (mounted && generation == _generation) setState(() => _pistes = p);
+      } catch (_) {}
+    } catch (_) {
+      nouv?.dispose();
+      if (mounted && generation == _generation) {
+        setState(() => _changementQualite = null);
+        toast(context, 'Impossible de passer en ${cible.libelle}', erreur: true);
+      }
+    }
+  }
+
+  Future<void> _chargerPisteSousTitresStream(
+    analyse.PisteSousTitreStream src,
+    int gen, {
+    bool silencieux = false,
+  }) async {
+    final enCache = _cacheStStream[src.id];
+    if (enCache != null) {
+      if (!mounted || gen != _generation) return;
+      setState(() {
+        _idStActif = src.id;
+        _donneesSt = enCache;
+        _chargeStStream = false;
+      });
+      final pistesMap = Map<String, dynamic>.of((reglages['pistes_st'] as Map?)?.cast<String, dynamic>() ?? {});
+      pistesMap[_item.clePrefs] = src.id;
+      _retenir('pistes_st', pistesMap);
+      if (!silencieux) _indiquer(src.label, Icons.closed_caption_rounded);
+      return;
+    }
+
+    setState(() => _chargeStStream = true);
+    final headers = (_sourceStream?.entetes ?? const {});
+    final d = await chargerSousTitresEnLigne(
+      src,
+      headers: headers.isEmpty ? null : headers,
+      dureeTotaleSec: _item.duree,
+    );
+    if (!mounted || gen != _generation) return;
+    if (d != null) {
+      _cacheStStream[src.id] = d;
+      setState(() {
+        _idStActif = src.id;
+        _donneesSt = d;
+        _chargeStStream = false;
+      });
+      final pistesMap = Map<String, dynamic>.of((reglages['pistes_st'] as Map?)?.cast<String, dynamic>() ?? {});
+      pistesMap[_item.clePrefs] = src.id;
+      _retenir('pistes_st', pistesMap);
+      if (!silencieux) _indiquer(src.label, Icons.closed_caption_rounded);
+    } else {
+      setState(() => _chargeStStream = false);
+      if (!silencieux) toast(context, 'Sous-titres indisponibles pour ${src.label}', erreur: true);
+    }
+  }
+
   Future<void> _chargerPisteSousTitres(
     ({String id, String label, FichierPublie fichier}) src,
     int gen, {
@@ -343,7 +850,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     final d = await chargerFichierParolesLocal(
       src.fichier,
       labelSource: src.label,
-      dureeTotaleSec: _tache.duree,
+      dureeTotaleSec: _item.duree,
     );
     if (!mounted || gen != _generation) return;
     setState(() {
@@ -351,7 +858,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       _donneesSt = d;
     });
     final pistesMap = Map<String, dynamic>.of((reglages['pistes_st'] as Map?)?.cast<String, dynamic>() ?? {});
-    pistesMap[_tache.id] = src.id;
+    pistesMap[_item.clePrefs] = src.id;
     _retenir('pistes_st', pistesMap);
     if (!silencieux) {
       _indiquer(src.label, Icons.closed_caption_rounded);
@@ -359,15 +866,15 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   }
 
   Future<void> _chargerChapitresEnLigne({StateSetter? majFeuille}) async {
-    if (_chargeChapitresEnLigne || !_tache.url.startsWith('http')) return;
+    if (_chargeChapitresEnLigne || !_item.url.startsWith('http')) return;
     setState(() => _chargeChapitresEnLigne = true);
     majFeuille?.call(() {});
     try {
-      final info = await analyse.infoComplete(_tache.url);
+      final info = _infoStreamActif ?? await analyse.infoComplete(_item.url);
       final ch = extraireChapitresInfo(info);
       if (!mounted) return;
       if (ch.isNotEmpty) {
-        gestionnaire.mettreAJourChapitres(_tache, ch);
+        if (_tache != null) gestionnaire.mettreAJourChapitres(_tache!, ch);
         setState(() => _chapitres = ch);
         majFeuille?.call(() {});
         toast(context, '${ch.length} chapitres chargés');
@@ -495,9 +1002,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       v.isPlaying ? _pouls.repeat(reverse: true) : _pouls.stop();
     }
     Natif.media(
-      titre: _tache.titre,
-      artiste: _tache.chaine ?? '',
-      image: miniatures.locale(_tache.miniature) ?? _tache.miniature,
+      titre: _item.titre,
+      artiste: _item.chaine ?? '',
+      image: miniatures.locale(_item.miniature) ?? _item.miniature,
       lecture: v.isPlaying,
       position: v.position.inMilliseconds,
       duree: v.duration.inMilliseconds,
@@ -559,19 +1066,27 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     }
     if (v.isInitialized && v.isPlaying != _enLecture) _synchro();
     if (!_signale &&
-        v.duration > Duration.zero &&
-        (v.position.inSeconds > 60 || v.position.inMilliseconds > v.duration.inMilliseconds * 0.3)) {
+        (_estLive ||
+            (v.duration > Duration.zero &&
+                (v.position.inSeconds > 60 || v.position.inMilliseconds > v.duration.inMilliseconds * 0.3)))) {
       _signale = true;
-      gouts.signal('lecture', url: _tache.url, titre: _tache.titre, chaine: _tache.chaine);
+      gouts.signal(
+        _estStream ? 'apercu' : 'lecture',
+        url: _item.url,
+        titre: _item.titre,
+        chaine: _item.chaine,
+        chaineId: _item.chaineId,
+      );
     }
 
     // Boucle A-B
     final b = _b;
-    if (b != null && v.isPlaying && v.position >= b) {
+    if (!_estLive && b != null && v.isPlaying && v.position >= b) {
       c.seekTo(_a ?? Duration.zero);
     }
 
-    final fini = !_boucle &&
+    final fini = !_estLive &&
+        !_boucle &&
         v.isInitialized &&
         v.duration > Duration.zero &&
         (v.isCompleted || v.position >= v.duration) &&
@@ -619,14 +1134,16 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
 
   void _memoriserPosition() {
     final c = _ctrl;
-    if (c == null || !c.value.isInitialized) return;
+    if (c == null || !c.value.isInitialized || _estLive || _item.direct) return;
+    final durMs = c.value.duration.inMilliseconds;
+    if (durMs <= 0) return;
     final positions = Map<String, dynamic>.of((reglages['positions'] as Map?)?.cast<String, dynamic>() ?? {});
     final p = c.value.position.inMilliseconds;
-    if (p > c.value.duration.inMilliseconds * 0.95) {
-      positions.remove(_tache.id);
+    if (p > durMs * 0.95) {
+      positions.remove(_item.clePrefs);
     } else {
-      positions.remove(_tache.id);
-      positions[_tache.id] = p;
+      positions.remove(_item.clePrefs);
+      positions[_item.clePrefs] = p;
     }
     while (positions.length > 300) {
       positions.remove(positions.keys.first);
@@ -635,8 +1152,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   }
 
   void _effacerPosition() {
+    if (_item.direct) return;
     final positions = Map<String, dynamic>.of((reglages['positions'] as Map?)?.cast<String, dynamic>() ?? {});
-    if (positions.remove(_tache.id) != null) reglages.ecrireSansPrevenir('positions', positions);
+    if (positions.remove(_item.clePrefs) != null) reglages.ecrireSansPrevenir('positions', positions);
   }
 
   void _aller(int i) {
@@ -653,7 +1171,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     if (ancien < 0 || ancien >= _file.length) return;
     nouveau = nouveau.clamp(0, _file.length - 1);
     if (ancien == nouveau) return;
-    final idActuel = _tache.id;
+    final idActuel = _item.id;
     final item = _file.removeAt(ancien);
     _file.insert(nouveau, item);
     _index = _file.indexWhere((t) => t.id == idActuel).clamp(0, _file.length - 1);
@@ -662,7 +1180,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
 
   void _lireEnsuite(int i) {
     if (i == _index || i == _index + 1 || i < 0 || i >= _file.length) return;
-    final idActuel = _tache.id;
+    final idActuel = _item.id;
     final item = _file.removeAt(i);
     final idxActuel = _file.indexWhere((t) => t.id == idActuel);
     final dest = (idxActuel + 1).clamp(0, _file.length);
@@ -674,7 +1192,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
 
   void _retirerDeFile(int i) {
     if (_file.length <= 1 || i == _index || i < 0 || i >= _file.length) return;
-    final idActuel = _tache.id;
+    final idActuel = _item.id;
     _file.removeAt(i);
     _index = _file.indexWhere((t) => t.id == idActuel).clamp(0, _file.length - 1);
     setState(() {});
@@ -858,7 +1376,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
 
   List<({int ms, String note})> _signetsVideo() {
     final map = (reglages['signets'] as Map?) ?? const {};
-    final brut = map[_tache.id];
+    final brut = map[_item.clePrefs];
     if (brut is! List) return const [];
     final res = <({int ms, String note})>[];
     for (final e in brut) {
@@ -883,7 +1401,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
         : (_chapitrePour(c.value.position)?.titre ?? 'Moment ${_temps(Duration(milliseconds: ms))}');
     liste.add({'ms': ms, 'note': libel});
     liste.sort((a, b) => ((a['ms'] as int)).compareTo(b['ms'] as int));
-    tout[_tache.id] = liste;
+    tout[_item.clePrefs] = liste;
     _retenir('signets', tout);
     HapticFeedback.lightImpact();
     setState(() {});
@@ -897,9 +1415,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
         if (s.ms != ms) {'ms': s.ms, 'note': s.note},
     ];
     if (liste.isEmpty) {
-      tout.remove(_tache.id);
+      tout.remove(_item.clePrefs);
     } else {
-      tout[_tache.id] = liste;
+      tout[_item.clePrefs] = liste;
     }
     _retenir('signets', tout);
     setState(() {});
@@ -1335,6 +1853,28 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
         );
       }, grande: true);
 
+  void _basculerSousTitres() {
+    final prochain = !_sousTitresActifs;
+    setState(() => _sousTitresActifs = prochain);
+    _retenir(_estStream ? 'lecteur_stream_st' : 'lecteur_st', prochain);
+    if (prochain && _donneesSt == null) {
+      if (_estStream && _sourcesStStream.isNotEmpty) {
+        final cible = _sourcesStStream.firstWhere(
+          (s) => s.id == _idStActif,
+          orElse: () => _sourcesStStream.first,
+        );
+        unawaited(_chargerPisteSousTitresStream(cible, _generation, silencieux: true));
+      } else if (!_estStream && _sourcesSt.isNotEmpty) {
+        final cible = _sourcesSt.firstWhere(
+          (s) => s.id == _idStActif,
+          orElse: () => _sourcesSt.first,
+        );
+        unawaited(_chargerPisteSousTitres(cible, _generation, silencieux: true));
+      }
+    }
+    _programmerMasquage();
+  }
+
   /// Feuille complète des sous-titres : pistes multiples, décalage synchro, style et transcription cliquable.
   void _menuSousTitres() {
     var onglet = 0; // 0 = Réglages, 1 = Transcription
@@ -1352,9 +1892,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
         final nouveau = deltaMs == 0 ? 0 : (_stDecalageMs + deltaMs).clamp(-30000, 30000);
         setState(() => _stDecalageMs = nouveau);
         if (nouveau == 0) {
-          decMap.remove(_tache.id);
+          decMap.remove(_item.clePrefs);
         } else {
-          decMap[_tache.id] = nouveau;
+          decMap[_item.clePrefs] = nouveau;
         }
         _retenir('decalages_st', decMap);
         maj(() {});
@@ -1368,7 +1908,16 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
             activeThumbColor: c.indigo,
             onChanged: (v) {
               setState(() => _sousTitresActifs = v);
-              _retenir('lecteur_st', v);
+              _retenir(_estStream ? 'lecteur_stream_st' : 'lecteur_st', v);
+              if (v && _donneesSt == null && _estStream && _sourcesStStream.isNotEmpty) {
+                final cible = _sourcesStStream.firstWhere(
+                  (s) => s.id == _idStActif,
+                  orElse: () => _sourcesStStream.first,
+                );
+                _chargerPisteSousTitresStream(cible, _generation).then((_) {
+                  if (ctx.mounted) maj(() {});
+                });
+              }
               maj(() {});
             },
           ),
@@ -1408,7 +1957,42 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                         setState(() => _sousTitresActifs = true);
                         _retenir('lecteur_st', true);
                         await _chargerPisteSousTitres(s, _generation);
+                        if (ctx.mounted) maj(() {});
+                      },
+                    ),
+                  const Divider(color: Colors.white12, height: 22),
+                ],
+                if (_sourcesStStream.isNotEmpty) ...[
+                  Row(children: [
+                    const Text('Sous-titres en streaming',
+                        style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    if (_chargeStStream)
+                      const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70)),
+                  ]),
+                  const SizedBox(height: 8),
+                  for (final s in _sourcesStStream)
+                    ListTile(
+                      dense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      selected: _sousTitresActifs && _idStActif == s.id,
+                      selectedTileColor: c.indigo.withAlpha(45),
+                      leading: Icon(
+                        s.auto ? Icons.auto_awesome_rounded : Icons.closed_caption_rounded,
+                        color: _sousTitresActifs && _idStActif == s.id ? c.indigo : Colors.white60,
+                      ),
+                      title: Text(s.label, style: const TextStyle(color: Colors.white, fontSize: 14)),
+                      subtitle: s.auto
+                          ? const Text('Générés automatiquement', style: TextStyle(color: Colors.white54, fontSize: 11))
+                          : null,
+                      trailing: _idStActif == s.id ? Icon(Icons.check_rounded, color: c.indigo) : null,
+                      onTap: () async {
+                        setState(() => _sousTitresActifs = true);
+                        _retenir('lecteur_stream_st', true);
                         maj(() {});
+                        await _chargerPisteSousTitresStream(s, _generation);
+                        if (ctx.mounted) maj(() {});
                       },
                     ),
                   const Divider(color: Colors.white12, height: 22),
@@ -1679,7 +2263,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                         const SizedBox(height: 8),
                         const Text('Aucun chapitre enregistré pour cette vidéo.',
                             textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: 13)),
-                        if (_tache.url.startsWith('http')) ...[
+                        if (_item.url.startsWith('http')) ...[
                           const SizedBox(height: 12),
                           FilledButton.icon(
                             style: FilledButton.styleFrom(backgroundColor: c.indigo),
@@ -2004,26 +2588,106 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
         ]);
       }, grande: true);
 
+  void _telechargerVideo() {
+    final url = _item.url;
+    if (url.isEmpty) return;
+    _memoriserPosition();
+    _ctrl?.pause();
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    ouvrirLien(url);
+  }
+
+  void _menuQualiteStream() {
+    if (!_estStream || _qualitesStream.isEmpty) return;
+    _feuille<void>((ctx, maj) {
+      final c = context.c;
+      final curId = _sourceStream?.id;
+      final qualiteReelle = _ctrl != null ? _qualiteBadge(_ctrl!.value) : null;
+      return SingleChildScrollView(
+        padding: const EdgeInsets.only(bottom: 18),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _poignee(
+            'Qualité du flux',
+            action: _changementQualite != null
+                ? const Padding(
+                    padding: EdgeInsets.only(right: 8),
+                    child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+                  )
+                : null,
+          ),
+          for (final q in _qualitesStream)
+            Builder(builder: (_) {
+              final selectionnee = curId == q.id;
+              final details = <String>[
+                if (q.adaptatif) 'Débit adaptatif HLS (auto)',
+                if (!q.adaptatif && q.hls) 'Flux HLS dédié',
+                if (q.codec != null && q.codec!.isNotEmpty) q.codec!.toUpperCase(),
+                if (q.debitKbps != null && q.debitKbps! > 0) '${q.debitKbps} kbps',
+              ].join(' · ');
+              return ListTile(
+                leading: Icon(
+                  q.adaptatif ? Icons.auto_awesome_rounded : Icons.hd_rounded,
+                  color: selectionnee ? c.cyan : Colors.white60,
+                ),
+                title: Row(children: [
+                  Text(
+                    q.libelle,
+                    style: TextStyle(color: Colors.white, fontWeight: selectionnee ? FontWeight.w700 : FontWeight.w500),
+                  ),
+                  if (q.adaptatif && selectionnee && qualiteReelle != null) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(color: c.cyan.withAlpha(38), borderRadius: BorderRadius.circular(6)),
+                      child: Text(qualiteReelle, style: mono(context, taille: 10, couleur: c.cyan, poids: FontWeight.w700)),
+                    ),
+                  ],
+                ]),
+                subtitle: details.isEmpty ? null : Text(details, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                trailing: selectionnee ? Icon(Icons.check_rounded, color: c.cyan) : null,
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  await _changerQualiteStream(q);
+                },
+              );
+            }),
+        ]),
+      );
+    });
+  }
+
   void _menuInfos() {
     final c = _ctrl;
-    final f = _tache.fichierPrincipal;
+    final tache = _tache;
+    final f = tache?.fichierPrincipal;
     final t = c?.value.size ?? Size.zero;
     String taille(int o) => o > 1 << 30 ? '${(o / (1 << 30)).toStringAsFixed(2)} Go' : '${(o / (1 << 20)).toStringAsFixed(1)} Mo';
     final durS = c?.value.duration.inSeconds ?? 0;
     final debit = (f != null && f.taille > 0 && durS > 0) ? '${(f.taille * 8 / durS / 1000).round()} kbps' : null;
+    final nbSt = _estStream ? _sourcesStStream.length : _sourcesSt.length;
+    final srcStream = _sourceStream;
     final lignes = <(String, String)>[
-      ('Titre', _tache.titre),
-      if (_tache.chaine != null) ('Chaîne', _tache.chaine!),
-      if (c != null) ('Durée', _temps(c.value.duration)),
+      ('Titre', _item.titre),
+      if (_item.chaine != null) ('Chaîne', _item.chaine!),
+      if (_estLive) ('Diffusion', 'En direct') else if (c != null) ('Durée', _temps(c.value.duration)),
       if (!_audio && t.width > 0) ('Résolution', '${t.width.round()} × ${t.height.round()}'),
+      if (_estStream && srcStream != null)
+        (
+          'Flux streaming',
+          [
+            srcStream.libelle,
+            if (srcStream.codec != null && srcStream.codec!.isNotEmpty) srcStream.codec!.toUpperCase(),
+            if (srcStream.debitKbps != null && srcStream.debitKbps! > 0) '${srcStream.debitKbps} kbps',
+          ].join(' · '),
+        ),
       if (debit != null) ('Débit moyen', debit),
-      if (_tache.pistes.isNotEmpty) ('Pistes prévues', _tache.pistes),
+      if (tache != null && tache.pistes.isNotEmpty) ('Pistes prévues', tache.pistes),
       if (f != null) ('Format', f.mime),
       if (f != null && f.taille > 0) ('Taille', taille(f.taille)),
       if (_pistes.isNotEmpty) ('Pistes audio', '${_pistes.length}'),
-      if (_sourcesSt.isNotEmpty) ('Sous-titres', '${_sourcesSt.length} fichier(s)'),
+      if (nbSt > 0) ('Sous-titres', '$nbSt piste(s)'),
       if (_chapitres.isNotEmpty) ('Chapitres', '${_chapitres.length}'),
-      ('Source', _tache.url),
+      ('Source', _item.url),
     ];
     _feuille<void>((ctx, _) => SingleChildScrollView(
           padding: const EdgeInsets.only(bottom: 18),
@@ -2058,13 +2722,22 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                       icon: const Icon(Icons.open_in_new_rounded, size: 17),
                       label: const Text('Lecteur externe'),
                     ),
+                  )
+                else if (_estStream)
+                  Expanded(
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(backgroundColor: context.c.indigo),
+                      onPressed: _telechargerVideo,
+                      icon: const Icon(Icons.download_rounded, size: 17),
+                      label: const Text('Télécharger'),
+                    ),
                   ),
-                if (f != null && _tache.url.startsWith('http')) const SizedBox(width: 10),
-                if (_tache.url.startsWith('http'))
+                if ((f != null || _estStream) && _item.url.startsWith('http')) const SizedBox(width: 10),
+                if (_item.url.startsWith('http'))
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () {
-                        Clipboard.setData(ClipboardData(text: _tache.url));
+                        Clipboard.setData(ClipboardData(text: _item.url));
                         toast(context, 'Lien copié');
                       },
                       icon: const Icon(Icons.link_rounded, size: 17),
@@ -2103,13 +2776,14 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       ));
 
   Future<void> _basculerVersOnde() async {
+    final tache = _tache;
+    if (tache == null) return;
     final c = _ctrl;
     final pos = c?.value.position ?? Duration.zero;
     _memoriserPosition();
     c?.pause();
     if (!mounted) return;
     final nav = Navigator.of(context);
-    final tache = _tache;
     nav.pop();
     await ouvrirLecteurAudio(
       nav.context,
@@ -2123,7 +2797,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   void _menuReglages() => _feuille<void>((ctx, maj) {
         final c = context.c;
         final ctrl = _ctrl;
-        final f = _tache.fichierPrincipal;
+        final f = _tache?.fichierPrincipal;
         String libSommeil() {
           if (_sommeilMin == 0) return 'Désactivé';
           if (_sommeilMin == -1) return 'Fin vidéo';
@@ -2198,7 +2872,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                   ),
                 ),
                 const SizedBox(width: 8),
-                if (!_audio) ...[
+                if (!_audio && _tache != null) ...[
                   Expanded(
                     child: tuileAction(
                       Icons.headphones_rounded,
@@ -2206,6 +2880,18 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                       onTap: () {
                         Navigator.pop(ctx);
                         _basculerVersOnde();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ] else if (_estStream) ...[
+                  Expanded(
+                    child: tuileAction(
+                      Icons.download_rounded,
+                      'Télécharger',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _telechargerVideo();
                       },
                     ),
                   ),
@@ -2219,6 +2905,17 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                       onTap: () {
                         Navigator.pop(ctx);
                         Natif.partager(f.uri, f.mime);
+                      },
+                    ),
+                  )
+                else if (_estStream && _item.url.startsWith('http'))
+                  Expanded(
+                    child: tuileAction(
+                      Icons.open_in_new_rounded,
+                      'YouTube',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        Natif.ouvrirLien(_item.url);
                       },
                     ),
                   ),
@@ -2261,6 +2958,14 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                   ]),
                 ),
               ),
+            if (_estStream && _qualitesStream.isNotEmpty)
+              ligne(
+                Icons.hd_rounded,
+                'Qualité du flux',
+                _changementQualite != null ? '$_changementQualite…' : (_sourceStream?.libelle ?? 'Auto'),
+                _menuQualiteStream,
+                badge: c.cyan,
+              ),
             ligne(Icons.graphic_eq_rounded, 'Studio Audio & Égaliseur',
                 _eqActif ? '${profilsEgaliseur[_eqProfil]?.$1 ?? 'Actif'}${_gain > 0 ? ' +${_gain.round()}dB' : ''}' : 'Neutre',
                 _menuStudioAudio,
@@ -2287,8 +2992,10 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                 _formats[_format],
                 _menuImage,
               ),
-            ligne(Icons.repeat_rounded, 'Boucle A-B précise', _b != null ? 'Active' : (_a != null ? 'Point A' : null), _menuBoucleAB),
-            ligne(Icons.my_location_rounded, 'Aller à un moment', null, _allerAuTemps),
+            if (!_estLive) ...[
+              ligne(Icons.repeat_rounded, 'Boucle A-B précise', _b != null ? 'Active' : (_a != null ? 'Point A' : null), _menuBoucleAB),
+              ligne(Icons.my_location_rounded, 'Aller à un moment', null, _allerAuTemps),
+            ],
             ligne(Icons.forward_10_rounded, 'Durée des sauts', '$_saut s', _menuSaut),
             ligne(Icons.bedtime_outlined, 'Minuteur de sommeil', libSommeil(), _menuSommeil),
             if (_pistes.length > 1) ligne(Icons.translate_rounded, 'Piste audio', '${_pistes.length}', _menuPistes),
@@ -2413,7 +3120,15 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
         body: _erreur != null
             ? _vueErreur()
             : ctrl == null
-                ? const Center(child: CircularProgressIndicator(color: Colors.white))
+                ? Center(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      const CircularProgressIndicator(color: Colors.white),
+                      if (_estStream) ...[
+                        const SizedBox(height: 14),
+                        Text(_etapeChargement, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                      ],
+                    ]),
+                  )
                 : Stack(fit: StackFit.expand, children: [
                     // Zone vidéo + gestes tactiles dédiés
                     Listener(
@@ -2428,9 +3143,9 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                             ? null
                             : (d) {
                                 final x = d.localPosition.dx / taille.width;
-                                if (x < 0.36) {
+                                if (!_estLive && x < 0.36) {
                                   _sauter(-1);
-                                } else if (x > 0.64) {
+                                } else if (!_estLive && x > 0.64) {
                                   _sauter(1);
                                 } else {
                                   _lecturePause(flashCentre: true);
@@ -2470,7 +3185,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                                 });
                               }
                             : null,
-                        onHorizontalDragStart: (_verrou || !_gestes || zoome || _pointeurs.length > 1)
+                        onHorizontalDragStart: (_verrou || !_gestes || _estLive || zoome || _pointeurs.length > 1)
                             ? null
                             : (d) {
                                 _interaction = true;
@@ -2478,7 +3193,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                                 _debutGlisse = d.localPosition.dx;
                                 _positionDebut = ctrl.value.position;
                               },
-                        onHorizontalDragUpdate: (_verrou || !_gestes || zoome || _pointeurs.length > 1)
+                        onHorizontalDragUpdate: (_verrou || !_gestes || _estLive || zoome || _pointeurs.length > 1)
                             ? null
                             : (d) {
                                 final total = ctrl.value.duration;
@@ -2496,7 +3211,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                                   _iconeIndication = ecart.isNegative ? Icons.fast_rewind_rounded : Icons.fast_forward_rounded;
                                 });
                               },
-                        onHorizontalDragEnd: (_verrou || !_gestes || zoome)
+                        onHorizontalDragEnd: (_verrou || !_gestes || _estLive || zoome)
                             ? null
                             : (_) {
                                 _interaction = false;
@@ -2562,7 +3277,21 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                     if (_poulsCentre) _flashPlayPause(ctrl.value.isPlaying),
                     if (_barre != null) _barreLateral(),
                     if (_indication != null) Center(child: _bulle()),
-                    if (zoome && !_verrou)
+                    if (_changementQualite != null)
+                      Positioned(
+                        top: 12,
+                        left: 0,
+                        right: 0,
+                        child: SafeArea(
+                          child: Center(
+                            child: _piluleVerre(
+                              icone: Icons.hd_rounded,
+                              texte: 'Passage en $_changementQualite…',
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (zoome && !_verrou && _changementQualite == null)
                       Positioned(
                         top: 12,
                         left: 0,
@@ -2623,11 +3352,23 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                 Text(_erreur!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white)),
                 const SizedBox(height: 16),
                 FilledButton.icon(onPressed: _charger, icon: const Icon(Icons.refresh_rounded), label: const Text('Réessayer')),
-                if (_tache.fichierPrincipal != null)
+                if (_tache?.fichierPrincipal != null)
                   TextButton(
-                    onPressed: () => Natif.ouvrir(_tache.fichierPrincipal!.uri, _tache.fichierPrincipal!.mime),
+                    onPressed: () => Natif.ouvrir(_tache!.fichierPrincipal!.uri, _tache!.fichierPrincipal!.mime),
                     child: const Text('Ouvrir avec une autre application'),
                   ),
+                if (_estStream) ...[
+                  const SizedBox(height: 6),
+                  TextButton.icon(
+                    onPressed: _telechargerVideo,
+                    icon: const Icon(Icons.download_rounded, size: 18),
+                    label: const Text('Télécharger la vidéo'),
+                  ),
+                  TextButton(
+                    onPressed: () => Natif.ouvrirLien(_item.url),
+                    child: const Text('Ouvrir sur YouTube'),
+                  ),
+                ],
                 if (_aSuivant)
                   TextButton(onPressed: () => _aller(_index + 1), child: const Text('Passer au suivant')),
               ]),
@@ -2659,7 +3400,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
 
   Widget _image(VideoPlayerController ctrl) {
     if (_audio) {
-      final m = _tache.miniature;
+      final m = _item.miniature;
       return Stack(fit: StackFit.expand, children: [
         if (m != null)
           RepaintBoundary(
@@ -3062,13 +3803,41 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                         Row(children: [
                           Expanded(
                             child: Text(
-                              _tache.titre,
+                              _item.titre,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(color: blanc, fontWeight: FontWeight.w700, fontSize: 15),
                             ),
                           ),
-                          if (qualiteBadge != null && !compact) ...[
+                          if (_estStream && _qualitesStream.isNotEmpty) ...[
+                            const SizedBox(width: 6),
+                            InkWell(
+                              borderRadius: BorderRadius.circular(8),
+                              onTap: _menuQualiteStream,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: _sourceStream?.adaptatif == true ? c.cyan.withAlpha(55) : c.indigo.withAlpha(85),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: (_sourceStream?.adaptatif == true ? c.cyan : c.indigo).withAlpha(155),
+                                  ),
+                                ),
+                                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                  Text(
+                                    _changementQualite != null
+                                        ? '$_changementQualite…'
+                                        : (_sourceStream?.adaptatif == true
+                                            ? (qualiteBadge != null ? 'Auto · $qualiteBadge' : 'Auto')
+                                            : (_sourceStream?.libelle ?? qualiteBadge ?? 'Auto')),
+                                    style: mono(context, taille: 10, couleur: blanc, poids: FontWeight.w800),
+                                  ),
+                                  const SizedBox(width: 2),
+                                  const Icon(Icons.expand_more_rounded, size: 12, color: blanc),
+                                ]),
+                              ),
+                            ),
+                          ] else if (qualiteBadge != null && !compact) ...[
                             const SizedBox(width: 6),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -3084,7 +3853,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                         const SizedBox(height: 1),
                         Text(
                           [
-                            if (_tache.chaine != null) _tache.chaine!,
+                            if (_item.chaine != null) _item.chaine!,
                             if (_file.length > 1) '${_index + 1}/${_file.length}',
                           ].join(' · '),
                           maxLines: 1,
@@ -3095,17 +3864,14 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                     ),
                   ),
                   if (!_audio) _ib(Icons.picture_in_picture_alt_rounded, 'Image dans l’image', _entrerPip),
-                  if (_aSousTitres && !compact)
+                  if (_estStream && !compact) _ib(Icons.download_rounded, 'Télécharger cette vidéo', _telechargerVideo),
+                  if (_aSousTitres && (!compact || _estStream))
                     GestureDetector(
                       onLongPress: _menuSousTitres,
                       child: _ib(
                         _sousTitresActifs ? Icons.closed_caption_rounded : Icons.closed_caption_off_outlined,
                         'Sous-titres (appui long : options)',
-                        () {
-                          setState(() => _sousTitresActifs = !_sousTitresActifs);
-                          _retenir('lecteur_st', _sousTitresActifs);
-                          _programmerMasquage();
-                        },
+                        _basculerSousTitres,
                         actif: _sousTitresActifs,
                       ),
                     ),
@@ -3192,8 +3958,10 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       if (_file.length > 1 && box.maxWidth >= 320)
                         _ib(Icons.skip_previous_rounded, 'Précédent', _index > 0 ? () => _aller(_index - 1) : null, taille: 30),
-                      _boutonSaut(-1),
-                      const SizedBox(width: 12),
+                      if (!_estLive) ...[
+                        _boutonSaut(-1),
+                        const SizedBox(width: 12),
+                      ],
                       Container(
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
@@ -3224,8 +3992,10 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                           onPressed: _lecturePause,
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      _boutonSaut(1),
+                      if (!_estLive) ...[
+                        const SizedBox(width: 12),
+                        _boutonSaut(1),
+                      ],
                       if (_file.length > 1 && box.maxWidth >= 320)
                         _ib(Icons.skip_next_rounded, 'Suivant', _aSuivant ? () => _aller(_index + 1) : null, taille: 30),
                     ]),
@@ -3251,36 +4021,46 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                           label: 'Position de lecture. Appuyer pour choisir un moment',
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
-                            onTap: _allerAuTemps,
-                            onLongPress: () => setState(() => _reste = !_reste),
+                            onTap: _estLive ? null : _allerAuTemps,
+                            onLongPress: _estLive ? null : () => setState(() => _reste = !_reste),
                             child: SizedBox(
                               height: 46,
                               child: Row(children: [
-                                Flexible(
-                                  child: Text(
-                                    '${_temps(posAffichee)} / ${_reste ? '−${_temps(restant < Duration.zero ? Duration.zero : restant)}' : _temps(v.duration)}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: mono(context, taille: 12.5, couleur: blanc, poids: FontWeight.w600),
+                                if (_estLive) ...[
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: const BoxDecoration(color: Color(0xFFFF453A), shape: BoxShape.circle),
                                   ),
-                                ),
-                                if (!compact && v.isPlaying) ...[
                                   const SizedBox(width: 6),
-                                  Text('· fin ${_heureFin(v)}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                                ],
-                                if (_a != null) ...[
-                                  const SizedBox(width: 6),
-                                  GestureDetector(
-                                    onTap: _menuBoucleAB,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(color: c.ambre.withAlpha(65), borderRadius: BorderRadius.circular(6)),
-                                      child: Text(
-                                        _b == null ? 'A ${_temps(_a!)}' : 'A→B',
-                                        style: mono(context, taille: 10.5, couleur: blanc, poids: FontWeight.w700),
-                                      ),
+                                  Text('EN DIRECT', style: mono(context, taille: 12.5, couleur: blanc, poids: FontWeight.w800)),
+                                ] else ...[
+                                  Flexible(
+                                    child: Text(
+                                      '${_temps(posAffichee)} / ${_reste ? '−${_temps(restant < Duration.zero ? Duration.zero : restant)}' : _temps(v.duration)}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: mono(context, taille: 12.5, couleur: blanc, poids: FontWeight.w600),
                                     ),
                                   ),
+                                  if (!compact && v.isPlaying) ...[
+                                    const SizedBox(width: 6),
+                                    Text('· fin ${_heureFin(v)}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                  ],
+                                  if (_a != null) ...[
+                                    const SizedBox(width: 6),
+                                    GestureDetector(
+                                      onTap: _menuBoucleAB,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(color: c.ambre.withAlpha(65), borderRadius: BorderRadius.circular(6)),
+                                        child: Text(
+                                          _b == null ? 'A ${_temps(_a!)}' : 'A→B',
+                                          style: mono(context, taille: 10.5, couleur: blanc, poids: FontWeight.w700),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ]),
                             ),
@@ -3312,16 +4092,17 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                                 ),
                               ),
                             ],
-                            GestureDetector(
-                              onLongPress: _menuBoucleAB,
-                              child: _ib(
-                                _b != null ? Icons.repeat_on_rounded : Icons.flag_outlined,
-                                _a == null ? 'Boucle A-B : définir A' : _b == null ? 'Définir B' : 'Retirer la boucle',
-                                _boucleAB,
-                                actif: _a != null,
-                                taille: 22,
+                            if (!_estLive)
+                              GestureDetector(
+                                onLongPress: _menuBoucleAB,
+                                child: _ib(
+                                  _b != null ? Icons.repeat_on_rounded : Icons.flag_outlined,
+                                  _a == null ? 'Boucle A-B : définir A' : _b == null ? 'Définir B' : 'Retirer la boucle',
+                                  _boucleAB,
+                                  actif: _a != null,
+                                  taille: 22,
+                                ),
                               ),
-                            ),
                             _ib(Icons.queue_music_rounded, 'File d’attente', _menuFile, taille: 22),
                             _ib(Icons.lock_open_rounded, 'Verrouiller l’écran', () {
                               HapticFeedback.lightImpact();
@@ -3358,13 +4139,14 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                               Container(
                                 decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)),
                               ),
-                              FractionallySizedBox(
-                                widthFactor: bufRatio(),
-                                child: Container(
-                                  decoration: BoxDecoration(color: Colors.white.withAlpha(75), borderRadius: BorderRadius.circular(3)),
+                              if (!_estLive)
+                                FractionallySizedBox(
+                                  widthFactor: bufRatio(),
+                                  child: Container(
+                                    decoration: BoxDecoration(color: Colors.white.withAlpha(75), borderRadius: BorderRadius.circular(3)),
+                                  ),
                                 ),
-                              ),
-                              if (_a != null && _b != null)
+                              if (!_estLive && _a != null && _b != null)
                                 Positioned(
                                   left: ((_a!.inMilliseconds / dureeMs).clamp(0.0, 1.0)) * (largeur - 32),
                                   width: (((_b!.inMilliseconds - _a!.inMilliseconds) / dureeMs).clamp(0.0, 1.0)) * (largeur - 32),
@@ -3374,46 +4156,54 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                                     decoration: BoxDecoration(color: c.ambre.withAlpha(190), borderRadius: BorderRadius.circular(3)),
                                   ),
                                 ),
-                              for (final ch in _chapitres)
-                                if (ch.debutMs > 0 && ch.debutMs < dureeMs)
-                                  Positioned(
-                                    left: ((ch.debutMs / dureeMs).clamp(0.0, 1.0)) * (largeur - 32) - 1,
-                                    top: -1,
-                                    bottom: -1,
-                                    child: Container(width: 2, color: Colors.black87),
-                                  ),
+                              if (!_estLive)
+                                for (final ch in _chapitres)
+                                  if (ch.debutMs > 0 && ch.debutMs < dureeMs)
+                                    Positioned(
+                                      left: ((ch.debutMs / dureeMs).clamp(0.0, 1.0)) * (largeur - 32) - 1,
+                                      top: -1,
+                                      bottom: -1,
+                                      child: Container(width: 2, color: Colors.black87),
+                                    ),
                             ]),
                           ),
                         ),
-                        if (_a != null) Positioned(left: x(_a!) - 2, top: 8, bottom: 8, child: Container(width: 3, color: blanc)),
-                        if (_b != null) Positioned(left: x(_b!) - 2, top: 8, bottom: 8, child: Container(width: 3, color: c.ambre)),
+                        if (!_estLive && _a != null) Positioned(left: x(_a!) - 2, top: 8, bottom: 8, child: Container(width: 3, color: blanc)),
+                        if (!_estLive && _b != null) Positioned(left: x(_b!) - 2, top: 8, bottom: 8, child: Container(width: 3, color: c.ambre)),
                         SliderTheme(
                           data: SliderThemeData(
                             trackHeight: 4.5,
-                            activeTrackColor: accent,
+                            activeTrackColor: _estLive ? const Color(0xFFFF453A) : accent,
+                            disabledActiveTrackColor: const Color(0xFFFF453A),
                             inactiveTrackColor: Colors.transparent,
+                            disabledInactiveTrackColor: Colors.transparent,
                             thumbColor: blanc,
+                            disabledThumbColor: const Color(0xFFFF453A),
                             overlayColor: accent.withAlpha(55),
                             thumbShape: RoundSliderThumbShape(enabledThumbRadius: _glisseBarre ? 9 : 6.5),
                             overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
                           ),
                           child: Slider(
-                            value: avancement,
-                            onChangeStart: (x) {
-                              _glisseBarre = true;
-                              _ratioGlisseBarre = x;
-                              _masquer?.cancel();
-                              setState(() {});
-                            },
-                            onChanged: (x) => setState(() => _ratioGlisseBarre = x),
-                            onChangeEnd: (x) async {
-                              final cible = Duration(milliseconds: (x * dureeMs).round());
-                              await ctrl.seekTo(cible);
-                              _glisseBarre = false;
-                              _ratioGlisseBarre = null;
-                              _synchro();
-                              _programmerMasquage();
-                            },
+                            value: _estLive ? 1.0 : avancement,
+                            onChangeStart: _estLive
+                                ? null
+                                : (x) {
+                                    _glisseBarre = true;
+                                    _ratioGlisseBarre = x;
+                                    _masquer?.cancel();
+                                    setState(() {});
+                                  },
+                            onChanged: _estLive ? null : (x) => setState(() => _ratioGlisseBarre = x),
+                            onChangeEnd: _estLive
+                                ? null
+                                : (x) async {
+                                    final cible = Duration(milliseconds: (x * dureeMs).round());
+                                    await ctrl.seekTo(cible);
+                                    _glisseBarre = false;
+                                    _ratioGlisseBarre = null;
+                                    _synchro();
+                                    _programmerMasquage();
+                                  },
                           ),
                         ),
                         if (_glisseBarre)

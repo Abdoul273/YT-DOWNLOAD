@@ -13,6 +13,7 @@ import 'dart:math';
 
 import 'package:video_player/video_player.dart' show SubRipCaptionFile, WebVTTCaptionFile, ClosedCaptionFile;
 
+import 'analyse.dart' as analyse;
 import 'langues.dart' as langues;
 import 'natif.dart';
 import 'taches.dart';
@@ -630,6 +631,124 @@ List<({String id, String label, FichierPublie fichier})> sourcesLocalesDisponibl
   return res;
 }
 
+/// Analyse un texte de sous-titres `.srt` ou `.vtt` (local ou streaming) en [DonneesParoles].
+DonneesParoles? analyserSousTitresTexte(
+  String texte, {
+  required bool estVtt,
+  String? labelSource,
+  String idSource = 'st',
+  int? dureeTotaleSec,
+  bool autoYoutube = false,
+}) {
+  if (texte.trim().isEmpty) return null;
+  try {
+    // Si le .srt / .vtt contient déjà des balises LRC, utiliser analyserLrc
+    if (_regLigneLrc.hasMatch(texte)) {
+      final r = analyserLrc(texte, dureeTotaleSec: dureeTotaleSec);
+      if (r.lignes.isNotEmpty) {
+        return DonneesParoles(
+          source: labelSource ?? 'Sous-titres YouTube',
+          idSource: idSource,
+          lignes: r.lignes,
+          texteBrut: r.lignes.where((l) => !l.estPause).map((l) => l.texte).join('\n'),
+          synchro: true,
+          motAMot: r.motAMot,
+        );
+      }
+    }
+
+    final ClosedCaptionFile cap = estVtt ? WebVTTCaptionFile(texte) : SubRipCaptionFile(texte);
+    final brutes = <(Duration, Duration, String)>[];
+    String dernierSegment = '';
+    for (final c in cap.captions) {
+      final lignesNettoyees = c.text
+          .split(RegExp(r'\r?\n'))
+          .map((l) => l.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll(RegExp(r'\s+'), ' ').trim())
+          .where((l) => l.isNotEmpty)
+          .toList();
+      if (lignesNettoyees.isEmpty) continue;
+
+      // YouTube auto VTT répète la ligne précédente en tête du bloc défilant suivant.
+      if (autoYoutube && lignesNettoyees.length >= 2 && dernierSegment.endsWith(lignesNettoyees.first)) {
+        lignesNettoyees.removeAt(0);
+      }
+      final propre = lignesNettoyees.join(' ').trim();
+      if (propre.isEmpty) continue;
+
+      if (brutes.isNotEmpty && (brutes.last.$3 == propre || (autoYoutube && c.end - c.start <= const Duration(milliseconds: 60) && brutes.last.$3.endsWith(propre)))) {
+        final dern = brutes.removeLast();
+        brutes.add((dern.$1, c.end > dern.$2 ? c.end : dern.$2, dern.$3));
+        continue;
+      }
+      dernierSegment = lignesNettoyees.last;
+      brutes.add((c.start, c.end, propre));
+    }
+    if (brutes.isEmpty) return null;
+
+    final lignes = <LigneParole>[];
+    if (brutes.first.$1.inMilliseconds >= 4000) {
+      lignes.add(LigneParole(Duration.zero, brutes.first.$1, '♪', estPause: true));
+    }
+    for (var i = 0; i < brutes.length; i++) {
+      final (deb, finCap, txt) = brutes[i];
+      final suivDeb = i + 1 < brutes.length ? brutes[i + 1].$1 : finCap;
+      // Corriger les chevauchements fréquents des sous-titres automatiques YouTube
+      final fin = (suivDeb > deb && suivDeb < finCap) ? suivDeb : (finCap > deb ? finCap : deb + const Duration(seconds: 2));
+      final mots = decouperMotsPhonetiques(txt, deb, fin);
+      lignes.add(LigneParole(deb, fin, txt, mots: mots));
+      if (suivDeb - fin >= const Duration(seconds: 4)) {
+        lignes.add(LigneParole(fin, suivDeb, '♪', estPause: true));
+      }
+    }
+
+    return DonneesParoles(
+      source: labelSource ?? 'Sous-titres YouTube',
+      idSource: idSource,
+      lignes: lignes,
+      texteBrut: brutes.map((b) => b.$3).join('\n'),
+      synchro: true,
+      motAMot: false,
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Télécharge et analyse une piste de sous-titres en streaming (.vtt / .srt).
+Future<DonneesParoles?> chargerSousTitresEnLigne(
+  analyse.PisteSousTitreStream piste, {
+  Map<String, String>? headers,
+  int? dureeTotaleSec,
+  Duration timeout = const Duration(seconds: 8),
+}) async {
+  final client = HttpClient()..connectionTimeout = timeout;
+  try {
+    final uri = Uri.tryParse(piste.url);
+    if (uri == null) return null;
+    final req = await client.getUrl(uri).timeout(timeout);
+    headers?.forEach(req.headers.set);
+    if (headers == null || !headers.containsKey('User-Agent')) {
+      req.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36');
+    }
+    final rep = await req.close().timeout(timeout);
+    if (rep.statusCode < 200 || rep.statusCode >= 300) return null;
+    final bytes = await rep.fold<List<int>>(<int>[], (a, b) => a..addAll(b)).timeout(timeout);
+    final texte = utf8.decode(bytes, allowMalformed: true);
+    return analyserSousTitresTexte(
+      texte,
+      estVtt: piste.vtt,
+      labelSource: piste.label,
+      idSource: piste.id,
+      dureeTotaleSec: dureeTotaleSec,
+      autoYoutube: piste.auto,
+    );
+  } catch (_) {
+    return null;
+  } finally {
+    client.close(force: true);
+  }
+}
+
 /// Charge un fichier local `.srt`, `.vtt` ou `.lrc` en [DonneesParoles].
 Future<DonneesParoles?> chargerFichierParolesLocal(
   FichierPublie f, {
@@ -653,62 +772,12 @@ Future<DonneesParoles?> chargerFichierParolesLocal(
       );
     }
 
-    // Si le .srt / .vtt contient déjà des balises LRC, utiliser analyserLrc
-    if (_regLigneLrc.hasMatch(texte)) {
-      final r = analyserLrc(texte, dureeTotaleSec: dureeTotaleSec);
-      if (r.lignes.isNotEmpty) {
-        return DonneesParoles(
-          source: labelSource ?? 'Sous-titres YouTube',
-          idSource: 'local:${f.nom}',
-          lignes: r.lignes,
-          texteBrut: r.lignes.where((l) => !l.estPause).map((l) => l.texte).join('\n'),
-          synchro: true,
-          motAMot: r.motAMot,
-        );
-      }
-    }
-
-    final ClosedCaptionFile cap = nomBas.endsWith('.vtt') ? WebVTTCaptionFile(texte) : SubRipCaptionFile(texte);
-    final brutes = <(Duration, Duration, String)>[];
-    for (final c in cap.captions) {
-      final propre = c.text
-          .replaceAll(RegExp(r'<[^>]*>'), '')
-          .replaceAll(RegExp(r'\s+'), ' ')
-          .trim();
-      if (propre.isEmpty) continue;
-      if (brutes.isNotEmpty && brutes.last.$3 == propre) {
-        // Étendre la fin si YouTube répète la même ligne sur deux segments consécutifs
-        final dern = brutes.removeLast();
-        brutes.add((dern.$1, c.end > dern.$2 ? c.end : dern.$2, dern.$3));
-        continue;
-      }
-      brutes.add((c.start, c.end, propre));
-    }
-    if (brutes.isEmpty) return null;
-
-    final lignes = <LigneParole>[];
-    if (brutes.first.$1.inMilliseconds >= 4000) {
-      lignes.add(LigneParole(Duration.zero, brutes.first.$1, '♪', estPause: true));
-    }
-    for (var i = 0; i < brutes.length; i++) {
-      final (deb, finCap, txt) = brutes[i];
-      final suivDeb = i + 1 < brutes.length ? brutes[i + 1].$1 : finCap;
-      // Corriger les chevauchements fréquents des sous-titres automatiques YouTube
-      final fin = (suivDeb > deb && suivDeb < finCap) ? suivDeb : (finCap > deb ? finCap : deb + const Duration(seconds: 2));
-      final mots = decouperMotsPhonetiques(txt, deb, fin);
-      lignes.add(LigneParole(deb, fin, txt, mots: mots));
-      if (suivDeb - fin >= const Duration(seconds: 4)) {
-        lignes.add(LigneParole(fin, suivDeb, '♪', estPause: true));
-      }
-    }
-
-    return DonneesParoles(
-      source: labelSource ?? 'Sous-titres YouTube',
+    return analyserSousTitresTexte(
+      texte,
+      estVtt: nomBas.endsWith('.vtt'),
+      labelSource: labelSource ?? 'Sous-titres YouTube',
       idSource: 'local:${f.nom}',
-      lignes: lignes,
-      texteBrut: brutes.map((b) => b.$3).join('\n'),
-      synchro: true,
-      motAMot: false,
+      dureeTotaleSec: dureeTotaleSec,
     );
   } catch (_) {
     return null;

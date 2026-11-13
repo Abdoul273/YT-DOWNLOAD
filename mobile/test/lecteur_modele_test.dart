@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:yt_nexus/moteur/analyse.dart' as analyse;
 import 'package:yt_nexus/moteur/natif.dart';
+import 'package:yt_nexus/moteur/paroles.dart';
 import 'package:yt_nexus/moteur/reglages.dart';
 import 'package:yt_nexus/moteur/taches.dart';
+import 'package:yt_nexus/ui/lecteur.dart';
 import 'package:yt_nexus/ui/lecteur_audio.dart';
 import 'package:yt_nexus/ui/page_reglages.dart';
 import 'package:yt_nexus/ui/theme.dart';
@@ -133,5 +136,89 @@ void main() {
     ));
     expect(find.byType(MiniLecteurAudio), findsOneWidget);
     expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
+  });
+
+  test('analyserM3u8Maitre extrait et résout chaque résolution avec sa piste audio', () {
+    const manifeste = '''
+#EXTM3U
+#EXT-X-VERSION:4
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud_aac",NAME="Original",DEFAULT=YES,URI="audio/main.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=4500000,RESOLUTION=1920x1080,FRAME-RATE=60,CODECS="avc1.64002a",AUDIO="aud_aac"
+video/1080p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2100000,RESOLUTION=1280x720,FRAME-RATE=30,CODECS="avc1.4d401f",AUDIO="aud_aac"
+video/720p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=600000,RESOLUTION=640x360,FRAME-RATE=30,CODECS="vp09.00.21.08",AUDIO="aud_aac"
+video/360p.m3u8
+''';
+    final sources = analyse.analyserM3u8Maitre(
+      manifeste,
+      Uri.parse('https://cdn.example.com/hls/master.m3u8'),
+      const {'User-Agent': 'Test'},
+    );
+    expect(sources, hasLength(3));
+    expect(sources.map((s) => s.hauteur).toList(), [1080, 720, 360]);
+    expect(sources.first.libelle, '1080p60');
+    expect(sources.first.codec, 'H.264');
+    expect(sources.first.m3u8Filtre, contains('https://cdn.example.com/hls/audio/main.m3u8'));
+    expect(sources.first.m3u8Filtre, contains('https://cdn.example.com/hls/video/1080p.m3u8'));
+    expect(sources.first.m3u8Filtre, isNot(contains('video/720p.m3u8')));
+  });
+
+  test('sousTitresStreaming filtre les traductions inutiles et ordonne les langues', () {
+    final info = {
+      'language': 'en',
+      'subtitles': {
+        'live_chat': [
+          {'ext': 'json3', 'url': 'https://example.com/chat.json3'},
+        ],
+        'en': [
+          {'ext': 'vtt', 'url': 'https://example.com/en.vtt'},
+        ],
+        'fr': [
+          {'ext': 'vtt', 'url': 'https://example.com/fr.vtt'},
+        ],
+      },
+      'automatic_captions': {
+        'en-orig': [
+          {'ext': 'vtt', 'url': 'https://example.com/en-orig.vtt'},
+        ],
+        'zu': [
+          {'ext': 'vtt', 'url': 'https://example.com/zu.vtt'},
+        ],
+      },
+    };
+    final pistes = analyse.sousTitresStreaming(info);
+    expect(pistes.any((p) => p.code == 'live_chat'), isFalse);
+    expect(pistes.any((p) => p.code == 'zu'), isFalse);
+    expect(pistes.where((p) => !p.auto), hasLength(2));
+    expect(pistes.any((p) => p.auto && p.code == 'en'), isTrue);
+  });
+
+  test('analyserSousTitresTexte déduplique les lignes roulantes WebVTT YouTube', () {
+    const vtt = '''
+WEBVTT
+
+00:00:01.000 --> 00:00:03.000
+<c>Bonjour tout le monde</c>
+
+00:00:03.000 --> 00:00:05.000
+Bonjour tout le monde
+Bienvenue sur la chaîne
+''';
+    final d = analyserSousTitresTexte(vtt, estVtt: true, autoYoutube: true);
+    expect(d, isNotNull);
+    expect(d!.synchro, isTrue);
+    expect(d.lignes, hasLength(2));
+    expect(d.lignes[0].texte, 'Bonjour tout le monde');
+    expect(d.lignes[1].texte, 'Bienvenue sur la chaîne');
+  });
+
+  test('MediaLecteur et réglages streaming par défaut sont cohérents', () {
+    expect(reglagesDefaut['lecteur_stream_st'], isFalse);
+    expect(reglagesDefaut['lecteur_stream_qualite'], 'auto');
+    final e = analyse.Entree('abc', 'Vidéo test', 'https://www.youtube.com/watch?v=abc', 120, null, 'Chaîne', 100, null, false);
+    final m = MediaLecteur.depuisEntree(e);
+    expect(m.estStream, isTrue);
+    expect(m.clePrefs, 'stream:abc');
   });
 }

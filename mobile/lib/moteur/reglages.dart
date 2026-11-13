@@ -44,6 +44,8 @@ const reglagesDefaut = <String, dynamic>{
   'lecteur_vitesse': 1.0,
   'lecteur_vitesse_maintien': 2.0,
   'lecteur_st': true,
+  'lecteur_stream_st': false, // sous-titres en streaming désactivés tant que non demandés
+  'lecteur_stream_qualite': 'auto', // 'auto' ou hauteur cible ('1080', '720', '480', '360'…)
   'lecteur_st_taille': 17,
   'lecteur_st_fond': true,
   'lecteur_st_couleur': 'blanc', // 'blanc' | 'jaune' | 'cyan'

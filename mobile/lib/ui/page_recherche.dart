@@ -13,6 +13,7 @@ import '../moteur/gouts.dart';
 import '../moteur/taches.dart';
 import 'apercu.dart';
 import 'etat.dart';
+import 'lecteur.dart';
 import 'theme.dart';
 
 class PageRecherche extends StatefulWidget {
@@ -402,7 +403,7 @@ class _PageRechercheState extends State<PageRecherche> {
                   onTap: gouts.chargement ? null : () => gouts.rafraichir(force: true),
                 ),
               )
-            : _Resultat(l[i]),
+            : _Resultat(l[i], liste: l),
       ),
     );
   }
@@ -499,9 +500,29 @@ class _Rangee extends StatelessWidget {
   Widget build(BuildContext context) => Wrap(spacing: 8, runSpacing: 8, children: enfants);
 }
 
+void _regarderEnDirect(BuildContext context, List<analyse.Entree> liste, analyse.Entree e) {
+  if (e.url == null) return;
+  gouts.signalEntree('clic', e);
+  final jouables = [
+    for (final x in liste)
+      if (x.url != null) x,
+  ];
+  var idx = jouables.indexOf(e);
+  if (idx < 0) {
+    jouables.insert(0, e);
+    idx = 0;
+  }
+  ouvrirLecteurStream(
+    context,
+    entrees: jouables,
+    index: idx,
+  );
+}
+
 class _Resultat extends StatelessWidget {
   final analyse.Entree e;
-  const _Resultat(this.e);
+  final List<analyse.Entree> liste;
+  const _Resultat(this.e, {this.liste = const []});
 
   void _ouvrir() {
     gouts.signalEntree('clic', e);
@@ -590,15 +611,25 @@ class _Resultat extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 12),
+                    _LigneActionRecherche(
+                      icone: Icons.smart_display_rounded,
+                      couleur: c.cyan,
+                      titre: 'Regarder en plein écran',
+                      sousTitre: e.direct ? 'Lire le flux en direct sans pub' : 'Lecteur complet · résolutions & sous-titres',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _regarderEnDirect(context, liste, e);
+                      },
+                    ),
                     if (!e.direct)
                       _LigneActionRecherche(
                         icone: Icons.play_circle_outline_rounded,
                         couleur: c.indigo,
-                        titre: 'Aperçu',
-                        sousTitre: 'Regarder avant de télécharger',
+                        titre: 'Aperçu rapide',
+                        sousTitre: 'Mini-lecteur avant téléchargement',
                         onTap: () {
                           Navigator.pop(ctx);
-                          _FeuilleApercu.ouvrir(context, e);
+                          _FeuilleApercu.ouvrir(context, e, liste: liste);
                         },
                       ),
                     _LigneActionRecherche(
@@ -659,10 +690,12 @@ class _Resultat extends StatelessWidget {
       onTap: e.url == null ? null : _ouvrir,
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         GestureDetector(
-          onTap: e.url == null || e.direct ? null : () => _FeuilleApercu.ouvrir(context, e),
+          onTap: e.url == null
+              ? null
+              : (e.direct ? () => _regarderEnDirect(context, liste, e) : () => _FeuilleApercu.ouvrir(context, e, liste: liste)),
           child: Stack(alignment: Alignment.center, children: [
             Miniature(e.miniature, largeur: 138, texteDuree: e.direct ? 'DIRECT' : formaterDuree(e.duree)),
-            if (e.url != null && !e.direct)
+            if (e.url != null)
               Container(
                 width: 36,
                 height: 36,
@@ -683,6 +716,40 @@ class _Resultat extends StatelessWidget {
               Text(e.chaine!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.t2, fontSize: 12)),
             Text([formaterVues(e.vues), ilYA(e.date)].where((s) => s.isNotEmpty).join(' · '),
                 style: TextStyle(color: c.t3, fontSize: 11.5)),
+            if (e.url != null) ...[
+              const SizedBox(height: 8),
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => _regarderEnDirect(context, liste, e),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [c.indigo.withAlpha(c.sombre ? 65 : 35), c.cyan.withAlpha(c.sombre ? 50 : 25)],
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: c.indigo.withAlpha(c.sombre ? 130 : 90)),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.play_arrow_rounded, size: 15, color: c.sombre ? c.cyan : c.indigo),
+                        const SizedBox(width: 4),
+                        Text(
+                          e.direct ? 'En direct' : 'Regarder',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: c.t1,
+                          ),
+                        ),
+                      ]),
+                    ),
+                  ),
+                ),
+              ]),
+            ],
           ]),
         ),
         if (e.url != null)
@@ -699,9 +766,10 @@ class _Resultat extends StatelessWidget {
 /// Aperçu d'un résultat sans quitter la recherche.
 class _FeuilleApercu extends StatefulWidget {
   final analyse.Entree e;
-  const _FeuilleApercu(this.e);
+  final List<analyse.Entree> liste;
+  const _FeuilleApercu(this.e, {this.liste = const []});
 
-  static void ouvrir(BuildContext context, analyse.Entree e) => showModalBottomSheet(
+  static void ouvrir(BuildContext context, analyse.Entree e, {List<analyse.Entree> liste = const []}) => showModalBottomSheet(
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
@@ -726,7 +794,7 @@ class _FeuilleApercu extends StatefulWidget {
               ),
               child: SafeArea(
                 top: false,
-                child: _FeuilleApercu(e),
+                child: _FeuilleApercu(e, liste: liste),
               ),
             ),
           ),
@@ -781,11 +849,26 @@ class _FeuilleApercuState extends State<_FeuilleApercu> {
           Text(e.chaine!, style: TextStyle(color: c.t2, fontSize: 12.5)),
         ],
         const SizedBox(height: 16),
-        BoutonGrad('Choisir la qualité et télécharger', icone: Icons.download_rounded, onTap: () {
-          Navigator.of(context).pop();
-          gouts.signalEntree('clic', e);
-          ouvrirLien(e.url!);
-        }),
+        Row(children: [
+          BoutonVerre(
+            icone: Icons.fullscreen_rounded,
+            texte: 'Regarder',
+            onTap: () {
+              final nav = Navigator.of(context);
+              final ctx = nav.context;
+              nav.pop();
+              _regarderEnDirect(ctx, widget.liste, e);
+            },
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: BoutonGrad('Télécharger', icone: Icons.download_rounded, onTap: () {
+              Navigator.of(context).pop();
+              gouts.signalEntree('clic', e);
+              ouvrirLien(e.url!);
+            }),
+          ),
+        ]),
       ]),
     );
   }

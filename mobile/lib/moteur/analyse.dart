@@ -2,7 +2,12 @@
 /// Portage de nexus/analyse.py.
 library;
 
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
 
 import 'erreurs.dart' as erreurs;
 import 'formats.dart';
@@ -267,12 +272,251 @@ Future<List<Entree>> rechercher(String requete, Filtres f, {int nombre = 30}) as
   return res;
 }
 
-typedef SourceApercu = ({String url, Map<String, String> entetes, bool hls});
+/// Source vidéo directement lisible en streaming (HLS adaptatif, variante HLS ciblée ou MP4 multiplexé).
+class SourceApercu {
+  final String id;
+  final String libelle;
+  final int hauteur;
+  final int fps;
+  final String? codec;
+  final int? debitKbps;
+  final String url;
+  final Map<String, String> entetes;
+  final bool hls;
+  final bool adaptatif;
+  final String? m3u8Filtre;
+
+  const SourceApercu({
+    required this.id,
+    required this.libelle,
+    required this.url,
+    this.hauteur = 0,
+    this.fps = 0,
+    this.codec,
+    this.debitKbps,
+    this.entetes = const {},
+    this.hls = false,
+    this.adaptatif = false,
+    this.m3u8Filtre,
+  });
+
+  /// Retourne l'URL jouable (publie localement le manifeste filtré si besoin).
+  Future<String> urlExecutable() async {
+    if (m3u8Filtre == null) return url;
+    return _ServeurHlsLocal.publier(m3u8Filtre!);
+  }
+}
+
+class _ServeurHlsLocal {
+  static HttpServer? _serveur;
+  static Future<HttpServer>? _demarrage;
+  static final _contenus = <String, String>{};
+  static var _seq = 0;
+
+  static Future<HttpServer> _obtenir() {
+    if (_serveur != null) return Future.value(_serveur);
+    return _demarrage ??= HttpServer.bind(InternetAddress.loopbackIPv4, 0).then((s) {
+      _serveur = s;
+      s.listen((req) {
+        final cle = req.uri.pathSegments.isNotEmpty ? req.uri.pathSegments.last.replaceFirst('.m3u8', '') : '';
+        final corps = _contenus[cle];
+        if (corps == null) {
+          req.response
+            ..statusCode = HttpStatus.notFound
+            ..close();
+          return;
+        }
+        req.response
+          ..statusCode = HttpStatus.ok
+          ..headers.set('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8')
+          ..write(corps)
+          ..close();
+      });
+      return s;
+    });
+  }
+
+  static Future<String> publier(String m3u8) async {
+    final s = await _obtenir();
+    final cle = 'v${++_seq}';
+    _contenus[cle] = m3u8;
+    while (_contenus.length > 16) {
+      _contenus.remove(_contenus.keys.first);
+    }
+    return 'http://127.0.0.1:${s.port}/flux/$cle.m3u8';
+  }
+}
+
+String _nomCodec(String? vcodec) {
+  final c = (vcodec ?? '').toLowerCase();
+  if (c.contains('avc1') || c.contains('avc3') || c.contains('h264')) return 'H.264';
+  if (c.contains('hev1') || c.contains('hvc1') || c.contains('h265')) return 'HEVC';
+  if (c.contains('vp09') || c.contains('vp9')) return 'VP9';
+  if (c.contains('av01') || c.contains('av1')) return 'AV1';
+  return '';
+}
+
+String _libelleResolution(int hauteur, {int fps = 0, String? suffixe}) {
+  if (hauteur <= 0) return suffixe ?? 'Auto';
+  final base = switch (hauteur) {
+    >= 2160 => '4K',
+    >= 1440 => '2K',
+    _ => '${hauteur}p',
+  };
+  final fp = fps > 30 ? '$fps' : '';
+  final extra = suffixe != null && suffixe.isNotEmpty ? ' · $suffixe' : '';
+  return '$base$fp$extra';
+}
+
+int _normaliserHauteur(int w, int h) {
+  final petit = math.min(w, h);
+  if (petit <= 0) return 0;
+  return hauteurs.firstWhere((x) => petit >= x * 0.9, orElse: () => petit);
+}
+
+final _regAttrM3u8 = RegExp(r'([A-Z0-9-]+)=("([^"]*)"|[^,]*)');
+
+Map<String, String> _attrsM3u8(String ligne) {
+  final res = <String, String>{};
+  final idx = ligne.indexOf(':');
+  if (idx < 0) return res;
+  for (final m in _regAttrM3u8.allMatches(ligne.substring(idx + 1))) {
+    final cle = m.group(1)!;
+    final val = m.group(3) ?? m.group(2) ?? '';
+    res[cle] = val;
+  }
+  return res;
+}
+
+String _resoudreMediaUri(String ligne, Uri baseUri) {
+  return ligne.replaceFirstMapped(RegExp(r'URI="([^"]+)"'), (m) {
+    final brute = m.group(1)!;
+    final abs = baseUri.resolve(brute).toString();
+    return 'URI="$abs"';
+  });
+}
+
+/// Analyse un manifeste HLS maître (`#EXTM3U`) et extrait chaque résolution jouable
+/// avec ses pistes audio associées préservées (`#EXT-X-MEDIA`).
+@visibleForTesting
+List<SourceApercu> analyserM3u8Maitre(String contenu, Uri baseUri, Map<String, String> entetes) {
+  final lignes = const LineSplitter().convert(contenu);
+  if (!lignes.any((l) => l.trim() == '#EXTM3U')) return const [];
+
+  final entetesGlobal = <String>[];
+  final medias = <({String? groupId, String? type, String ligne})>[];
+  final candidats = <({int hauteur, int fps, int bw, bool avc, String codec, String m3u8, String url})>[];
+
+  for (var i = 0; i < lignes.length; i++) {
+    final l = lignes[i].trim();
+    if (l.isEmpty) continue;
+    if (l == '#EXT-X-INDEPENDENT-SEGMENTS' || l.startsWith('#EXT-X-VERSION:')) {
+      entetesGlobal.add(l);
+      continue;
+    }
+    if (l.startsWith('#EXT-X-MEDIA:')) {
+      final a = _attrsM3u8(l);
+      medias.add((groupId: a['GROUP-ID'], type: a['TYPE'], ligne: _resoudreMediaUri(l, baseUri)));
+      continue;
+    }
+    if (l.startsWith('#EXT-X-STREAM-INF:')) {
+      String? urlLigne;
+      var j = i + 1;
+      while (j < lignes.length) {
+        final suiv = lignes[j].trim();
+        if (suiv.isEmpty) {
+          j++;
+          continue;
+        }
+        if (!suiv.startsWith('#')) urlLigne = baseUri.resolve(suiv).toString();
+        break;
+      }
+      if (urlLigne == null) continue;
+      i = j;
+
+      final attrs = _attrsM3u8(l);
+      final resStr = attrs['RESOLUTION'] ?? '';
+      final dims = resStr.split('x');
+      if (dims.length != 2) continue;
+      final w = int.tryParse(dims[0]) ?? 0;
+      final h = int.tryParse(dims[1]) ?? 0;
+      final hauteur = _normaliserHauteur(w, h);
+      if (hauteur <= 0) continue;
+
+      final fpsNum = double.tryParse(attrs['FRAME-RATE'] ?? '') ?? 30;
+      final fps = fpsNum.round();
+      final bw = int.tryParse(attrs['BANDWIDTH'] ?? '') ?? 0;
+      final codecs = attrs['CODECS'] ?? '';
+      final avc = codecs.toLowerCase().contains('avc1') || codecs.toLowerCase().contains('avc3');
+      final audioGrp = attrs['AUDIO'];
+      final subsGrp = attrs['SUBTITLES'];
+
+      final buf = StringBuffer('#EXTM3U\n');
+      for (final hg in entetesGlobal) {
+        buf.writeln(hg);
+      }
+      for (final m in medias) {
+        final keepAudio = m.type == 'AUDIO' && (audioGrp == null || m.groupId == audioGrp);
+        final keepSub = m.type == 'SUBTITLES' && subsGrp != null && m.groupId == subsGrp;
+        if (keepAudio || keepSub || (m.type != 'AUDIO' && m.type != 'SUBTITLES')) {
+          buf.writeln(m.ligne);
+        }
+      }
+      buf.writeln(l);
+      buf.writeln(urlLigne);
+
+      candidats.add((
+        hauteur: hauteur,
+        fps: fps,
+        bw: bw,
+        avc: avc,
+        codec: _nomCodec(codecs),
+        m3u8: buf.toString(),
+        url: urlLigne,
+      ));
+    }
+  }
+
+  // Garder la meilleure variante par palier (H.264 prioritaire pour compatibilité matérielle).
+  final parCle = <String, ({int hauteur, int fps, int bw, bool avc, String codec, String m3u8, String url})>{};
+  for (final c in candidats) {
+    final fpsCle = c.fps > 30 ? c.fps : 30;
+    final cle = '${c.hauteur}p$fpsCle';
+    final existant = parCle[cle];
+    if (existant == null ||
+        (c.avc && !existant.avc) ||
+        (c.avc == existant.avc && c.bw > existant.bw)) {
+      parCle[cle] = c;
+    }
+  }
+
+  final liste = parCle.values.toList()
+    ..sort((a, b) {
+      final r = b.hauteur.compareTo(a.hauteur);
+      if (r != 0) return r;
+      return b.fps.compareTo(a.fps);
+    });
+
+  return [
+    for (final c in liste)
+      SourceApercu(
+        id: 'hls:${c.hauteur}${c.fps > 30 ? 'p${c.fps}' : ''}',
+        libelle: _libelleResolution(c.hauteur, fps: c.fps),
+        hauteur: c.hauteur,
+        fps: c.fps,
+        codec: c.codec.isEmpty ? 'HLS' : c.codec,
+        debitKbps: c.bw > 0 ? (c.bw / 1000).round() : null,
+        url: c.url,
+        entetes: entetes,
+        hls: true,
+        m3u8Filtre: c.m3u8,
+      ),
+  ];
+}
 
 /// Flux lisibles directement pour l'aperçu, du meilleur au moins bon :
-/// 1. le manifeste HLS maître (adaptatif, jusqu'à 1080p, son inclus : yt-dlp marque
-///    chaque variante « vidéo seule » mais le maître référence les pistes audio) ;
-/// 2. un format vidéo+audio progressif (souvent le 360p n°18) ;
+/// 1. le manifeste HLS maître (adaptatif, jusqu'à 1080p+, son inclus) ;
+/// 2. un format vidéo+audio progressif (souvent le 360p n°18 ou 720p) ;
 /// 3. une variante HLS déjà multiplexée.
 /// Liste vide si rien n'est lisible sans fusion.
 List<SourceApercu> sourcesApercu(Json info) {
@@ -280,14 +524,19 @@ List<SourceApercu> sourcesApercu(Json info) {
   bool avecSon(Map f) => f['acodec'] != null && f['acodec'] != 'none';
   bool avecImage(Map f) => f['vcodec'] != null && f['vcodec'] != 'none';
   bool estHls(Map f) => '${f['protocol']}'.startsWith('m3u8');
-  int hauteur(Map f) => ((f['height'] ?? 0) as num).toInt();
+  int hauteur(Map f) {
+    final w = ((f['width'] ?? 0) as num).toInt();
+    final h = ((f['height'] ?? 0) as num).toInt();
+    return w > 0 && h > 0 ? _normaliserHauteur(w, h) : h;
+  }
+
   Map<String, String> entetes(Map f) =>
       ((f['http_headers'] ?? info['http_headers'] ?? {}) as Map).map((k, v) => MapEntry('$k', '$v'));
 
   final res = <SourceApercu>[];
   final vus = <String>{};
-  void ajouter(String url, Map f, bool hls) {
-    if (vus.add(url)) res.add((url: url, entetes: entetes(f), hls: hls));
+  void ajouter(SourceApercu src) {
+    if (vus.add(src.url)) res.add(src);
   }
 
   // 1. Manifeste maître (préférence aux variantes H.264, décodées partout)
@@ -297,23 +546,221 @@ List<SourceApercu> sourcesApercu(Json info) {
       return score(b).compareTo(score(a));
     });
   for (final f in variantes) {
-    ajouter(f['manifest_url'] as String, f, true);
+    ajouter(SourceApercu(
+      id: 'auto',
+      libelle: 'Auto (adaptatif)',
+      url: f['manifest_url'] as String,
+      entetes: entetes(f),
+      hls: true,
+      adaptatif: true,
+      codec: 'HLS',
+    ));
   }
   if (info['manifest_url'] is String && '${info['manifest_url']}'.contains('m3u8')) {
-    ajouter(info['manifest_url'] as String, info, true);
+    ajouter(SourceApercu(
+      id: 'auto',
+      libelle: 'Auto (adaptatif)',
+      url: info['manifest_url'] as String,
+      entetes: entetes(info),
+      hls: true,
+      adaptatif: true,
+      codec: 'HLS',
+    ));
   }
 
   // 2. Progressif vidéo+audio, 3. variante HLS multiplexée
   for (final hls in [false, true]) {
     final muxes = formats
-        .where((f) => avecSon(f) && avecImage(f) && hauteur(f) <= 1080)
+        .where((f) => avecSon(f) && avecImage(f) && hauteur(f) <= 2160)
         .where((f) => estHls(f) == hls && !'${f['protocol']}'.contains('dash'))
         .toList()
       ..sort((a, b) => hauteur(b).compareTo(hauteur(a)));
-    for (final f in muxes.take(2)) {
-      ajouter(f['url'] as String, f, hls);
+    for (final f in muxes.take(4)) {
+      final h = hauteur(f);
+      final fps = ((f['fps'] ?? 0) as num).round();
+      final codec = _nomCodec(f['vcodec'] as String?);
+      ajouter(SourceApercu(
+        id: '${hls ? 'hls_mux' : 'mux'}:${h}p${fps > 30 ? fps : ''}',
+        libelle: h > 0 ? _libelleResolution(h, fps: fps) : (hls ? 'Flux HLS' : 'Flux MP4'),
+        hauteur: h,
+        fps: fps,
+        codec: codec.isEmpty ? (hls ? 'HLS' : 'MP4') : codec,
+        debitKbps: ((f['tbr'] as num?)?.round()),
+        url: f['url'] as String,
+        entetes: entetes(f),
+        hls: hls,
+      ));
     }
   }
+  return res;
+}
+
+/// Construit la liste complète des qualités sélectionnables en streaming (Auto adaptatif + résolutions HLS + MP4 directs).
+Future<List<SourceApercu>> resoudreQualitesStreaming(
+  Json info, {
+  Duration timeout = const Duration(seconds: 6),
+}) async {
+  final base = sourcesApercu(info);
+  if (base.isEmpty) return const [];
+
+  final maitre = base.where((s) => s.adaptatif).firstOrNull;
+  var variantesHls = <SourceApercu>[];
+  if (maitre != null) {
+    final client = HttpClient()..connectionTimeout = timeout;
+    try {
+      final uri = Uri.parse(maitre.url);
+      final req = await client.getUrl(uri).timeout(timeout);
+      maitre.entetes.forEach(req.headers.set);
+      final rep = await req.close().timeout(timeout);
+      if (rep.statusCode >= 200 && rep.statusCode < 300) {
+        final contenu = await rep.transform(utf8.decoder).join().timeout(timeout);
+        variantesHls = analyserM3u8Maitre(contenu, uri, maitre.entetes);
+      }
+    } catch (_) {
+      // On garde simplement les sources de base si la récupération échoue
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  final resultat = <SourceApercu>[];
+  final clesVues = <String>{};
+  void pousser(SourceApercu s) {
+    final cle = s.adaptatif ? 'auto' : '${s.hauteur}p${s.fps > 30 ? s.fps : 30}';
+    if (clesVues.add(cle)) resultat.add(s);
+  }
+
+  if (maitre != null) pousser(maitre);
+  final fixes = <SourceApercu>[
+    ...variantesHls,
+    for (final s in base)
+      if (!s.adaptatif) s,
+  ]..sort((a, b) {
+      final r = b.hauteur.compareTo(a.hauteur);
+      if (r != 0) return r;
+      final fp = b.fps.compareTo(a.fps);
+      if (fp != 0) return fp;
+      // Préférence HLS maître (audio préservé / seek multi-piste) puis progressif MP4
+      return (b.m3u8Filtre != null ? 1 : 0).compareTo(a.m3u8Filtre != null ? 1 : 0);
+    });
+  for (final s in fixes) {
+    pousser(s);
+  }
+  return resultat;
+}
+
+/// Piste de sous-titres disponible en streaming pour une vidéo YouTube.
+class PisteSousTitreStream {
+  final String id;
+  final String code;
+  final String label;
+  final String url;
+  final bool vtt;
+  final bool auto;
+
+  const PisteSousTitreStream({
+    required this.id,
+    required this.code,
+    required this.label,
+    required this.url,
+    required this.vtt,
+    required this.auto,
+  });
+}
+
+/// Liste ordonnée des pistes de sous-titres diffusables directement en streaming.
+List<PisteSousTitreStream> sousTitresStreaming(Json info) {
+  final res = <PisteSousTitreStream>[];
+  final origin = langueOriginale(info);
+  final pref = reglages['langue_audio'] as String?;
+
+  ({String url, bool vtt})? choisirUrl(dynamic liste) {
+    if (liste is! List) return null;
+    String? vttUrl, srtUrl;
+    for (final item in liste) {
+      if (item is! Map) continue;
+      final u = item['url'] as String?;
+      final ext = '${item['ext'] ?? ''}'.toLowerCase();
+      if (u == null || u.isEmpty) continue;
+      if (ext == 'vtt' && vttUrl == null) vttUrl = u;
+      if (ext == 'srt' && srtUrl == null) srtUrl = u;
+    }
+    if (vttUrl != null) return (url: vttUrl, vtt: true);
+    if (srtUrl != null) return (url: srtUrl, vtt: false);
+    return null;
+  }
+
+  int scoreLangue(String code) {
+    if (pref != null && pref != 'original' && langues.memeLangue(code, pref)) return 0;
+    if (langues.memeLangue(code, 'fr')) return 1;
+    if (origin != null && langues.memeLangue(code, origin)) return 2;
+    if (langues.memeLangue(code, 'en')) return 3;
+    return 4;
+  }
+
+  final manuelsMap = ((info['subtitles'] as Map?) ?? const {});
+  final manuels = <({int score, PisteSousTitreStream piste})>[];
+  for (final entry in manuelsMap.entries) {
+    final code = '${entry.key}';
+    if (code == 'live_chat') continue;
+    final trouve = choisirUrl(entry.value);
+    if (trouve == null) continue;
+    manuels.add((
+      score: scoreLangue(code),
+      piste: PisteSousTitreStream(
+        id: 'st:$code',
+        code: code,
+        label: '${langues.drapeau(code)} ${langues.nom(code)}',
+        url: trouve.url,
+        vtt: trouve.vtt,
+        auto: false,
+      ),
+    ));
+  }
+  manuels.sort((a, b) {
+    final r = a.score.compareTo(b.score);
+    return r != 0 ? r : a.piste.label.compareTo(b.piste.label);
+  });
+  for (final m in manuels) {
+    res.add(m.piste);
+  }
+
+  // Pour les sous-titres automatiques (~150 traductions YouTube), on garde les langues utiles.
+  final autoMap = ((info['automatic_captions'] as Map?) ?? const {});
+  const languesAutoUtiles = {'fr', 'en', 'es', 'de', 'ar', 'pt', 'it', 'ja', 'ko', 'nl', 'ru', 'zh-Hans'};
+  final autos = <({int score, PisteSousTitreStream piste})>[];
+  for (final entry in autoMap.entries) {
+    final code = '${entry.key}';
+    if (code == 'live_chat') continue;
+    final origTagged = code.endsWith('-orig');
+    final baseCode = origTagged ? code.substring(0, code.length - 5) : code;
+    final utile = origTagged ||
+        languesAutoUtiles.any((l) => langues.memeLangue(baseCode, l)) ||
+        (pref != null && pref != 'original' && langues.memeLangue(baseCode, pref)) ||
+        (origin != null && langues.memeLangue(baseCode, origin));
+    if (!utile) continue;
+    final trouve = choisirUrl(entry.value);
+    if (trouve == null) continue;
+    autos.add((
+      score: scoreLangue(baseCode) + (origTagged ? 0 : 1),
+      piste: PisteSousTitreStream(
+        id: 'auto:$code',
+        code: baseCode,
+        label: '${langues.drapeau(baseCode)} ${langues.nom(baseCode)} · auto',
+        url: trouve.url,
+        vtt: trouve.vtt,
+        auto: true,
+      ),
+    ));
+  }
+  autos.sort((a, b) {
+    final r = a.score.compareTo(b.score);
+    return r != 0 ? r : a.piste.label.compareTo(b.piste.label);
+  });
+  for (final a in autos) {
+    res.add(a.piste);
+  }
+
   return res;
 }
 
