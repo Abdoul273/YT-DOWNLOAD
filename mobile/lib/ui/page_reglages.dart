@@ -404,6 +404,25 @@ class _PageReglagesState extends State<PageReglages> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Etiquette('Lecteur'),
                 inter('pip_auto', 'Image dans l’image', 'Une vidéo en lecture reste en petite fenêtre quand tu quittes l’app'),
+                inter('lecteur_auto', 'Enchaîner le suivant', 'Lance automatiquement la vidéo suivante en fin de lecture'),
+                inter('lecteur_reprendre', 'Reprendre la position', 'Continue là où tu t’étais arrêté sur les vidéos'),
+                inter('lecteur_gestes', 'Gestes tactiles', 'Glisser pour luminosité, volume et recherche rapide'),
+                const SizedBox(height: 8),
+                Text('Durée des sauts', style: TextStyle(fontWeight: FontWeight.w600, color: c.t1, fontSize: 13.5)),
+                const SizedBox(height: 8),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  for (final s in const [5, 10, 15, 30])
+                    Puce('$s s', choisie: (r['lecteur_saut'] as num?)?.toInt() == s, onTap: () => r['lecteur_saut'] = s),
+                ]),
+                const SizedBox(height: 12),
+                Text('Orientation préférée', style: TextStyle(fontWeight: FontWeight.w600, color: c.t1, fontSize: 13.5)),
+                const SizedBox(height: 8),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  for (final (v, label) in const [(0, 'Auto'), (1, 'Portrait'), (2, 'Paysage · deux sens')])
+                    Puce(label,
+                        choisie: ((r['lecteur_orientation'] as num?)?.toInt() ?? 0) == v,
+                        onTap: () => r['lecteur_orientation'] = v),
+                ]),
               ]),
             ),
             const SizedBox(height: 12),

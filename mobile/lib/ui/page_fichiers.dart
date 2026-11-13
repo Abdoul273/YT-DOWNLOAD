@@ -98,6 +98,23 @@ class _PageFichiersState extends State<PageFichiers> {
     return (pos / (d * 1000)).clamp(0.0, 1.0);
   }
 
+  /// Dernière vidéo lisible non terminée à reprendre rapidement.
+  ({Tache tache, int posMs, double pct})? _videoAReprendre(List<Tache> videos) {
+    final posMap = (reglages['positions'] as Map?) ?? const {};
+    if (posMap.isEmpty || videos.isEmpty) return null;
+    final parId = {for (final v in videos) v.id: v};
+    for (final k in posMap.keys.toList().reversed) {
+      final v = parId[k];
+      if (v == null) continue;
+      final pos = posMap[k];
+      final pct = _avancement(v);
+      if (pos is int && pct != null && pct < 0.95) {
+        return (tache: v, posMs: pos, pct: pct);
+      }
+    }
+    return null;
+  }
+
   int _comparer(Tache a, Tache b) => switch (reglages['tri_fichiers']) {
         'ancien' => (a.fin ?? 0).compareTo(b.fin ?? 0),
         'titre' => a.titre.toLowerCase().compareTo(b.titre.toLowerCase()),
@@ -153,7 +170,9 @@ class _PageFichiersState extends State<PageFichiers> {
       return;
     }
     final lisibles = liste.where(_lisible).toList();
-    ouvrirLecteur(context, lisibles, lisibles.indexOf(t));
+    ouvrirLecteur(context, lisibles, lisibles.indexOf(t)).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _supprimer(Tache t) async {
@@ -311,6 +330,23 @@ class _PageFichiersState extends State<PageFichiers> {
                           _lire(liste, t);
                         },
                       ),
+                    if (!audio && lisible)
+                      _ItemMenuFichier(
+                        icone: Icons.headphones_rounded,
+                        couleur: c.cyan,
+                        titre: 'Écouter en mode audio',
+                        sousTitre: 'Fond sonore ou verrouillé dans Onde Studio',
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          final pos = ((reglages['positions'] as Map?) ?? const {})[t.id];
+                          ouvrirLecteurAudio(
+                            context,
+                            liste: [t],
+                            index: 0,
+                            departPosition: pos is int ? Duration(milliseconds: pos) : null,
+                          );
+                        },
+                      ),
                     if (audio && lisible) ...[
                       _ItemMenuFichier(
                         icone: Icons.playlist_play_rounded,
@@ -446,6 +482,8 @@ class _PageFichiersState extends State<PageFichiers> {
             .toList()
           ..sort(_comparer);
         final audios = liste.where((t) => _estAudio(t) && _lisible(t)).toList();
+        final videosLisibles = liste.where((t) => !_estAudio(t) && _lisible(t)).toList();
+        final repriseVideo = _type == 'audio' ? null : _videoAReprendre(videosLisibles);
         final total = termines.fold(0, (a, t) => a + t.tailleFichier);
         final selectionnes = liste.where((t) => _selection.contains(t.id)).toList();
         final tousSelectionnes = liste.isNotEmpty && liste.every((t) => _selection.contains(t.id));
@@ -628,6 +666,61 @@ class _PageFichiersState extends State<PageFichiers> {
                           onTap: () => ouvrirLecteurAudio(context, liste: audios, index: 0),
                         ),
                       ],
+                    ),
+                  ),
+                ],
+                if (repriseVideo != null && _selection.isEmpty) ...[
+                  const SizedBox(height: 10),
+                  Verre(
+                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+                    rayon: 20,
+                    teinte: c.sombre ? const Color(0x2006B6D4) : const Color(0x1406B6D4),
+                    bordure: Border.all(color: c.cyan.withAlpha(85)),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => _lire(videosLisibles, repriseVideo.tache),
+                      child: Row(children: [
+                        Stack(children: [
+                          Miniature(repriseVideo.tache.miniature, largeur: 72, rayon: 10),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            child: ClipRRect(
+                              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
+                              child: LinearProgressIndicator(
+                                value: repriseVideo.pct,
+                                minHeight: 3,
+                                backgroundColor: Colors.black54,
+                                valueColor: AlwaysStoppedAnimation(c.cyan),
+                              ),
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(
+                              'Reprendre à ${formaterDuree(repriseVideo.posMs ~/ 1000)}',
+                              style: TextStyle(color: c.cyan, fontSize: 11.5, fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              repriseVideo.tache.titre,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontWeight: FontWeight.w700, color: c.t1, fontSize: 13.5),
+                            ),
+                          ]),
+                        ),
+                        const SizedBox(width: 8),
+                        BoutonVerre(
+                          icone: Icons.play_arrow_rounded,
+                          texte: 'Reprendre',
+                          couleur: c.cyan,
+                          onTap: () => _lire(videosLisibles, repriseVideo.tache),
+                        ),
+                      ]),
                     ),
                   ),
                 ],

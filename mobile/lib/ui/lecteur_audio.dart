@@ -57,6 +57,7 @@ class MoteurAudio extends ChangeNotifier {
   Timer? _sommeil;
   DateTime? _finSommeil;
   int _sommeilMin = 0;
+  Duration? _departInitial;
   StreamSubscription? _aboMedia;
   final morceauActif = ValueNotifier<String?>('');
 
@@ -160,11 +161,23 @@ class MoteurAudio extends ChangeNotifier {
   }
 
   /// Lance une liste de morceaux à partir de [indexInitial].
-  Future<void> ouvrir(List<Tache> liste, int indexInitial, {bool melanger = false}) async {
+  Future<void> ouvrir(
+    List<Tache> liste,
+    int indexInitial, {
+    bool melanger = false,
+    Duration? departPosition,
+  }) async {
     if (liste.isEmpty) return;
     _ecouterCommandes();
     _file = List.of(liste);
     _index = indexInitial.clamp(0, _file.length - 1);
+    _departInitial = departPosition;
+    // Synchroniser les réglages EQ au cas où ils auraient été modifiés côté lecteur vidéo
+    _eqActif = _pref<bool>('audio_eq_actif', false);
+    _eqProfil = _pref<String>('audio_eq_profil', 'neutre');
+    _bandes = _lireBandes();
+    _basses = _pref<num>('audio_basses', 0).toInt().clamp(0, 1000);
+    _gain = _pref<num>('audio_gain', 0.0).toDouble().clamp(0.0, 15.0);
     if (melanger) {
       _aleatoire = true;
       reglages.ecrireSansPrevenir('audio_aleatoire', true);
@@ -300,10 +313,16 @@ class MoteurAudio extends ChangeNotifier {
     }
     await ctrl.setLooping(_repetition == 2);
     await ctrl.setPlaybackSpeed(_vitesse);
-    final pos = ((reglages['positions'] as Map?) ?? {})[t.id];
-    // Pour la musique de moins de 12 min, on repart du début ; pour un long podcast/mix, on reprend.
-    if (pos is int && ctrl.value.duration.inMinutes >= 12 && pos > 10000 && pos < ctrl.value.duration.inMilliseconds * 0.95) {
-      await ctrl.seekTo(Duration(milliseconds: pos));
+    final depart = _departInitial;
+    _departInitial = null;
+    if (depart != null && depart > Duration.zero && depart < ctrl.value.duration) {
+      await ctrl.seekTo(depart);
+    } else {
+      final pos = ((reglages['positions'] as Map?) ?? {})[t.id];
+      // Pour la musique de moins de 12 min, on repart du début ; pour un long podcast/mix, on reprend.
+      if (pos is int && ctrl.value.duration.inMinutes >= 12 && pos > 10000 && pos < ctrl.value.duration.inMilliseconds * 0.95) {
+        await ctrl.seekTo(Duration(milliseconds: pos));
+      }
     }
     if (perime()) {
       ctrl.dispose();
@@ -913,6 +932,7 @@ Future<void> ouvrirLecteurAudio(
   List<Tache>? liste,
   int index = 0,
   bool melanger = false,
+  Duration? departPosition,
 }) async {
   if (liste != null && liste.isNotEmpty) {
     final memeMorceau = moteurAudio.actif &&
@@ -921,9 +941,10 @@ Future<void> ouvrirLecteurAudio(
         moteurAudio.tache?.id == liste[index].id &&
         !melanger;
     if (!memeMorceau) {
-      unawaited(moteurAudio.ouvrir(liste, index, melanger: melanger));
-    } else if (!moteurAudio.enLecture) {
-      moteurAudio.reprendre();
+      unawaited(moteurAudio.ouvrir(liste, index, melanger: melanger, departPosition: departPosition));
+    } else {
+      if (departPosition != null) unawaited(moteurAudio.allerA(departPosition));
+      if (!moteurAudio.enLecture) moteurAudio.reprendre();
     }
   }
   if (!context.mounted) return;

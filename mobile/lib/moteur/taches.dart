@@ -56,6 +56,60 @@ class Ajout {
   const Ajout(this.url, {this.titre, this.miniature, this.chaine, this.duree, this.groupe});
 }
 
+/// Chapitre d'une vidéo (issu des métadonnées YouTube), stocké hors conteneur MP4
+/// pour préserver la compatibilité TikTok/Reels tout en offrant une navigation riche.
+class ChapitreVideo {
+  final String titre;
+  final int debutMs;
+  final int finMs;
+
+  const ChapitreVideo({required this.titre, required this.debutMs, required this.finMs});
+
+  Duration get debut => Duration(milliseconds: debutMs);
+  Duration get fin => Duration(milliseconds: finMs);
+  Duration get duree => Duration(milliseconds: (finMs - debutMs).clamp(0, 1 << 31));
+
+  Map<String, dynamic> versJson() => {'t': titre, 'd': debutMs, 'f': finMs};
+
+  factory ChapitreVideo.depuisJson(Map m) => ChapitreVideo(
+        titre: (m['t'] ?? '').toString().trim(),
+        debutMs: ((m['d'] ?? 0) as num).round().clamp(0, 1 << 31),
+        finMs: ((m['f'] ?? 0) as num).round().clamp(0, 1 << 31),
+      );
+}
+
+/// Extrait la liste normalisée des chapitres depuis un JSON `yt-dlp`.
+List<ChapitreVideo> extraireChapitresInfo(Map info) {
+  final bruts = info['chapters'];
+  if (bruts is! List || bruts.isEmpty) return const [];
+  final dureeTotaleMs = (((info['duration'] as num?) ?? 0) * 1000).round();
+  final intermediaires = <({String titre, int debutMs, int finMs})>[];
+  for (final e in bruts) {
+    if (e is! Map) continue;
+    final debSec = e['start_time'];
+    if (debSec is! num) continue;
+    final debMs = (debSec * 1000).round().clamp(0, 1 << 31);
+    final finSec = e['end_time'];
+    final finMs = finSec is num ? (finSec * 1000).round().clamp(debMs, 1 << 31) : debMs;
+    final titre = (e['title'] ?? '').toString().trim();
+    intermediaires.add((
+      titre: titre.isEmpty ? 'Chapitre ${intermediaires.length + 1}' : titre,
+      debutMs: debMs,
+      finMs: finMs,
+    ));
+  }
+  if (intermediaires.isEmpty) return const [];
+  intermediaires.sort((a, b) => a.debutMs.compareTo(b.debutMs));
+  final resultat = <ChapitreVideo>[];
+  for (var i = 0; i < intermediaires.length; i++) {
+    final c = intermediaires[i];
+    final suivantDeb = i + 1 < intermediaires.length ? intermediaires[i + 1].debutMs : dureeTotaleMs;
+    final finEffectif = c.finMs > c.debutMs ? c.finMs : (suivantDeb > c.debutMs ? suivantDeb : c.debutMs);
+    resultat.add(ChapitreVideo(titre: c.titre, debutMs: c.debutMs, finMs: finEffectif));
+  }
+  return resultat;
+}
+
 class Tache {
   String id, url, titre, statut, phase = '', message = '', erreur = '', pistes = '';
   String? miniature, chaine, groupe;
@@ -66,6 +120,7 @@ class Tache {
   int telecharge = 0, total = 0, tailleFichier = 0;
   int priorite = 0;
   List<FichierPublie> fichiers = [];
+  List<ChapitreVideo> chapitres = [];
 
   // interne
   String? arret; // "pause" | "annule" | "reattendre" (Wi-Fi perdu)
@@ -90,7 +145,9 @@ class Tache {
         'id': id, 'url': url, 'titre': titre, 'miniature': miniature, 'chaine': chaine, 'duree': duree,
         'groupe': groupe, 'options': options, 'statut': statut, 'progression': progression,
         'telecharge': telecharge, 'total': total, 'message': message, 'erreur': erreur,
-        'fichiers': [for (final f in fichiers) f.versJson()], 'taille_fichier': tailleFichier, 'pistes': pistes,
+        'fichiers': [for (final f in fichiers) f.versJson()],
+        if (chapitres.isNotEmpty) 'chapitres': [for (final c in chapitres) c.versJson()],
+        'taille_fichier': tailleFichier, 'pistes': pistes,
         'cree': cree, 'fin': fin, 'programme': programme, 'tentatives': tentatives, 'phase': phase, 'priorite': priorite,
       };
 
@@ -110,6 +167,10 @@ class Tache {
       ..message = d['message'] ?? ''
       ..erreur = d['erreur'] ?? ''
       ..fichiers = [for (final f in (d['fichiers'] as List?) ?? []) FichierPublie.depuis(f as Map)]
+      ..chapitres = [
+        for (final c in (d['chapitres'] as List?) ?? [])
+          if (c is Map) ChapitreVideo.depuisJson(c),
+      ]
       ..tailleFichier = ((d['taille_fichier'] ?? 0) as num).toInt()
       ..pistes = d['pistes'] ?? ''
       ..cree = ((d['cree'] ?? 0) as num).toDouble()
@@ -243,6 +304,13 @@ class Gestionnaire extends ChangeNotifier {
   /// Écritures l'une après l'autre : deux écritures simultanées dans le même fichier
   /// temporaire pouvaient produire un JSON tronqué et faire perdre toute la liste.
   Future<void> sauvegarder() => _sauver();
+
+  /// Enregistre les chapitres découverts à la volée pour une vidéo déjà téléchargée.
+  void mettreAJourChapitres(Tache t, List<ChapitreVideo> liste) {
+    if (liste.isEmpty) return;
+    t.chapitres = liste;
+    _touche();
+  }
 
   Future<void> _sauver() async {
     _sauvegarde?.cancel();
@@ -892,6 +960,7 @@ class Gestionnaire extends ChangeNotifier {
       }
     }
 
+    final ch = extraireChapitresInfo(info);
     t
       ..titre = (info['title'] ?? t.titre) as String
       ..miniature = t.miniature ?? analyse.miniature(info)
@@ -899,6 +968,7 @@ class Gestionnaire extends ChangeNotifier {
       ..duree = (info['duration'] as num?)?.toInt() ?? t.duree
       ..pistes = desc
       ..total = t.parties.fold(0, (a, p) => a + p.$2);
+    if (ch.isNotEmpty) t.chapitres = ch;
     // Toujours remplacer : sinon « Accès refusé (403). Nouvelle tentative… » de la tentative
     // précédente reste affiché alors que la reprise télécharge normalement.
     t.message = msg;

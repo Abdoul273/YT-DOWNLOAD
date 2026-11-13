@@ -55,6 +55,13 @@ Future<Json> infoComplete(String url, {bool frais = false}) async {
   return info;
 }
 
+/// Retourne les infos déjà présentes en mémoire sans lancer de requête réseau.
+Json? infoEnCache(String url) {
+  final ent = _cache[url];
+  if (ent == null || DateTime.now().difference(ent.$1) >= dureeCache) return null;
+  return ent.$2;
+}
+
 void oublier(String url) => _cache.remove(url);
 
 String? miniature(Json e) {

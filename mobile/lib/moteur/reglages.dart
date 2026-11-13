@@ -40,6 +40,21 @@ const reglagesDefaut = <String, dynamic>{
   'pin_hash': '', // verrouillage par code
   'pin_sel': '',
   'pip_auto': true, // vidéo en image dans l'image en quittant l'app
+  'lecteur_orientation': 0, // 0 = auto, 1 = portrait, 2 = paysage deux sens
+  'lecteur_vitesse': 1.0,
+  'lecteur_vitesse_maintien': 2.0,
+  'lecteur_st': true,
+  'lecteur_st_taille': 17,
+  'lecteur_st_fond': true,
+  'lecteur_st_couleur': 'blanc', // 'blanc' | 'jaune' | 'cyan'
+  'lecteur_st_marge': 28,
+  'lecteur_format': 0,
+  'lecteur_saut': 10,
+  'lecteur_auto': true,
+  'lecteur_gestes': true,
+  'lecteur_nuit': 0.0, // intensité du filtre confort nuit (0.0‥0.6)
+  'lecteur_miroir': false,
+  'lecteur_reprendre': true,
   'favoris': <String>[], // ids des fichiers favoris
   'tri_fichiers': 'recent',
   'theme': 'sombre',
