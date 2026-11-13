@@ -312,6 +312,101 @@ class Gestionnaire extends ChangeNotifier {
     _touche();
   }
 
+  /// Renomme le titre d'un média téléchargé et met à jour son nom de fichier dans MediaStore.
+  Future<bool> renommer(String id, String nouveauTitre) async {
+    final t = _get(id);
+    final propre = nouveauTitre.trim();
+    if (t == null || propre.isEmpty) return false;
+    final f = t.fichierPrincipal;
+    if (f != null && f.uri.isNotEmpty) {
+      final maj = await Natif.renommerFichier(f.uri, propre);
+      if (maj != null) {
+        final idx = t.fichiers.indexOf(f);
+        if (idx >= 0) {
+          t.fichiers[idx] = FichierPublie(
+            maj.nom.isNotEmpty ? maj.nom : f.nom,
+            f.uri,
+            maj.chemin.isNotEmpty ? maj.chemin : f.chemin,
+            f.mime,
+            f.taille,
+          );
+        }
+      }
+    }
+    t.titre = propre;
+    _touche(sauver: true);
+    return true;
+  }
+
+  /// Extrait la piste audio d'une vidéo déjà téléchargée (MP3 ou M4A) et l'ajoute à la médiathèque.
+  Future<Tache> extraireAudio(Tache source, {String format = 'mp3'}) async {
+    final f = source.fichierPrincipal;
+    if (f == null || f.uri.isEmpty) {
+      throw StateError('Aucun fichier vidéo source disponible.');
+    }
+    final audio = await Natif.extraireAudio(uri: f.uri, titre: source.titre, format: format);
+    final cree = Tache(
+      source.url,
+      {...source.options, 'type': 'audio', 'audio_format': format, 'extrait_de': source.id},
+      titre: source.titre,
+      miniature: source.miniature,
+      chaine: source.chaine,
+      duree: source.duree,
+      groupe: source.groupe,
+    )
+      ..statut = 'termine'
+      ..progression = 100
+      ..fichiers = [audio]
+      ..tailleFichier = audio.taille
+      ..fin = _maintenant()
+      ..chapitres = List.of(source.chapitres);
+    taches.insert(0, cree);
+    _touche(sauver: true);
+    return cree;
+  }
+
+  /// Enregistre un fichier orphelin trouvé dans Téléchargements/YT-NEXUS dans la médiathèque.
+  Tache importerFichierOrphelin(FichierPublie f) {
+    for (final t in taches) {
+      if (t.fichiers.any((x) => f.uri.isNotEmpty && x.uri == f.uri)) return t;
+    }
+    final estAudio = f.mime.startsWith('audio') ||
+        RegExp(r'\.(mp3|m4a|opus|ogg|aac|flac|wav)$', caseSensitive: false).hasMatch(f.nom);
+    final sansExt = f.nom.replaceFirst(RegExp(r'\.[a-zA-Z0-9]{2,5}$'), '').trim();
+    final t = Tache(
+      f.uri,
+      {'type': estAudio ? 'audio' : 'video', 'importe': true},
+      titre: sansExt.isEmpty ? f.nom : sansExt,
+    )
+      ..statut = 'termine'
+      ..progression = 100
+      ..fichiers = [f]
+      ..tailleFichier = f.taille
+      ..fin = _maintenant();
+    taches.insert(0, t);
+    _touche(sauver: true);
+    return t;
+  }
+
+  /// Supprime les entrées marquées terminées dont le fichier n'existe plus sur l'appareil.
+  Future<int> nettoyerReferencesManquantes() async {
+    final obsoletes = <Tache>[];
+    for (final t in List.of(taches)) {
+      if (t.statut != 'termine') continue;
+      final f = t.fichierPrincipal;
+      if (f == null || f.uri.isEmpty || !await Natif.existe(f.uri)) {
+        obsoletes.add(t);
+      }
+    }
+    if (obsoletes.isEmpty) return 0;
+    for (final t in obsoletes) {
+      taches.remove(t);
+      PlaylistsLocales.retirerPartout(t.id);
+    }
+    _touche(sauver: true);
+    return obsoletes.length;
+  }
+
   Future<void> _sauver() async {
     _sauvegarde?.cancel();
     _sauvegarde = null;
@@ -527,6 +622,7 @@ class Gestionnaire extends ChangeNotifier {
       }
     }
     taches.remove(t);
+    PlaylistsLocales.retirerPartout(t.id);
     _touche(sauver: true);
   }
 
@@ -1241,6 +1337,192 @@ String formaterDuree(num? s) {
 }
 
 final gestionnaire = Gestionnaire();
+
+/// Playlist locale persistée hors-ligne dans les réglages pour organiser la médiathèque.
+class PlaylistLocale {
+  final String id;
+  final String nom;
+  final List<String> tacheIds;
+  final int cree;
+
+  const PlaylistLocale({
+    required this.id,
+    required this.nom,
+    this.tacheIds = const [],
+    this.cree = 0,
+  });
+
+  Map<String, dynamic> versJson() => {
+    'id': id,
+    'nom': nom,
+    'tache_ids': tacheIds,
+    'cree': cree,
+  };
+
+  factory PlaylistLocale.depuis(Map d) => PlaylistLocale(
+    id: (d['id'] ?? '').toString(),
+    nom: (d['nom'] ?? '').toString(),
+    tacheIds: [
+      for (final id in (d['tache_ids'] as List? ?? const []))
+        if (id != null && id.toString().isNotEmpty) id.toString(),
+    ],
+    cree: (d['cree'] as num?)?.toInt() ?? 0,
+  );
+
+  PlaylistLocale copie({String? nom, List<String>? tacheIds}) => PlaylistLocale(
+    id: id,
+    nom: nom ?? this.nom,
+    tacheIds: tacheIds ?? this.tacheIds,
+    cree: cree,
+  );
+}
+
+/// Opérations CRUD sur les playlists locales stockées dans `reglages['playlists_locales']`.
+abstract final class PlaylistsLocales {
+  static List<PlaylistLocale> tout() {
+    final brut = reglages['playlists_locales'];
+    if (brut is! List) return [];
+    return [
+      for (final elem in brut)
+        if (elem is Map && (elem['id'] ?? '').toString().isNotEmpty) PlaylistLocale.depuis(elem),
+    ];
+  }
+
+  static PlaylistLocale? parId(String id) {
+    for (final p in tout()) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  static void _ecrire(List<PlaylistLocale> liste) {
+    reglages['playlists_locales'] = [for (final p in liste) p.versJson()];
+  }
+
+  static PlaylistLocale creer(String nom, {List<String> tacheIds = const []}) {
+    final propre = nom.trim();
+    final unifies = <String>[];
+    for (final id in tacheIds) {
+      if (id.isNotEmpty && !unifies.contains(id)) unifies.add(id);
+    }
+    final p = PlaylistLocale(
+      id: 'pl_${_id()}',
+      nom: propre.isEmpty ? 'Nouvelle playlist' : propre,
+      tacheIds: unifies,
+      cree: DateTime.now().millisecondsSinceEpoch,
+    );
+    _ecrire([...tout(), p]);
+    return p;
+  }
+
+  static bool renommer(String playlistId, String nouveauNom) {
+    final propre = nouveauNom.trim();
+    if (propre.isEmpty) return false;
+    final liste = tout();
+    var modifie = false;
+    final maj = [
+      for (final p in liste)
+        if (p.id == playlistId)
+          (() {
+            modifie = true;
+            return p.copie(nom: propre);
+          })()
+        else
+          p,
+    ];
+    if (modifie) _ecrire(maj);
+    return modifie;
+  }
+
+  static void supprimer(String playlistId) {
+    final liste = tout();
+    final maj = [for (final p in liste) if (p.id != playlistId) p];
+    if (maj.length != liste.length) _ecrire(maj);
+  }
+
+  static void ajouter(String playlistId, Iterable<String> tacheIds) {
+    final liste = tout();
+    var change = false;
+    final maj = [
+      for (final p in liste)
+        if (p.id == playlistId)
+          (() {
+            final ids = List<String>.from(p.tacheIds);
+            for (final tid in tacheIds) {
+              if (tid.isNotEmpty && !ids.contains(tid)) {
+                ids.add(tid);
+                change = true;
+              }
+            }
+            return p.copie(tacheIds: ids);
+          })()
+        else
+          p,
+    ];
+    if (change) _ecrire(maj);
+  }
+
+  static void retirer(String playlistId, Iterable<String> tacheIds) {
+    final cible = tacheIds.toSet();
+    if (cible.isEmpty) return;
+    final liste = tout();
+    var change = false;
+    final maj = [
+      for (final p in liste)
+        if (p.id == playlistId)
+          (() {
+            final ids = [for (final tid in p.tacheIds) if (!cible.contains(tid)) tid];
+            if (ids.length != p.tacheIds.length) change = true;
+            return p.copie(tacheIds: ids);
+          })()
+        else
+          p,
+    ];
+    if (change) _ecrire(maj);
+  }
+
+  static void definirElements(String playlistId, List<String> tacheIds) {
+    final liste = tout();
+    final propres = <String>[];
+    for (final id in tacheIds) {
+      if (id.isNotEmpty && !propres.contains(id)) propres.add(id);
+    }
+    var change = false;
+    final maj = [
+      for (final p in liste)
+        if (p.id == playlistId)
+          (() {
+            change = true;
+            return p.copie(tacheIds: propres);
+          })()
+        else
+          p,
+    ];
+    if (change) _ecrire(maj);
+  }
+
+  static void retirerPartout(String tacheId) {
+    if (tacheId.isEmpty) return;
+    final liste = tout();
+    var change = false;
+    final maj = [
+      for (final p in liste)
+        if (p.tacheIds.contains(tacheId))
+          (() {
+            change = true;
+            return p.copie(tacheIds: [for (final id in p.tacheIds) if (id != tacheId) id]);
+          })()
+        else
+          p,
+    ];
+    if (change) _ecrire(maj);
+  }
+
+  static List<Tache> tachesDe(PlaylistLocale p, List<Tache> source) {
+    final parId = {for (final t in source) t.id: t};
+    return [for (final id in p.tacheIds) ?parId[id]];
+  }
+}
 
 int _tailleTravail(String chemin) => Gestionnaire._tailleDossier(Directory(chemin));
 

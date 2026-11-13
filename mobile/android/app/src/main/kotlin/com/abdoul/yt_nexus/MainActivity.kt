@@ -1,5 +1,6 @@
 package com.abdoul.yt_nexus
 
+import android.content.ContentUris
 import android.content.ContentValues
 import android.app.PendingIntent
 import android.app.PictureInPictureParams
@@ -33,7 +34,10 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.BufferedReader
 import java.io.File
+import java.io.InputStreamReader
+import java.util.UUID
 import java.util.concurrent.Executors
 
 /**
@@ -184,6 +188,24 @@ class MainActivity : FlutterActivity() {
             }
             "supprimerFichier" -> enFond(res) {
                 contentResolver.delete(Uri.parse(appel.argument<String>("uri")!!), null, null) > 0
+            }
+            "renommerFichier" -> enFond(res) {
+                renommerFichier(Uri.parse(appel.argument<String>("uri")!!), appel.argument<String>("nouveauNom")!!)
+            }
+            "extraireAudio" -> enFond(res) {
+                extraireAudio(
+                    Uri.parse(appel.argument<String>("uri")!!),
+                    appel.argument<String>("titre") ?: "audio",
+                    appel.argument<String>("format") ?: "mp3",
+                )
+            }
+            "etatStockage" -> enFond(res) {
+                val extStat = StatFs(Environment.getExternalStorageDirectory().absolutePath)
+                mapOf(
+                    "libre" to extStat.availableBytes,
+                    "total" to extStat.totalBytes,
+                    "fichiers" to listerFichiersMediaStore(),
+                )
             }
             "ouvrir" -> {
                 val i = Intent(Intent.ACTION_VIEW).apply {
@@ -497,5 +519,166 @@ class MainActivity : FlutterActivity() {
         contentResolver.query(uri, arrayOf(MediaStore.MediaColumns._ID), null, null, null)?.use { it.count > 0 } ?: false
     } catch (e: Exception) {
         false
+    }
+
+    private fun nettoyerNomFichier(nom: String): String {
+        val propre = nom.replace(Regex("""[/\\:*?"<>|\x00-\x1F]+"""), " ").replace(Regex("""\s+"""), " ").trim().trim('.')
+        return if (propre.isEmpty()) "media" else if (propre.length > 140) propre.substring(0, 140).trim() else propre
+    }
+
+    private fun renommerFichier(uri: Uri, nouveauNom: String): Map<String, Any?>? {
+        return try {
+            var nomActuel = ""
+            var relActuel = Environment.DIRECTORY_DOWNLOADS + "/YT-NEXUS/"
+            contentResolver.query(
+                uri,
+                arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH),
+                null,
+                null,
+                null,
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    nomActuel = c.getString(0) ?: ""
+                    relActuel = c.getString(1) ?: relActuel
+                }
+            }
+            val point = nomActuel.lastIndexOf('.')
+            val ext = if (point > 0 && point < nomActuel.length - 1) nomActuel.substring(point) else ""
+            val propre = nettoyerNomFichier(nouveauNom)
+            val nomCible = if (ext.isNotEmpty() && !propre.lowercase().endsWith(ext.lowercase())) "$propre$ext" else propre
+            val vals = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, nomCible) }
+            if (contentResolver.update(uri, vals, null, null) <= 0) return null
+            var nomFinal = nomCible
+            contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) nomFinal = c.getString(0) ?: nomCible
+            }
+            mapOf("nom" to nomFinal, "chemin" to "${relActuel.trimEnd('/')}/$nomFinal")
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun listerFichiersMediaStore(): List<Map<String, Any?>> {
+        val out = mutableListOf<Map<String, Any?>>()
+        try {
+            val cols = arrayOf(
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                MediaStore.MediaColumns.MIME_TYPE,
+                MediaStore.MediaColumns.SIZE,
+            )
+            contentResolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                cols,
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.MediaColumns.IS_PENDING} = 0",
+                arrayOf("${Environment.DIRECTORY_DOWNLOADS}/YT-NEXUS%"),
+                "${MediaStore.MediaColumns.DATE_MODIFIED} DESC",
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val id = c.getLong(0)
+                    val nom = c.getString(1) ?: continue
+                    val rel = (c.getString(2) ?: "").trimEnd('/')
+                    val mime = c.getString(3) ?: "*/*"
+                    val taille = c.getLong(4)
+                    val uri = ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+                    out.add(
+                        mapOf(
+                            "nom" to nom,
+                            "uri" to uri.toString(),
+                            "chemin" to if (rel.isEmpty()) nom else "$rel/$nom",
+                            "mime" to mime,
+                            "taille" to taille,
+                        )
+                    )
+                }
+            }
+        } catch (_: Throwable) {
+        }
+        return out
+    }
+
+    private fun extraireAudio(uri: Uri, titre: String, formatRaw: String): Map<String, Any?> {
+        if (!pret) initialiser()
+        val format = if (formatRaw.lowercase() == "m4a") "m4a" else "mp3"
+        val ffmpegBin = File(applicationInfo.nativeLibraryDir, "libffmpeg.so")
+        if (!ffmpegBin.exists()) throw Exception("FFmpeg embarqué introuvable.")
+
+        val tmpRoot = File(getExternalFilesDir("travail") ?: File(filesDir, "travail"), "extract_${UUID.randomUUID()}")
+        tmpRoot.mkdirs()
+        try {
+            var nomSource = "source.mp4"
+            var tailleSource = 0L
+            contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    nomSource = c.getString(0) ?: nomSource
+                    tailleSource = c.getLong(1)
+                }
+            }
+            val libre = StatFs(tmpRoot.absolutePath).availableBytes
+            if (tailleSource > 0 && libre < tailleSource + 20L * 1024 * 1024) {
+                throw Exception("Espace insuffisant pour extraire l'audio.")
+            }
+
+            val dot = nomSource.lastIndexOf('.')
+            val extSrc = if (dot > 0 && dot < nomSource.length - 1) nomSource.substring(dot) else ".mp4"
+            val srcFile = File(tmpRoot, "input$extSrc")
+            contentResolver.openInputStream(uri)?.use { entree ->
+                srcFile.outputStream().use { sortie -> entree.copyTo(sortie) }
+            } ?: throw Exception("Impossible de lire la vidéo source.")
+
+            val stem = nettoyerNomFichier(titre)
+            val outDir = File(tmpRoot, "out").apply { mkdirs() }
+            val outFile = File(outDir, "$stem.$format")
+
+            val cmd = mutableListOf(
+                ffmpegBin.absolutePath,
+                "-y",
+                "-i", srcFile.absolutePath,
+                "-vn",
+                "-sn",
+                "-dn",
+                "-map_metadata", "0",
+            )
+            if (format == "m4a") {
+                cmd.addAll(listOf("-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"))
+            } else {
+                cmd.addAll(listOf("-c:a", "libmp3lame", "-q:a", "2"))
+            }
+            cmd.add(outFile.absolutePath)
+
+            val packages = File(File(noBackupFilesDir, "youtubedl-android"), "packages")
+            val ldPaths = listOf(
+                File(packages, "python/usr/lib").absolutePath,
+                File(packages, "ffmpeg/usr/lib").absolutePath,
+                File(packages, "aria2c/usr/lib").absolutePath,
+            ).joinToString(":")
+
+            val pb = ProcessBuilder(cmd).redirectErrorStream(true)
+            val env = pb.environment()
+            val prevLd = env["LD_LIBRARY_PATH"]
+            env["LD_LIBRARY_PATH"] = if (prevLd.isNullOrEmpty()) ldPaths else "$ldPaths:$prevLd"
+
+            val proc = pb.start()
+            val dernieres = ArrayDeque<String>(24)
+            BufferedReader(InputStreamReader(proc.inputStream)).use { br ->
+                var l = br.readLine()
+                while (l != null) {
+                    if (dernieres.size >= 24) dernieres.removeFirst()
+                    dernieres.addLast(l)
+                    l = br.readLine()
+                }
+            }
+            val code = proc.waitFor()
+            if (code != 0 || !outFile.exists() || outFile.length() == 0L) {
+                val msg = dernieres.takeLast(5).joinToString(" | ")
+                throw Exception(if (msg.isNotEmpty()) "Échec extraction audio : $msg" else "Cette vidéo ne contient pas de piste audio exploitable.")
+            }
+
+            return publier(outDir, "Audio extrait").firstOrNull()
+                ?: throw Exception("Impossible d'enregistrer le fichier audio extrait.")
+        } finally {
+            tmpRoot.deleteRecursively()
+        }
     }
 }

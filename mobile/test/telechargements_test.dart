@@ -316,4 +316,87 @@ void main() {
       if (cas == 'reprise') expect(validateurs, ['"original"']);
     });
   }
+
+  test('Playlists locales : création, ajout, renommage, retrait et nettoyage à la suppression', () async {
+    final g = Gestionnaire();
+    liberer(g);
+    final prev = reglages['playlists_locales'];
+    reglages['playlists_locales'] = <Map<String, dynamic>>[];
+    addTearDown(() => reglages['playlists_locales'] = prev);
+
+    final a = Tache('https://youtu.be/a', {'type': 'audio'}, titre: 'Piste A')
+      ..statut = 'termine'
+      ..fichiers = [FichierPublie('a.mp3', 'content://a', '/a.mp3', 'audio/mpeg', 100)];
+    final b = Tache('https://youtu.be/b', {'type': 'video'}, titre: 'Vidéo B')
+      ..statut = 'termine'
+      ..fichiers = [FichierPublie('b.mp4', 'content://b', '/b.mp4', 'video/mp4', 200)];
+    g.taches.addAll([a, b]);
+
+    final p = PlaylistsLocales.creer('Nuit', tacheIds: [a.id]);
+    PlaylistsLocales.ajouter(p.id, [b.id, a.id]);
+    expect(PlaylistsLocales.parId(p.id)!.tacheIds, [a.id, b.id]);
+    expect(PlaylistsLocales.tachesDe(PlaylistsLocales.parId(p.id)!, g.taches), [a, b]);
+
+    expect(PlaylistsLocales.renommer(p.id, 'Détente'), isTrue);
+    expect(PlaylistsLocales.parId(p.id)!.nom, 'Détente');
+
+    await g.supprimer(b.id, fichier: true);
+    expect(PlaylistsLocales.parId(p.id)!.tacheIds, [a.id]);
+
+    PlaylistsLocales.retirer(p.id, [a.id]);
+    expect(PlaylistsLocales.parId(p.id)!.tacheIds, isEmpty);
+
+    PlaylistsLocales.supprimer(p.id);
+    expect(PlaylistsLocales.tout(), isEmpty);
+  });
+
+  test('Médiathèque : renommer, extraire audio, importer orphelin et nettoyer absents', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(canal, (appel) async {
+      appels.add(appel);
+      return switch (appel.method) {
+        'renommerFichier' => {'nom': '${appel.arguments['nouveauNom']}.mp4', 'chemin': 'Download/YT-NEXUS/${appel.arguments['nouveauNom']}.mp4'},
+        'extraireAudio' => {
+          'nom': '${appel.arguments['titre']}.${appel.arguments['format']}',
+          'uri': 'content://audio/extrait',
+          'chemin': 'Download/YT-NEXUS/Audio extrait/${appel.arguments['titre']}.${appel.arguments['format']}',
+          'mime': 'audio/mp4',
+          'taille': 4096,
+        },
+        'existe' => appel.arguments['uri'] != 'content://supprime',
+        _ => null,
+      };
+    });
+
+    final g = Gestionnaire();
+    liberer(g);
+    final v = Tache('https://youtu.be/v1', {'type': 'video'}, titre: 'Ancien nom', duree: 90)
+      ..statut = 'termine'
+      ..fichiers = [FichierPublie('ancien.mp4', 'content://video/1', '/v/ancien.mp4', 'video/mp4', 8192)];
+    final absent = Tache('https://youtu.be/v2', {'type': 'video'}, titre: 'Absent')
+      ..statut = 'termine'
+      ..fichiers = [FichierPublie('disparu.mp4', 'content://supprime', '/v/disparu.mp4', 'video/mp4', 500)];
+    g.taches.addAll([v, absent]);
+
+    expect(await g.renommer(v.id, 'Super Clip'), isTrue);
+    expect(v.titre, 'Super Clip');
+    expect(v.fichierPrincipal!.nom, 'Super Clip.mp4');
+
+    final extrait = await g.extraireAudio(v, format: 'm4a');
+    expect(g.taches.first, extrait);
+    expect(extrait.statut, 'termine');
+    expect(extrait.options['type'], 'audio');
+    expect(extrait.options['audio_format'], 'm4a');
+    expect(extrait.fichierPrincipal!.uri, 'content://audio/extrait');
+
+    final orphelin = FichierPublie('trace.mp3', 'content://orp/1', 'Download/YT-NEXUS/trace.mp3', 'audio/mpeg', 2048);
+    final imp1 = g.importerFichierOrphelin(orphelin);
+    final imp2 = g.importerFichierOrphelin(orphelin);
+    expect(imp1.id, imp2.id);
+    expect(imp1.titre, 'trace');
+    expect(imp1.options['type'], 'audio');
+
+    final nettoyes = await g.nettoyerReferencesManquantes();
+    expect(nettoyes, 1);
+    expect(g.taches, isNot(contains(absent)));
+  });
 }

@@ -218,11 +218,15 @@ class _PageFileState extends State<PageFile> {
         final attente = gestionnaire.fileAttente;
         final idsAttente = attente.map((t) => t.id).toSet();
         final positions = {for (var i = 0; i < attente.length; i++) attente[i].id: i};
-        final liste = [
-          ...toutes.where((t) => enCours.contains(t.statut)),
-          ...attente,
-          ...toutes.where((t) => !enCours.contains(t.statut) && !idsAttente.contains(t.id)),
-        ].where((t) => _correspond(_filtre, t)).toList();
+        final nbActifs = toutes.where((t) => actifs.contains(t.statut)).length;
+        final nbPause = toutes.where((t) => t.statut == 'pause').length;
+        final nbEchecs = toutes.where((t) => t.statut == 'erreur' || t.statut == 'annule').length;
+        final aActionsRapides = nbActifs > 0 || nbPause > 0 || nbEchecs > 0;
+        final actifsEnCours = toutes.where((t) => enCours.contains(t.statut) && _correspond(_filtre, t)).toList();
+        final fileReordonnable = attente.where((t) => _correspond(_filtre, t)).toList();
+        final autres = toutes.where((t) => !enCours.contains(t.statut) && !idsAttente.contains(t.id) && _correspond(_filtre, t)).toList();
+        final vide = actifsEnCours.isEmpty && fileReordonnable.isEmpty && autres.isEmpty;
+        final bas = 120 + MediaQuery.paddingOf(context).bottom;
         return CustomScrollView(slivers: [
           if (gestionnaire.avertissement != null)
             SliverToBoxAdapter(child: Padding(
@@ -232,29 +236,71 @@ class _PageFileState extends State<PageFile> {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             sliver: SliverToBoxAdapter(
-              child: Row(children: [
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(children: [
-                      for (final e in _filtres.entries)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: Puce('${e.value}  ${toutes.where((t) => _correspond(e.key, t)).length}',
-                              choisie: _filtre == e.key, onTap: () => setState(() => _filtre = e.key)),
-                        ),
-                    ]),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(children: [
+                          for (final e in _filtres.entries)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: Puce('${e.value}  ${toutes.where((t) => _correspond(e.key, t)).length}',
+                                  choisie: _filtre == e.key, onTap: () => setState(() => _filtre = e.key)),
+                            ),
+                        ]),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Options de la file',
+                      icon: Icon(Icons.more_vert_rounded, color: c.t2),
+                      onPressed: () => _ouvrirMenuFile(context),
+                    ),
+                  ]),
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topLeft,
+                    child: aActionsRapides
+                        ? Padding(
+                            padding: const EdgeInsets.only(top: 10),
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                if (nbActifs > 0)
+                                  _BoutonActionFile(
+                                    label: 'Tout en pause ($nbActifs)',
+                                    icone: Icons.pause_rounded,
+                                    couleur: c.ambre,
+                                    onTap: () => gestionnaire.actionGlobale('pause_tout'),
+                                  ),
+                                if (nbPause > 0)
+                                  _BoutonActionFile(
+                                    label: 'Tout reprendre ($nbPause)',
+                                    icone: Icons.play_arrow_rounded,
+                                    couleur: c.cyan,
+                                    onTap: () => gestionnaire.actionGlobale('reprendre_tout'),
+                                  ),
+                                if (nbEchecs > 0)
+                                  _BoutonActionFile(
+                                    label: 'Relancer ($nbEchecs)',
+                                    icone: Icons.refresh_rounded,
+                                    couleur: c.indigo,
+                                    onTap: () => gestionnaire.actionGlobale('relancer_erreurs'),
+                                  ),
+                              ],
+                            ),
+                          )
+                        : const SizedBox.shrink(),
                   ),
-                ),
-                IconButton(
-                  tooltip: 'Options de la file',
-                  icon: Icon(Icons.more_vert_rounded, color: c.t2),
-                  onPressed: () => _ouvrirMenuFile(context),
-                ),
-              ]),
+                ],
+              ),
             ),
           ),
-          if (liste.isEmpty)
+          if (vide)
             SliverFillRemaining(
               hasScrollBody: false,
               child: Center(
@@ -266,18 +312,127 @@ class _PageFileState extends State<PageFile> {
                 ]),
               ),
             )
-          else
-            SliverPadding(
-              padding: EdgeInsets.fromLTRB(16, 12, 16, 120 + MediaQuery.paddingOf(context).bottom),
-              sliver: SliverList.separated(
-                itemCount: liste.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (context, i) => CarteTache(liste[i], key: ValueKey(liste[i].id),
-                    positionFile: positions[liste[i].id] ?? -1, nombreFile: attente.length),
+          else ...[
+            if (actifsEnCours.isNotEmpty)
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(16, 12, 16, fileReordonnable.isEmpty && autres.isEmpty ? bas : 10),
+                sliver: SliverList.separated(
+                  itemCount: actifsEnCours.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 10),
+                  itemBuilder: (context, i) => CarteTache(actifsEnCours[i], key: ValueKey(actifsEnCours[i].id)),
+                ),
               ),
-            ),
+            if (fileReordonnable.isNotEmpty)
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(16, actifsEnCours.isEmpty ? 12 : 0, 16, autres.isEmpty ? bas : 10),
+                sliver: SliverReorderableList(
+                  itemCount: fileReordonnable.length,
+                  proxyDecorator: (child, index, animation) => AnimatedBuilder(
+                    animation: animation,
+                    builder: (context, _) {
+                      final t = Curves.easeOutCubic.transform(animation.value);
+                      return Transform.scale(
+                        scale: 1 + 0.015 * t,
+                        child: Material(
+                          color: Colors.transparent,
+                          borderRadius: BorderRadius.circular(22),
+                          elevation: 10 * t,
+                          shadowColor: Colors.black.withAlpha(70),
+                          child: child,
+                        ),
+                      );
+                    },
+                  ),
+                  onReorderItem: (oldIndex, newIndex) {
+                    if (newIndex == oldIndex) return;
+                    HapticFeedback.mediumImpact();
+                    final tache = fileReordonnable[oldIndex];
+                    final cibleId = fileReordonnable[newIndex].id;
+                    final posCible = positions[cibleId] ?? newIndex;
+                    gestionnaire.deplacer(tache.id, posCible);
+                  },
+                  itemBuilder: (context, i) {
+                    final t = fileReordonnable[i];
+                    return Padding(
+                      key: ValueKey(t.id),
+                      padding: EdgeInsets.only(bottom: i < fileReordonnable.length - 1 ? 10 : 0),
+                      child: CarteTache(
+                        t,
+                        positionFile: positions[t.id] ?? -1,
+                        nombreFile: attente.length,
+                        poignee: fileReordonnable.length > 1
+                            ? ReorderableDragStartListener(
+                                index: i,
+                                child: Tooltip(
+                                  message: 'Glisser pour réordonner',
+                                  child: Container(
+                                    padding: const EdgeInsets.all(6),
+                                    margin: const EdgeInsets.only(left: 4),
+                                    decoration: BoxDecoration(
+                                      color: c.verre3,
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(color: c.trait),
+                                    ),
+                                    child: Icon(Icons.drag_indicator_rounded, color: c.t2, size: 18),
+                                  ),
+                                ),
+                              )
+                            : null,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            if (autres.isNotEmpty)
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(16, actifsEnCours.isEmpty && fileReordonnable.isEmpty ? 12 : 0, 16, bas),
+                sliver: SliverList.separated(
+                  itemCount: autres.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 10),
+                  itemBuilder: (context, i) => CarteTache(autres[i], key: ValueKey(autres[i].id)),
+                ),
+              ),
+          ],
         ]);
       },
+    );
+  }
+}
+
+class _BoutonActionFile extends StatelessWidget {
+  final String label;
+  final IconData icone;
+  final Color couleur;
+  final VoidCallback onTap;
+  const _BoutonActionFile({required this.label, required this.icone, required this.couleur, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: couleur.withAlpha(c.sombre ? 34 : 22),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: couleur.withAlpha(c.sombre ? 90 : 70)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () {
+            HapticFeedback.selectionClick();
+            onTap();
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icone, size: 16, color: couleur),
+              const SizedBox(width: 6),
+              Text(label, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: couleur)),
+            ]),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -302,7 +457,8 @@ class _PageFileState extends State<PageFile> {
 class CarteTache extends StatelessWidget {
   final Tache t;
   final int? positionFile, nombreFile;
-  const CarteTache(this.t, {super.key, this.positionFile, this.nombreFile});
+  final Widget? poignee;
+  const CarteTache(this.t, {super.key, this.positionFile, this.nombreFile, this.poignee});
 
   Future<void> _corriger(BuildContext context, Remede action) async {
     if (action == Remede.cookies) {
@@ -408,9 +564,7 @@ class CarteTache extends StatelessWidget {
     final principal = t.fichierPrincipal;
     final action = t.statut == 'erreur' ? remede(t.erreur) : null;
     // La page calcule l'ordre une seule fois pour toutes les cartes.
-    final attente = positionFile == null || nombreFile == null ? g.fileAttente : null;
-    final position = positionFile ?? attente!.indexWhere((e) => e.id == t.id);
-    final nombre = nombreFile ?? attente!.length;
+    final position = positionFile ?? g.fileAttente.indexWhere((e) => e.id == t.id);
     return Verre(
       padding: const EdgeInsets.all(12),
       rayon: 20,
@@ -452,6 +606,7 @@ class CarteTache extends StatelessWidget {
                 ),
             ]),
           ),
+          ?poignee,
         ]),
         if (actif || t.statut == 'pause' || t.statut == 'en_attente') ...[
           const SizedBox(height: 10),
@@ -507,17 +662,6 @@ class CarteTache extends StatelessWidget {
           ),
         const SizedBox(height: 8),
         Wrap(alignment: WrapAlignment.end, children: [
-          if (position >= 0 && nombre > 1)
-            PopupMenuButton<int>(
-              tooltip: 'Réorganiser la file',
-              icon: const Icon(Icons.low_priority_rounded),
-              onSelected: (cible) => g.deplacer(t.id, cible),
-              itemBuilder: (_) => [
-                if (position > 0) const PopupMenuItem(value: 0, child: Text('Passer en premier')),
-                if (position > 1) PopupMenuItem(value: position - 1, child: const Text('Monter')),
-                if (position < nombre - 1) PopupMenuItem(value: position + 1, child: const Text('Descendre')),
-              ],
-            ),
           if (actifs.contains(t.statut))
             _Action(Icons.pause_rounded, 'Pause', () => g.pause(t.id)),
           if (t.statut == 'pause') _Action(Icons.play_arrow_rounded, 'Reprendre', () => g.reprendre(t.id)),

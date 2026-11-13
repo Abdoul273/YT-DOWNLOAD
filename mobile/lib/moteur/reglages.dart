@@ -59,6 +59,8 @@ const reglagesDefaut = <String, dynamic>{
   'lecteur_reprendre': true,
   'favoris': <String>[], // ids des fichiers favoris
   'tri_fichiers': 'recent',
+  'fichiers_vue_grille': false, // false = liste, true = grille médiathèque
+  'playlists_locales': <Map<String, dynamic>>[], // playlists créées hors-ligne dans Fichiers
   'theme': 'sombre',
   'maj_auto': true,
   'derniere_maj': 0,

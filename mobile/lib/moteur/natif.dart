@@ -124,6 +124,36 @@ class Natif {
       await _canal.invokeMethod<int>('espaceLibre', {'telechargements': telechargements, 'travail': travail}) ?? 0;
   static Future<bool> supprimerFichier(String uri) async =>
       await _canal.invokeMethod<bool>('supprimerFichier', {'uri': uri}) ?? false;
+  static Future<({String nom, String chemin})?> renommerFichier(String uri, String nouveauNom) async {
+    final r = await _canal.invokeMapMethod<String, dynamic>('renommerFichier', {'uri': uri, 'nouveauNom': nouveauNom});
+    if (r == null) return null;
+    return (nom: (r['nom'] ?? nouveauNom).toString(), chemin: (r['chemin'] ?? '').toString());
+  }
+
+  static Future<FichierPublie> extraireAudio({
+    required String uri,
+    required String titre,
+    String format = 'mp3',
+  }) async {
+    final r = await _canal.invokeMapMethod<String, dynamic>('extraireAudio', {
+      'uri': uri,
+      'titre': titre,
+      'format': format,
+    });
+    if (r == null) throw Exception('Aucun fichier audio retourné.');
+    return FichierPublie.depuis(r);
+  }
+
+  static Future<({int libre, int total, List<FichierPublie> fichiers})> etatStockage() async {
+    final r = await _canal.invokeMapMethod<String, dynamic>('etatStockage');
+    if (r == null) return (libre: 0, total: 0, fichiers: <FichierPublie>[]);
+    final bruts = (r['fichiers'] as List?) ?? const [];
+    return (
+      libre: ((r['libre'] ?? 0) as num).toInt(),
+      total: ((r['total'] ?? 0) as num).toInt(),
+      fichiers: [for (final d in bruts.whereType<Map>()) FichierPublie.depuis(d)],
+    );
+  }
   static Future<void> ouvrir(String uri, String mime) => _canal.invokeMethod('ouvrir', {'uri': uri, 'mime': mime});
   static Future<void> partager(String uri, String mime) =>
       _canal.invokeMethod('partager', {'uri': uri, 'mime': mime});

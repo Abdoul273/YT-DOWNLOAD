@@ -2,6 +2,8 @@
 /// Gère aussi les playlists/chaînes et les lots de plusieurs liens.
 library;
 
+import 'dart:math' show max, min;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -15,6 +17,31 @@ import 'apercu.dart';
 import 'etat.dart';
 import 'lecteur.dart';
 import 'theme.dart';
+
+/// Convertit une saisie `ss`, `m:ss` ou `h:mm:ss` en secondes, ou `null` si invalide.
+int? parserHorodatage(String brut) {
+  final t = brut.trim();
+  if (t.isEmpty) return null;
+  final parts = t.split(':');
+  if (parts.length > 3) return null;
+  var total = 0;
+  for (var i = 0; i < parts.length; i++) {
+    final v = int.tryParse(parts[i].trim());
+    if (v == null || v < 0) return null;
+    if (i > 0 && v >= 60) return null;
+    total = total * 60 + v;
+  }
+  return total;
+}
+
+/// Formate un nombre de secondes en `m:ss` ou `h:mm:ss`.
+String formaterHorodatage(int sec) {
+  final s = sec < 0 ? 0 : sec;
+  final h = s ~/ 3600;
+  final m = (s % 3600) ~/ 60;
+  final r = (s % 60).toString().padLeft(2, '0');
+  return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:$r' : '$m:$r';
+}
 
 bool _ajoutEnCours = false;
 
@@ -85,7 +112,8 @@ Future<List<Tache>> _ajouterAvecConfirmation(BuildContext context, List<Ajout> e
 }
 
 class PageVideo extends StatefulWidget {
-  const PageVideo({super.key});
+  final Object? resultatInitial;
+  const PageVideo({super.key, @visibleForTesting this.resultatInitial});
   @override
   State<PageVideo> createState() => _PageVideoState();
 }
@@ -94,7 +122,7 @@ class _PageVideoState extends State<PageVideo> {
   final _champ = TextEditingController();
   bool _charge = false;
   String? _erreur;
-  Object? _resultat; // ResumeVideo | Playlist | List<String> (lot)
+  late Object? _resultat = widget.resultatInitial; // ResumeVideo | Playlist | List<String> (lot)
   int _jeton = 0;
 
   @override
@@ -337,6 +365,9 @@ class _VueVideoState extends State<_VueVideo> {
   bool _parolesInit = false;
   late bool _sponsor = reglages['sponsorblock'];
   final _debut = TextEditingController(), _fin = TextEditingController();
+  final _positionApercu = ValueNotifier<Duration?>(null);
+  late double _plageDebut = 0;
+  late double _plageFin = (widget.v.duree ?? 0).toDouble();
 
   @override
   void initState() {
@@ -377,7 +408,34 @@ class _VueVideoState extends State<_VueVideo> {
   void dispose() {
     _debut.dispose();
     _fin.dispose();
+    _positionApercu.dispose();
     super.dispose();
+  }
+
+  void _appliquerPlage(double debut, double fin, int dureeTotal) {
+    final maxD = dureeTotal.toDouble();
+    final d = debut.clamp(0.0, max(0.0, fin - 1)).round();
+    final f = fin.clamp(min(maxD, (d + 1).toDouble()), maxD).round();
+    setState(() {
+      _plageDebut = d.toDouble();
+      _plageFin = f.toDouble();
+      if (d <= 0 && f >= dureeTotal) {
+        _debut.text = '';
+        _fin.text = '';
+      } else {
+        _debut.text = d <= 0 ? '' : formaterHorodatage(d);
+        _fin.text = f >= dureeTotal ? '' : formaterHorodatage(f);
+      }
+    });
+  }
+
+  void _synchroniserDepuisChamps(int dureeTotal) {
+    final d = (parserHorodatage(_debut.text) ?? 0).clamp(0, max(0, dureeTotal - 1));
+    final f = (parserHorodatage(_fin.text) ?? dureeTotal).clamp(min(dureeTotal, d + 1), dureeTotal);
+    setState(() {
+      _plageDebut = d.toDouble();
+      _plageFin = f.toDouble();
+    });
   }
 
   bool get _sansDoublage =>
@@ -424,7 +482,7 @@ class _VueVideoState extends State<_VueVideo> {
       Verre(
         padding: const EdgeInsets.all(12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Apercu(v),
+          Apercu(v, positionCourante: _positionApercu),
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 12, 4, 4),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -599,7 +657,15 @@ class _VueVideoState extends State<_VueVideo> {
             iconColor: c.t2,
             collapsedIconColor: c.t3,
             title: Text('Options avancées', style: TextStyle(fontWeight: FontWeight.w700, color: c.t1, fontSize: 14.5)),
-            subtitle: Text('Sous-titres, extrait, chapitres, SponsorBlock', style: TextStyle(color: c.t3, fontSize: 12)),
+            subtitle: Text(
+              _debut.text.isNotEmpty || _fin.text.isNotEmpty
+                  ? 'Extrait ${_debut.text.isEmpty ? '0:00' : _debut.text} → ${_fin.text.isEmpty ? (v.duree != null ? formaterHorodatage(v.duree!) : 'fin') : _fin.text}'
+                  : 'Sous-titres, extrait, chapitres, SponsorBlock',
+              style: TextStyle(
+                color: _debut.text.isNotEmpty || _fin.text.isNotEmpty ? c.cyan : c.t3,
+                fontSize: 12,
+              ),
+            ),
             childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
             expandedCrossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -627,12 +693,113 @@ class _VueVideoState extends State<_VueVideo> {
               _Interrupteur('SponsorBlock', 'Retirer sponsors, autopromo, rappels d’abonnement', _sponsor,
                   (x) => setState(() => _sponsor = x)),
               const SizedBox(height: 10),
-              const Etiquette('Extrait'),
-              Row(children: [
-                Expanded(child: _ChampTemps(_debut, 'Début (0:30)')),
-                const SizedBox(width: 10),
-                Expanded(child: _ChampTemps(_fin, 'Fin (2:15)')),
-              ]),
+              if (v.duree != null && v.duree! > 1 && !v.direct) ...[
+                Etiquette(
+                  'Extrait',
+                  fin: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text(
+                      '${formaterHorodatage(_plageDebut.round())} – ${formaterHorodatage(_plageFin.round())} '
+                      '(${formaterHorodatage((_plageFin - _plageDebut).round())})',
+                      style: mono(context, taille: 11, couleur: c.cyan),
+                    ),
+                    if (_debut.text.isNotEmpty || _fin.text.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => _appliquerPlage(0, v.duree!.toDouble(), v.duree!),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          child: Text('Tout', style: TextStyle(color: c.indigo, fontSize: 11.5, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ],
+                  ]),
+                ),
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    activeTrackColor: c.indigo,
+                    inactiveTrackColor: c.trait2,
+                    thumbColor: c.cyan,
+                    overlayColor: c.indigo.withAlpha(45),
+                    rangeValueIndicatorShape: const PaddleRangeSliderValueIndicatorShape(),
+                    valueIndicatorColor: c.indigo,
+                    valueIndicatorTextStyle: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w700),
+                  ),
+                  child: RangeSlider(
+                    values: RangeValues(
+                      _plageDebut.clamp(0.0, v.duree!.toDouble() - 1),
+                      _plageFin.clamp(_plageDebut + 1, v.duree!.toDouble()),
+                    ),
+                    min: 0,
+                    max: v.duree!.toDouble(),
+                    labels: RangeLabels(
+                      formaterHorodatage(_plageDebut.round()),
+                      formaterHorodatage(_plageFin.round()),
+                    ),
+                    onChanged: (plage) => _appliquerPlage(plage.start, plage.end, v.duree!),
+                  ),
+                ),
+                ValueListenableBuilder<Duration?>(
+                  valueListenable: _positionApercu,
+                  builder: (_, pos, _) {
+                    final sec = pos?.inSeconds;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(
+                            sec != null ? 'Aperçu : ${formaterHorodatage(sec)}' : 'Lance l’aperçu pour capturer la position',
+                            style: TextStyle(color: sec != null ? c.cyan : c.t3, fontSize: 11.5, fontWeight: FontWeight.w600),
+                          ),
+                          _BoutonCaptureTemps(
+                            icone: Icons.first_page_rounded,
+                            texte: 'Début ici',
+                            actif: sec != null,
+                            couleur: c.indigo,
+                            onTap: sec == null
+                                ? null
+                                : () {
+                                    HapticFeedback.selectionClick();
+                                    _appliquerPlage(sec.toDouble(), max(_plageFin, sec + 1.0), v.duree!);
+                                  },
+                          ),
+                          _BoutonCaptureTemps(
+                            icone: Icons.last_page_rounded,
+                            texte: 'Fin ici',
+                            actif: sec != null,
+                            couleur: c.violet,
+                            onTap: sec == null
+                                ? null
+                                : () {
+                                    HapticFeedback.selectionClick();
+                                    _appliquerPlage(min(_plageDebut, max(0.0, sec - 1.0)), sec.toDouble(), v.duree!);
+                                  },
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+                Row(children: [
+                  Expanded(
+                    child: _ChampTemps(_debut, 'Début (0:00)', onChanged: (_) => _synchroniserDepuisChamps(v.duree!)),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _ChampTemps(_fin, 'Fin (${formaterHorodatage(v.duree!)})', onChanged: (_) => _synchroniserDepuisChamps(v.duree!)),
+                  ),
+                ]),
+              ] else ...[
+                const Etiquette('Extrait'),
+                Row(children: [
+                  Expanded(child: _ChampTemps(_debut, 'Début (0:30)')),
+                  const SizedBox(width: 10),
+                  Expanded(child: _ChampTemps(_fin, 'Fin (2:15)')),
+                ]),
+              ],
             ],
           ),
         ),
@@ -697,16 +864,62 @@ class _Interrupteur extends StatelessWidget {
   }
 }
 
+class _BoutonCaptureTemps extends StatelessWidget {
+  final IconData icone;
+  final String texte;
+  final bool actif;
+  final Color couleur;
+  final VoidCallback? onTap;
+  const _BoutonCaptureTemps({
+    required this.icone,
+    required this.texte,
+    required this.actif,
+    required this.couleur,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: AnimatedOpacity(
+          opacity: actif ? 1.0 : 0.45,
+          duration: const Duration(milliseconds: 160),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            decoration: BoxDecoration(
+              color: couleur.withAlpha(c.sombre ? 34 : 20),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: couleur.withAlpha(c.sombre ? 105 : 75)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icone, size: 15, color: couleur),
+              const SizedBox(width: 4),
+              Text(texte, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: c.t1)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ChampTemps extends StatelessWidget {
   final TextEditingController ctrl;
   final String indice;
-  const _ChampTemps(this.ctrl, this.indice);
+  final ValueChanged<String>? onChanged;
+  const _ChampTemps(this.ctrl, this.indice, {this.onChanged});
   @override
   Widget build(BuildContext context) {
     final c = context.c;
     return TextField(
       controller: ctrl,
       keyboardType: TextInputType.datetime,
+      onChanged: onChanged,
       style: mono(context, taille: 13, couleur: c.t1),
       decoration: InputDecoration(
         hintText: indice,
@@ -733,7 +946,15 @@ class _OptionsRapides extends StatelessWidget {
       Row(children: [
         Expanded(child: Puce('🎬  Vidéo', choisie: type == 'video', onTap: () => onType('video'))),
         const SizedBox(width: 10),
-        Expanded(child: Puce('🎧  Audio (${(reglages['format_audio'] as String).toUpperCase()})', choisie: type == 'audio', onTap: () => onType('audio'))),
+        Expanded(
+          child: Puce(
+            reglages['format_audio'] == 'original'
+                ? '🎧  Audio'
+                : '🎧  Audio (${(reglages['format_audio'] as String).toUpperCase()})',
+            choisie: type == 'audio',
+            onTap: () => onType('audio'),
+          ),
+        ),
       ]),
       if (type == 'video') ...[
         const SizedBox(height: 12),
@@ -763,6 +984,53 @@ class _VuePlaylistState extends State<_VuePlaylist> {
   late final Set<int> _choisies = {for (var i = 0; i < widget.p.entrees.length; i++) i};
   late String _type = reglages['type'], _qualite = reglages['qualite'];
   int _affichees = 50; // les grosses playlists s'affichent par tranches pour rester fluides
+  final _filtreCtrl = TextEditingController();
+  final _plageDe = TextEditingController();
+  final _plageA = TextEditingController();
+  String _requete = '';
+  bool _plageOuverte = false;
+
+  @override
+  void dispose() {
+    _filtreCtrl.dispose();
+    _plageDe.dispose();
+    _plageA.dispose();
+    super.dispose();
+  }
+
+  List<({int index, analyse.Entree entree})> _filtrerEntrees() {
+    final entrees = widget.p.entrees;
+    final q = _requete.trim().toLowerCase();
+    return [
+      for (var i = 0; i < entrees.length; i++)
+        if (q.isEmpty ||
+            entrees[i].titre.toLowerCase().contains(q) ||
+            (entrees[i].chaine ?? '').toLowerCase().contains(q))
+          (index: i, entree: entrees[i]),
+    ];
+  }
+
+  void _appliquerPlage(int de1Based, int a1Based, {String mode = 'remplacer'}) {
+    final total = widget.p.entrees.length;
+    if (total == 0) return;
+    final lo = min(de1Based, a1Based).clamp(1, total);
+    final hi = max(de1Based, a1Based).clamp(1, total);
+    final cibles = [for (var i = lo - 1; i < hi; i++) i];
+    setState(() {
+      if (mode == 'remplacer') {
+        _choisies
+          ..clear()
+          ..addAll(cibles);
+      } else if (mode == 'ajouter') {
+        _choisies.addAll(cibles);
+      } else {
+        _choisies.removeAll(cibles);
+      }
+    });
+    HapticFeedback.selectionClick();
+    final libelle = mode == 'retirer' ? 'décochées' : 'sélectionnées';
+    toast(context, '${cibles.length} vidéo${cibles.length > 1 ? 's' : ''} $libelle (#$lo–#$hi)');
+  }
 
   Future<void> _telecharger() async {
     final p = widget.p;
@@ -783,7 +1051,9 @@ class _VuePlaylistState extends State<_VuePlaylist> {
   Widget build(BuildContext context) {
     final c = context.c;
     final p = widget.p;
-    final tout = _choisies.length == p.entrees.length;
+    final filtrees = _filtrerEntrees();
+    final toutVisibles = filtrees.isNotEmpty && filtrees.every((x) => _choisies.contains(x.index));
+
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Verre(
         child: Row(children: [
@@ -804,48 +1074,220 @@ class _VuePlaylistState extends State<_VuePlaylist> {
       const SizedBox(height: 12),
       Verre(child: _OptionsRapides(_type, _qualite, (x) => setState(() => _type = x), (x) => setState(() => _qualite = x))),
       const SizedBox(height: 12),
+      TextField(
+        controller: _filtreCtrl,
+        onChanged: (v) => setState(() => _requete = v),
+        style: TextStyle(color: c.t1),
+        decoration: InputDecoration(
+          hintText: 'Filtrer la playlist (${p.entrees.length} vidéos)…',
+          hintStyle: TextStyle(color: c.t3, fontSize: 13.5),
+          prefixIcon: Icon(Icons.filter_list_rounded, color: c.t3),
+          suffixIcon: _requete.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'Effacer le filtre',
+                  icon: Icon(Icons.close_rounded, color: c.t3, size: 19),
+                  onPressed: () {
+                    _filtreCtrl.clear();
+                    setState(() => _requete = '');
+                  },
+                ),
+          filled: true,
+          fillColor: c.verre2,
+          isDense: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: c.trait)),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: c.trait)),
+        ),
+      ),
+      const SizedBox(height: 8),
       Row(children: [
-        Text('${_choisies.length} / ${p.entrees.length} sélectionnées', style: TextStyle(color: c.t2, fontSize: 13)),
-        const Spacer(),
+        Expanded(
+          child: Text(
+            _requete.trim().isNotEmpty
+                ? '${_choisies.length} cochées · ${filtrees.length} affichées / ${p.entrees.length}'
+                : '${_choisies.length} / ${p.entrees.length} sélectionnées',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: c.t2, fontSize: 12.5),
+          ),
+        ),
+        if (p.entrees.length > 1)
+          TextButton.icon(
+            onPressed: () => setState(() => _plageOuverte = !_plageOuverte),
+            icon: Icon(Icons.linear_scale_rounded, size: 17, color: _plageOuverte ? c.cyan : c.t2),
+            label: Text('Plage', style: TextStyle(color: _plageOuverte ? c.cyan : c.t2)),
+          ),
         TextButton(
-          onPressed: () => setState(() => tout
-              ? _choisies.clear()
-              : _choisies.addAll(List.generate(p.entrees.length, (i) => i))),
-          child: Text(tout ? 'Tout décocher' : 'Tout cocher'),
+          onPressed: filtrees.isEmpty
+              ? null
+              : () => setState(() {
+                    if (toutVisibles) {
+                      for (final x in filtrees) {
+                        _choisies.remove(x.index);
+                      }
+                    } else {
+                      for (final x in filtrees) {
+                        _choisies.add(x.index);
+                      }
+                    }
+                  }),
+          child: Text(
+            _requete.trim().isNotEmpty
+                ? (toutVisibles ? 'Décocher filtrées' : 'Cocher filtrées')
+                : (toutVisibles ? 'Tout décocher' : 'Tout cocher'),
+          ),
         ),
       ]),
+      AnimatedSize(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        child: !_plageOuverte
+            ? const SizedBox.shrink()
+            : Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Verre(
+                  padding: const EdgeInsets.all(12),
+                  rayon: 16,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Etiquette('Sélection rapide par plage'),
+                      Wrap(spacing: 8, runSpacing: 8, children: [
+                        Puce('1–10', onTap: () => _appliquerPlage(1, min(10, p.entrees.length))),
+                        if (p.entrees.length > 10)
+                          Puce('1–25', onTap: () => _appliquerPlage(1, min(25, p.entrees.length))),
+                        if (p.entrees.length > 25)
+                          Puce('26–50', onTap: () => _appliquerPlage(26, min(50, p.entrees.length))),
+                        if (p.entrees.length > 50)
+                          Puce('51–100', onTap: () => _appliquerPlage(51, min(100, p.entrees.length))),
+                      ]),
+                      const SizedBox(height: 10),
+                      Row(children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _plageDe,
+                            keyboardType: TextInputType.number,
+                            style: mono(context, taille: 13, couleur: c.t1),
+                            decoration: InputDecoration(
+                              hintText: 'De # (1)',
+                              hintStyle: TextStyle(color: c.t3, fontSize: 12.5),
+                              isDense: true,
+                              filled: true,
+                              fillColor: c.verre2,
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: c.trait)),
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Text('→', style: TextStyle(color: c.t2, fontWeight: FontWeight.w700)),
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: _plageA,
+                            keyboardType: TextInputType.number,
+                            style: mono(context, taille: 13, couleur: c.t1),
+                            decoration: InputDecoration(
+                              hintText: 'À # (${p.entrees.length})',
+                              hintStyle: TextStyle(color: c.t3, fontSize: 12.5),
+                              isDense: true,
+                              filled: true,
+                              fillColor: c.verre2,
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: c.trait)),
+                            ),
+                          ),
+                        ),
+                      ]),
+                      const SizedBox(height: 10),
+                      Wrap(spacing: 8, runSpacing: 8, children: [
+                        BoutonVerre(
+                          icone: Icons.done_all_rounded,
+                          texte: 'Sélectionner',
+                          couleur: c.indigo,
+                          onTap: () {
+                            final d = int.tryParse(_plageDe.text.trim()) ?? 1;
+                            final f = int.tryParse(_plageA.text.trim()) ?? p.entrees.length;
+                            _appliquerPlage(d, f, mode: 'remplacer');
+                          },
+                        ),
+                        BoutonVerre(
+                          icone: Icons.add_rounded,
+                          texte: 'Ajouter',
+                          couleur: c.cyan,
+                          onTap: () {
+                            final d = int.tryParse(_plageDe.text.trim()) ?? 1;
+                            final f = int.tryParse(_plageA.text.trim()) ?? p.entrees.length;
+                            _appliquerPlage(d, f, mode: 'ajouter');
+                          },
+                        ),
+                        BoutonVerre(
+                          icone: Icons.remove_rounded,
+                          texte: 'Retirer',
+                          couleur: c.ambre,
+                          onTap: () {
+                            final d = int.tryParse(_plageDe.text.trim()) ?? 1;
+                            final f = int.tryParse(_plageA.text.trim()) ?? p.entrees.length;
+                            _appliquerPlage(d, f, mode: 'retirer');
+                          },
+                        ),
+                      ]),
+                    ],
+                  ),
+                ),
+              ),
+      ),
       Verre(
         padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Column(children: [
-          for (var i = 0; i < p.entrees.length && i < _affichees; i++)
-            InkWell(
-              onTap: () => setState(() => _choisies.contains(i) ? _choisies.remove(i) : _choisies.add(i)),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                child: Row(children: [
-                  Checkbox(
-                    value: _choisies.contains(i),
-                    onChanged: (_) => setState(() => _choisies.contains(i) ? _choisies.remove(i) : _choisies.add(i)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+        child: filtrees.isEmpty
+            ? Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 12),
+                child: Text(
+                  'Aucune vidéo ne correspond à « $_requete ».',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: c.t3, fontSize: 13),
+                ),
+              )
+            : Column(children: [
+                for (var k = 0; k < filtrees.length && k < _affichees; k++)
+                  Builder(builder: (_) {
+                    final idx = filtrees[k].index;
+                    final item = filtrees[k].entree;
+                    final coche = _choisies.contains(idx);
+                    return InkWell(
+                      onTap: () => setState(() => coche ? _choisies.remove(idx) : _choisies.add(idx)),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        child: Row(children: [
+                          Checkbox(
+                            value: coche,
+                            onChanged: (_) => setState(() => coche ? _choisies.remove(idx) : _choisies.add(idx)),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          ),
+                          Miniature(item.miniature, largeur: 96, rayon: 10, texteDuree: formaterDuree(item.duree)),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(
+                                '#${idx + 1} · ${item.titre}',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(color: c.t1, fontSize: 13.5, fontWeight: FontWeight.w600),
+                              ),
+                              if (item.chaine != null && item.chaine!.isNotEmpty)
+                                Text(item.chaine!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.t3, fontSize: 11)),
+                            ]),
+                          ),
+                        ]),
+                      ),
+                    );
+                  }),
+                if (filtrees.length > _affichees)
+                  TextButton.icon(
+                    onPressed: () => setState(() => _affichees += 100),
+                    icon: const Icon(Icons.expand_more_rounded),
+                    label: Text('Afficher plus (${filtrees.length - _affichees} restantes)'),
                   ),
-                  Miniature(p.entrees[i].miniature, largeur: 96, rayon: 10, texteDuree: formaterDuree(p.entrees[i].duree)),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(p.entrees[i].titre,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: c.t1, fontSize: 13.5, fontWeight: FontWeight.w600)),
-                  ),
-                ]),
-              ),
-            ),
-          if (p.entrees.length > _affichees)
-            TextButton.icon(
-              onPressed: () => setState(() => _affichees += 100),
-              icon: const Icon(Icons.expand_more_rounded),
-              label: Text('Afficher plus (${p.entrees.length - _affichees} restantes)'),
-            ),
-        ]),
+              ]),
       ),
       const SizedBox(height: 16),
       BoutonGrad('Télécharger ${_choisies.length} vidéo${_choisies.length > 1 ? 's' : ''}',

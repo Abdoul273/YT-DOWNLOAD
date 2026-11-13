@@ -90,20 +90,21 @@ int? _ts(String? uploadDate) {
 
 /// Une vidéo d'une liste (recherche, playlist, chaîne).
 class Entree {
-  final String? id, url, miniature, chaine, chaineId;
+  final String? id, url, miniature, chaine, chaineId, chaineUrl;
   final String titre;
   final int? duree, vues, date;
   final bool direct;
   Entree(this.id, this.titre, this.url, this.duree, this.miniature, this.chaine, this.vues, this.date, this.direct,
-      {this.chaineId});
+      {this.chaineId, this.chaineUrl});
 
   Json versJson() => {
         'id': id, 'titre': titre, 'url': url, 'duree': duree, 'miniature': miniature, 'chaine': chaine,
         'vues': vues, 'date': date, 'direct': direct, 'chaine_id': chaineId,
+        if (chaineUrl != null) 'chaine_url': chaineUrl,
       };
   factory Entree.depuis(Map d) => Entree(d['id'], d['titre'] ?? 'Sans titre', d['url'], d['duree'], d['miniature'],
       d['chaine'], d['vues'], d['date'], d['direct'] == true,
-      chaineId: d['chaine_id']);
+      chaineId: d['chaine_id'], chaineUrl: d['chaine_url']);
 }
 
 Entree _entree(Json e) {
@@ -118,6 +119,83 @@ Entree _entree(Json e) {
     ((e['timestamp'] ?? e['release_timestamp']) as num?)?.toInt() ?? _ts(e['upload_date'] as String?),
     e['live_status'] == 'is_live',
     chaineId: e['channel_id'] as String?,
+    chaineUrl: (e['channel_url'] ?? e['uploader_url']) as String?,
+  );
+}
+
+/// Résultat d'exploration d'une chaîne YouTube (Vidéos, Shorts ou Directs).
+class InfosChaine {
+  final String titre;
+  final String url;
+  final String? avatar;
+  final int? abonnes;
+  final List<Entree> entrees;
+  const InfosChaine({
+    required this.titre,
+    required this.url,
+    this.avatar,
+    this.abonnes,
+    required this.entrees,
+  });
+}
+
+String _racineChaine(String url) {
+  var u = url.trim().split('?').first.replaceFirst(RegExp(r'/+$'), '');
+  u = u.replaceFirst(RegExp(r'/(videos|shorts|streams|playlists|featured|community)$'), '');
+  return u;
+}
+
+/// Charge les vidéos d'une chaîne YouTube depuis son lien, son ID ou une vidéo de secours.
+Future<InfosChaine> explorerChaine({
+  String? chaineUrl,
+  String? chaineId,
+  String? nomChaine,
+  String? videoUrlSecours,
+  String section = 'videos',
+  int max = 30,
+}) async {
+  var base = (chaineUrl ?? '').trim();
+  if (base.isEmpty && chaineId != null && chaineId.isNotEmpty) {
+    base = 'https://www.youtube.com/channel/$chaineId';
+  }
+  String? resolvedId = chaineId;
+  if (base.isEmpty && videoUrlSecours != null && videoUrlSecours.isNotEmpty) {
+    final info = await infoComplete(videoUrlSecours);
+    base = ((info['channel_url'] ?? info['uploader_url']) as String?) ?? '';
+    resolvedId ??= info['channel_id'] as String?;
+    if (base.isEmpty && resolvedId != null && resolvedId.isNotEmpty) {
+      base = 'https://www.youtube.com/channel/$resolvedId';
+    }
+  }
+  if (base.isEmpty) throw ErreurAnalyse('Chaîne introuvable pour cette vidéo.');
+  final racine = _racineChaine(normaliserUrl(base));
+  final cible = '$racine/$section';
+  final brut = await _extraire(cible, ['--flat-playlist', '--playlist-end', '$max']);
+  final titreBrut = ((brut['channel'] ?? brut['uploader'] ?? brut['title'] ?? nomChaine ?? 'Chaîne') as String)
+      .replaceFirst(RegExp(r'\s*-\s*(Videos|Shorts|Live|Streams)$', caseSensitive: false), '')
+      .trim();
+  final nomFinal = titreBrut.isEmpty ? (nomChaine ?? 'Chaîne') : titreBrut;
+  final chId = (brut['channel_id'] as String?) ?? resolvedId;
+  final entrees = <Entree>[
+    for (final item in ((brut['entries'] as List?) ?? []).whereType<Map>())
+      if (item['id'] != null && item['ie_key'] != 'YoutubeTab')
+        (() {
+          final e = _entree(item.cast<String, dynamic>());
+          if ((e.chaine != null && e.chaine!.isNotEmpty) && (e.chaineId != null || chId == null)) return e;
+          return Entree(
+            e.id, e.titre, e.url, e.duree, e.miniature,
+            e.chaine ?? nomFinal, e.vues, e.date, e.direct,
+            chaineId: e.chaineId ?? chId,
+            chaineUrl: e.chaineUrl ?? racine,
+          );
+        })(),
+  ];
+  return InfosChaine(
+    titre: nomFinal,
+    url: cible,
+    avatar: miniature(brut) ?? (entrees.isNotEmpty ? entrees.first.miniature : null),
+    abonnes: (brut['channel_follower_count'] as num?)?.toInt(),
+    entrees: entrees,
   );
 }
 

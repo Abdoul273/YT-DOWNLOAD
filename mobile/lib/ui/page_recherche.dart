@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 
 import '../moteur/analyse.dart' as analyse;
 import '../moteur/gouts.dart';
+import '../moteur/reglages.dart';
 import '../moteur/taches.dart';
 import 'apercu.dart';
 import 'etat.dart';
@@ -519,10 +520,91 @@ void _regarderEnDirect(BuildContext context, List<analyse.Entree> liste, analyse
   );
 }
 
+bool _peutOuvrirChaine(analyse.Entree e) =>
+    (e.chaine != null && e.chaine!.trim().isNotEmpty) &&
+    ((e.chaineId != null && e.chaineId!.isNotEmpty) ||
+        (e.chaineUrl != null && e.chaineUrl!.isNotEmpty) ||
+        (e.url != null && e.url!.isNotEmpty));
+
+void _ouvrirPageChaine(BuildContext context, analyse.Entree e) {
+  if (!_peutOuvrirChaine(e)) return;
+  Navigator.of(context).push(PageRouteBuilder(
+    pageBuilder: (_, _, _) => PageChaine(
+      nomChaine: e.chaine!,
+      chaineId: e.chaineId,
+      chaineUrl: e.chaineUrl,
+      videoUrlSecours: e.url,
+    ),
+    transitionsBuilder: (_, a, _, w) => FadeTransition(opacity: a, child: w),
+  ));
+}
+
+Tache? _tacheExistantePourUrl(String url, String type) {
+  final cle = Gestionnaire.cleVideo(url);
+  for (final t in gestionnaire.taches) {
+    if (Gestionnaire.cleVideo(t.url) != cle) continue;
+    final tType = (t.options['type'] ?? 'video') as String;
+    if (t.statut == 'termine' && t.fichiers.isNotEmpty && tType == type) return t;
+    if (actifs.contains(t.statut) || t.statut == 'pause') return t;
+  }
+  return null;
+}
+
+Future<void> _telechargementRapide(BuildContext context, analyse.Entree e) async {
+  final url = e.url;
+  if (url == null || e.direct) return;
+  HapticFeedback.mediumImpact();
+  final type = (reglages['type'] as String?) ?? 'video';
+  final existant = await gestionnaire.doublon(url, type);
+  if (!context.mounted) return;
+  if (existant != null) {
+    if (existant.statut == 'termine' && existant.fichiers.isNotEmpty) {
+      unawaited(ouvrirLecteur(context, [existant], 0));
+      return;
+    }
+    toast(context, 'Déjà dans la file de téléchargement');
+    return;
+  }
+  final aj = await gestionnaire.ajouter([
+    Ajout(url, titre: e.titre, miniature: e.miniature, chaine: e.chaine, duree: e.duree),
+  ], {
+    'type': type,
+    'qualite': reglages['qualite'] ?? '1080',
+    'conteneur': reglages['conteneur'] ?? 'mp4',
+    'compatible': reglages['compatible'] == true,
+    'format_audio': reglages['format_audio'] ?? 'mp3',
+    'langue_audio': reglages['langue_audio'] ?? 'original',
+    'garder_vo': reglages['garder_vo'] ?? false,
+    'sponsorblock': reglages['sponsorblock'] ?? false,
+  });
+  if (!context.mounted) return;
+  if (aj.isEmpty) {
+    toast(context, 'Déjà présent dans la file');
+    return;
+  }
+  gouts.signal('telechargement', url: url, titre: e.titre, chaine: e.chaine, chaineId: e.chaineId);
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(
+      content: Row(children: [
+        Icon(Icons.download_done_rounded, color: context.c.vert, size: 20),
+        const SizedBox(width: 10),
+        Expanded(child: Text('Ajouté à la file : ${e.titre}', maxLines: 1, overflow: TextOverflow.ellipsis)),
+      ]),
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 96),
+      action: SnackBarAction(
+        label: 'File',
+        textColor: context.c.cyan,
+        onPressed: () => onglet.value = 2,
+      ),
+    ));
+}
+
 class _Resultat extends StatelessWidget {
   final analyse.Entree e;
   final List<analyse.Entree> liste;
-  const _Resultat(this.e, {this.liste = const []});
+  final bool surChaineInterne;
+  const _Resultat(this.e, {this.liste = const [], this.surChaineInterne = false});
 
   void _ouvrir() {
     gouts.signalEntree('clic', e);
@@ -642,6 +724,17 @@ class _Resultat extends StatelessWidget {
                         _ouvrir();
                       },
                     ),
+                    if (!surChaineInterne && _peutOuvrirChaine(e))
+                      _LigneActionRecherche(
+                        icone: Icons.account_circle_outlined,
+                        couleur: c.violet,
+                        titre: 'Explorer la chaîne',
+                        sousTitre: 'Voir toutes les vidéos de « ${e.chaine} »',
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _ouvrirPageChaine(context, e);
+                        },
+                      ),
                     _LigneActionRecherche(
                       icone: Icons.not_interested_rounded,
                       couleur: c.t2,
@@ -684,6 +777,7 @@ class _Resultat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.c;
+    final peutChaine = !surChaineInterne && _peutOuvrirChaine(e);
     return Verre(
       padding: const EdgeInsets.fromLTRB(10, 10, 0, 10),
       rayon: 20,
@@ -713,7 +807,27 @@ class _Resultat extends StatelessWidget {
                 style: TextStyle(fontWeight: FontWeight.w700, color: c.t1, fontSize: 13.5, height: 1.3)),
             const SizedBox(height: 4),
             if (e.chaine != null)
-              Text(e.chaine!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.t2, fontSize: 12)),
+              peutChaine
+                  ? InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => _ouvrirPageChaine(context, e),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 1),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Flexible(
+                            child: Text(
+                              e.chaine!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: c.cyan, fontSize: 12, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          const SizedBox(width: 3),
+                          Icon(Icons.chevron_right_rounded, size: 14, color: c.cyan),
+                        ]),
+                      ),
+                    )
+                  : Text(e.chaine!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.t2, fontSize: 12)),
             Text([formaterVues(e.vues), ilYA(e.date)].where((s) => s.isNotEmpty).join(' · '),
                 style: TextStyle(color: c.t3, fontSize: 11.5)),
             if (e.url != null) ...[
@@ -748,6 +862,49 @@ class _Resultat extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (!e.direct)
+                  ListenableBuilder(
+                    listenable: gestionnaire.statuts,
+                    builder: (context, _) {
+                      final type = (reglages['type'] as String?) ?? 'video';
+                      final existant = _tacheExistantePourUrl(e.url!, type);
+                      final termine = existant?.statut == 'termine';
+                      final actif = existant != null && !termine;
+                      final couleur = termine ? c.vert : (actif ? c.cyan : c.vert);
+                      final icone = termine
+                          ? Icons.check_circle_rounded
+                          : (actif ? Icons.schedule_rounded : Icons.download_rounded);
+                      final libelle = termine ? 'Hors-ligne' : (actif ? 'En file' : 'Télécharger');
+                      return Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () {
+                            if (existant != null && termine) {
+                              ouvrirLecteur(context, [existant], 0);
+                            } else if (actif) {
+                              onglet.value = 2;
+                            } else {
+                              _telechargementRapide(context, e);
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: couleur.withAlpha(c.sombre ? 34 : 22),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: couleur.withAlpha(c.sombre ? 110 : 80)),
+                            ),
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              Icon(icone, size: 14.5, color: couleur),
+                              const SizedBox(width: 4),
+                              Text(libelle, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: c.t1)),
+                            ]),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
               ]),
             ],
           ]),
@@ -846,7 +1003,32 @@ class _FeuilleApercuState extends State<_FeuilleApercu> {
             style: TextStyle(fontWeight: FontWeight.w700, color: c.t1, fontSize: 15, height: 1.3)),
         if (e.chaine != null) ...[
           const SizedBox(height: 4),
-          Text(e.chaine!, style: TextStyle(color: c.t2, fontSize: 12.5)),
+          _peutOuvrirChaine(e)
+              ? InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () {
+                    final nav = Navigator.of(context);
+                    final parentCtx = nav.context;
+                    nav.pop();
+                    _ouvrirPageChaine(parentCtx, e);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Flexible(
+                        child: Text(
+                          e.chaine!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: c.cyan, fontSize: 12.5, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Text('· Voir la chaîne', style: TextStyle(color: c.indigo, fontSize: 12, fontWeight: FontWeight.w700)),
+                    ]),
+                  ),
+                )
+              : Text(e.chaine!, style: TextStyle(color: c.t2, fontSize: 12.5)),
         ],
         const SizedBox(height: 16),
         Row(children: [
@@ -860,9 +1042,22 @@ class _FeuilleApercuState extends State<_FeuilleApercu> {
               _regarderEnDirect(ctx, widget.liste, e);
             },
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
+          if (!e.direct)
+            BoutonVerre(
+              icone: Icons.bolt_rounded,
+              texte: 'Rapide',
+              couleur: c.vert,
+              onTap: () {
+                final nav = Navigator.of(context);
+                final ctx = nav.context;
+                nav.pop();
+                _telechargementRapide(ctx, e);
+              },
+            ),
+          if (!e.direct) const SizedBox(width: 8),
           Expanded(
-            child: BoutonGrad('Télécharger', icone: Icons.download_rounded, onTap: () {
+            child: BoutonGrad('Options', icone: Icons.download_rounded, onTap: () {
               Navigator.of(context).pop();
               gouts.signalEntree('clic', e);
               ouvrirLien(e.url!);
@@ -870,6 +1065,282 @@ class _FeuilleApercuState extends State<_FeuilleApercu> {
           ),
         ]),
       ]),
+    );
+  }
+}
+
+String _formaterAbonnes(int? n) {
+  if (n == null || n <= 0) return '';
+  if (n >= 1000000) return '${(n / 1e6).toStringAsFixed(1).replaceAll('.', ',')} M d’abonnés';
+  if (n >= 1000) return '${(n / 1e3).toStringAsFixed(n >= 10000 ? 0 : 1).replaceAll('.', ',')} k abonnés';
+  return '$n abonnés';
+}
+
+/// Page dédiée à l'exploration d'une chaîne créateur (Vidéos, Shorts, Directs).
+class PageChaine extends StatefulWidget {
+  final String nomChaine;
+  final String? chaineId, chaineUrl, videoUrlSecours;
+  final Future<analyse.InfosChaine> Function(String section)? chargeurTest;
+
+  const PageChaine({
+    super.key,
+    required this.nomChaine,
+    this.chaineId,
+    this.chaineUrl,
+    this.videoUrlSecours,
+    this.chargeurTest,
+  });
+
+  @override
+  State<PageChaine> createState() => _PageChaineState();
+}
+
+class _PageChaineState extends State<PageChaine> {
+  static const _sections = [
+    ('videos', '🎬 Vidéos'),
+    ('shorts', '⚡ Shorts'),
+    ('streams', '🔴 Directs'),
+  ];
+
+  String _section = 'videos';
+  String _filtre = '';
+  final _filtreCtrl = TextEditingController();
+  final _cache = <String, analyse.InfosChaine>{};
+  final _erreurs = <String, String>{};
+  bool _chargement = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_charger('videos'));
+  }
+
+  @override
+  void dispose() {
+    _filtreCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _charger(String section, {bool force = false}) async {
+    if (!force && _cache.containsKey(section)) {
+      setState(() => _section = section);
+      return;
+    }
+    setState(() {
+      _section = section;
+      _chargement = true;
+      _erreurs.remove(section);
+    });
+    try {
+      final info = widget.chargeurTest != null
+          ? await widget.chargeurTest!(section)
+          : await analyse.explorerChaine(
+              chaineUrl: widget.chaineUrl,
+              chaineId: widget.chaineId,
+              nomChaine: widget.nomChaine,
+              videoUrlSecours: widget.videoUrlSecours,
+              section: section,
+            );
+      if (!mounted) return;
+      setState(() {
+        _cache[section] = info;
+        _chargement = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _erreurs[section] = '$e';
+        _chargement = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final info = _cache[_section];
+    final err = _erreurs[_section];
+    final q = _filtre.trim().toLowerCase();
+    final entrees = [
+      for (final e in info?.entrees ?? const <analyse.Entree>[])
+        if (q.isEmpty || e.titre.toLowerCase().contains(q)) e,
+    ];
+    final titreAffiche = info?.titre ?? widget.nomChaine;
+    final abonnes = _formaterAbonnes(info?.abonnes);
+
+    return Scaffold(
+      backgroundColor: c.fond,
+      body: Stack(
+        children: [
+          const Positioned.fill(child: Aurore()),
+          SafeArea(
+            child: CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(children: [
+                          BoutonVerre(
+                            icone: Icons.arrow_back_rounded,
+                            aide: 'Retour',
+                            onTap: () => Navigator.of(context).pop(),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Chaîne créateur',
+                              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: c.t1),
+                            ),
+                          ),
+                          if (info != null)
+                            BoutonVerre(
+                              icone: Icons.playlist_add_check_rounded,
+                              texte: 'Sélection lot',
+                              couleur: c.indigo,
+                              onTap: () {
+                                Navigator.of(context).pop();
+                                ouvrirLien(info.url);
+                              },
+                            ),
+                        ]),
+                        const SizedBox(height: 12),
+                        Verre(
+                          padding: const EdgeInsets.all(14),
+                          child: Row(children: [
+                            Container(
+                              width: 48,
+                              height: 48,
+                              decoration: BoxDecoration(gradient: gradBouton, borderRadius: BorderRadius.circular(16)),
+                              alignment: Alignment.center,
+                              child: Text(
+                                titreAffiche.isNotEmpty ? titreAffiche.characters.first.toUpperCase() : '?',
+                                style: const TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w800),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text(
+                                  titreAffiche,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontWeight: FontWeight.w800, color: c.t1, fontSize: 16),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  [
+                                    if (abonnes.isNotEmpty) abonnes,
+                                    if (info != null) '${info.entrees.length} vidéos chargées',
+                                  ].join(' · '),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(color: c.t2, fontSize: 12),
+                                ),
+                              ]),
+                            ),
+                          ]),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(spacing: 8, runSpacing: 8, children: [
+                          for (final (id, label) in _sections)
+                            Puce(
+                              label,
+                              choisie: _section == id,
+                              onTap: () => _charger(id),
+                            ),
+                        ]),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _filtreCtrl,
+                          onChanged: (v) => setState(() => _filtre = v),
+                          style: TextStyle(color: c.t1),
+                          decoration: InputDecoration(
+                            hintText: 'Filtrer sur cette chaîne…',
+                            hintStyle: TextStyle(color: c.t3, fontSize: 13.5),
+                            prefixIcon: Icon(Icons.filter_list_rounded, color: c.t3),
+                            suffixIcon: _filtre.isEmpty
+                                ? null
+                                : IconButton(
+                                    tooltip: 'Effacer',
+                                    icon: Icon(Icons.close_rounded, color: c.t3, size: 19),
+                                    onPressed: () {
+                                      _filtreCtrl.clear();
+                                      setState(() => _filtre = '');
+                                    },
+                                  ),
+                            filled: true,
+                            fillColor: c.verre2,
+                            isDense: true,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide(color: c.trait),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide(color: c.trait),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (_chargement && info == null)
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                    sliver: SliverList.separated(
+                      itemCount: 5,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (_, _) => const _ResultatFantome(),
+                    ),
+                  )
+                else if (err != null && info == null)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(children: [
+                        Icon(Icons.error_outline_rounded, color: c.rouge, size: 40),
+                        const SizedBox(height: 10),
+                        Text(err, textAlign: TextAlign.center, style: TextStyle(color: c.t2)),
+                        const SizedBox(height: 12),
+                        BoutonVerre(
+                          icone: Icons.refresh_rounded,
+                          texte: 'Réessayer',
+                          onTap: () => _charger(_section, force: true),
+                        ),
+                      ]),
+                    ),
+                  )
+                else if (entrees.isEmpty)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Text(
+                        _filtre.trim().isNotEmpty
+                            ? 'Aucune vidéo ne correspond à « $_filtre ».'
+                            : 'Aucune vidéo dans cette section.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: c.t3),
+                      ),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(16, 12, 16, 32 + MediaQuery.paddingOf(context).bottom),
+                    sliver: SliverList.separated(
+                      itemCount: entrees.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (context, i) => _Resultat(entrees[i], liste: entrees, surChaineInterne: true),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -24,7 +24,9 @@ class Apercu extends StatefulWidget {
   final bool auto;
   /// Onglet qui affiche l'aperçu : la lecture se met en pause quand on le quitte.
   final int ongletParent;
-  const Apercu(this.v, {super.key, this.auto = false, this.ongletParent = 0});
+  /// Suit en direct la position de lecture de l'aperçu (pour la capture d'extrait).
+  final ValueNotifier<Duration?>? positionCourante;
+  const Apercu(this.v, {super.key, this.auto = false, this.ongletParent = 0, this.positionCourante});
   @override
   State<Apercu> createState() => _ApercuState();
 }
@@ -58,6 +60,7 @@ class _ApercuState extends State<Apercu> {
   }
 
   void _majCtrl() {
+    widget.positionCourante?.value = _ctrl?.value.position;
     if (mounted) setState(() {});
   }
 
@@ -208,6 +211,7 @@ class _ApercuState extends State<Apercu> {
       _ctrl = retourCtrl;
       if (retourSrc != null) _source = retourSrc;
     });
+    widget.positionCourante?.value = retourCtrl?.value.position;
     if (retourCtrl != null) {
       retourCtrl!.addListener(_majCtrl);
       _programmerMasquage();
