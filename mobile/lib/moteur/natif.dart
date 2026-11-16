@@ -167,6 +167,9 @@ class Natif {
   /// Luminosité de la fenêtre (0‥1) ; -1 rend la main au système. Sans [valeur], lit seulement.
   static Future<double> luminosite([double? valeur]) async =>
       await _canal.invokeMethod<double>('luminosite', {'valeur': valeur}) ?? 0.5;
+  /// Volume média du système (0‥1). Sans [valeur], lit seulement le niveau actuel.
+  static Future<double?> volume([double? valeur]) =>
+      _canal.invokeMethod<double>('volume', {'valeur': valeur});
   /// Rotation par capteur : 0 automatique, 1 portrait, 2 paysage dans les deux sens.
   static Future<void> orientationLecteur(int mode) =>
       _canal.invokeMethod('orientationLecteur', {'mode': mode});

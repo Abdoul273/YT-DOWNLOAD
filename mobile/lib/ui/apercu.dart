@@ -369,8 +369,11 @@ class _LecteurInlineState extends State<_LecteurInline> {
   static const _vitesses = [1.0, 1.25, 1.5, 2.0];
   int _onde = 0;
   int _cumul = 0;
+  Duration? _cibleSaut;
   Timer? _finOnde;
   double? _glisseRatio;
+  bool _glisseEnCours = false;
+  Offset? _doubleTapPos;
   String? _bulle;
   Timer? _finBulle;
   double? _vitesseAvant;
@@ -393,10 +396,13 @@ class _LecteurInlineState extends State<_LecteurInline> {
   void _sauter(int sens) {
     final c = widget.ctrl;
     final dur = c.value.duration;
-    _cumul = (_cumul.sign == sens ? _cumul : 0) + 10 * sens;
-    var cible = c.value.position + Duration(seconds: 10 * sens);
+    final memeSens = _cumul.sign == sens;
+    _cumul = (memeSens ? _cumul : 0) + 10 * sens;
+    final base = (memeSens && _cibleSaut != null) ? _cibleSaut! : c.value.position;
+    var cible = base + Duration(seconds: 10 * sens);
     if (cible < Duration.zero) cible = Duration.zero;
     if (cible > dur) cible = dur;
+    _cibleSaut = cible;
     c.seekTo(cible);
     HapticFeedback.selectionClick();
     _finOnde?.cancel();
@@ -406,6 +412,7 @@ class _LecteurInlineState extends State<_LecteurInline> {
         setState(() {
           _onde = 0;
           _cumul = 0;
+          _cibleSaut = null;
         });
       }
     });
@@ -419,6 +426,13 @@ class _LecteurInlineState extends State<_LecteurInline> {
     widget.ctrl.setPlaybackSpeed(suiv);
     setState(() {});
     widget.onInteraction();
+  }
+
+  void _arreterVitesseMaintien() {
+    if (_vitesseAvant == null && _bulle == null) return;
+    widget.ctrl.setPlaybackSpeed(_vitesseAvant ?? 1.0);
+    _vitesseAvant = null;
+    if (mounted) setState(() => _bulle = null);
   }
 
   @override
@@ -440,9 +454,26 @@ class _LecteurInlineState extends State<_LecteurInline> {
       return Stack(fit: StackFit.expand, children: [
         GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: widget.onToucher,
-          onDoubleTapDown: (d) {
-            final x = d.localPosition.dx / taille.width;
+          onTapUp: (d) {
+            if (_onde != 0) {
+              final x = d.localPosition.dx / (taille.width > 0 ? taille.width : 1);
+              if (_onde < 0 && x < 0.36) {
+                _sauter(-1);
+                return;
+              }
+              if (_onde > 0 && x > 0.64) {
+                _sauter(1);
+                return;
+              }
+            }
+            widget.onToucher();
+          },
+          onDoubleTapDown: (d) => _doubleTapPos = d.localPosition,
+          onDoubleTap: () {
+            final pos = _doubleTapPos;
+            _doubleTapPos = null;
+            if (pos == null) return;
+            final x = pos.dx / (taille.width > 0 ? taille.width : 1);
             if (x < 0.36) {
               _sauter(-1);
             } else if (x > 0.64) {
@@ -451,17 +482,15 @@ class _LecteurInlineState extends State<_LecteurInline> {
               widget.onLecturePause();
             }
           },
-          onDoubleTap: () {},
+          onDoubleTapCancel: () => _doubleTapPos = null,
           onLongPressStart: (_) {
             _vitesseAvant = ctrl.value.playbackSpeed;
             ctrl.setPlaybackSpeed(2.0);
             HapticFeedback.mediumImpact();
             setState(() => _bulle = '2× ▶▶');
           },
-          onLongPressEnd: (_) {
-            ctrl.setPlaybackSpeed(_vitesseAvant ?? 1.0);
-            setState(() => _bulle = null);
-          },
+          onLongPressEnd: (_) => _arreterVitesseMaintien(),
+          onLongPressCancel: _arreterVitesseMaintien,
           child: Center(
             child: AspectRatio(
               aspectRatio: val.aspectRatio,
@@ -470,7 +499,9 @@ class _LecteurInlineState extends State<_LecteurInline> {
           ),
         ),
         if (val.isBuffering && val.isPlaying)
-          const Center(child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white)),
+          const IgnorePointer(
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white)),
+          ),
         if (_onde != 0)
           Positioned(
             top: 0,
@@ -514,104 +545,112 @@ class _LecteurInlineState extends State<_LecteurInline> {
           duration: const Duration(milliseconds: 190),
           child: IgnorePointer(
             ignoring: !visible,
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xA6060812), Color(0x16000000), Color(0xD2060812)],
-                  stops: [0, 0.45, 1],
+            child: Stack(children: [
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0xA6060812), Color(0x16000000), Color(0xD2060812)],
+                        stops: [0, 0.45, 1],
+                      ),
+                    ),
+                  ),
                 ),
               ),
-              child: Stack(children: [
-                Positioned(
-                  right: 8,
-                  top: 6,
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    if (widget.badgeQualite != null) ...[
-                      InkWell(
-                        borderRadius: BorderRadius.circular(14),
-                        onTap: widget.onPleinEcran,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: const Color(0x9E0D1123),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: Colors.white.withAlpha(28)),
-                          ),
-                          child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            Text(widget.badgeQualite!,
-                                style: mono(context, taille: 11, couleur: c.cyan, poids: FontWeight.w800)),
-                            const SizedBox(width: 2),
-                            Icon(Icons.hd_rounded, size: 13, color: c.cyan),
-                          ]),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                    ],
+              Positioned(
+                right: 8,
+                top: 6,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (widget.badgeQualite != null) ...[
                     InkWell(
                       borderRadius: BorderRadius.circular(14),
-                      onTap: _cyclerVitesse,
+                      onTap: widget.onPleinEcran,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
                         decoration: BoxDecoration(
                           color: const Color(0x9E0D1123),
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(color: Colors.white.withAlpha(28)),
                         ),
-                        child: Text(
-                          vLib,
-                          style: mono(context,
-                              taille: 12, couleur: vitesse == 1.0 ? Colors.white : c.cyan, poids: FontWeight.w800),
-                        ),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Text(widget.badgeQualite!,
+                              style: mono(context, taille: 11, couleur: c.cyan, poids: FontWeight.w800)),
+                          const SizedBox(width: 2),
+                          Icon(Icons.hd_rounded, size: 13, color: c.cyan),
+                        ]),
                       ),
                     ),
-                  ]),
-                ),
-                Center(
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    if (taille.width >= 260) ...[
-                      IconButton(
-                        color: Colors.white,
-                        iconSize: 26,
-                        icon: const Icon(Icons.replay_10_rounded),
-                        onPressed: () => _sauter(-1),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    Container(
+                    const SizedBox(width: 6),
+                  ],
+                  InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: _cyclerVitesse,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(colors: [c.indigo.withAlpha(225), c.violet.withAlpha(210)]),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white.withAlpha(65)),
-                        boxShadow: [BoxShadow(color: c.indigo.withAlpha(80), blurRadius: 22)],
+                        color: const Color(0x9E0D1123),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.white.withAlpha(28)),
                       ),
-                      child: IconButton(
-                        iconSize: 38,
-                        color: Colors.white,
-                        onPressed: fin ? () => ctrl.seekTo(Duration.zero).then((_) => ctrl.play()) : widget.onLecturePause,
-                        icon: Icon(fin
-                            ? Icons.replay_rounded
-                            : val.isPlaying
-                                ? Icons.pause_rounded
-                                : Icons.play_arrow_rounded),
+                      child: Text(
+                        vLib,
+                        style: mono(context,
+                            taille: 12, couleur: vitesse == 1.0 ? Colors.white : c.cyan, poids: FontWeight.w800),
                       ),
                     ),
-                    if (taille.width >= 260) ...[
-                      const SizedBox(width: 8),
-                      IconButton(
-                        color: Colors.white,
-                        iconSize: 26,
-                        icon: const Icon(Icons.forward_10_rounded),
-                        onPressed: () => _sauter(1),
-                      ),
-                    ],
-                  ]),
-                ),
-                Positioned(
-                  left: 10,
-                  right: 6,
-                  bottom: 2,
+                  ),
+                ]),
+              ),
+              Center(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (taille.width >= 260) ...[
+                    IconButton(
+                      color: Colors.white,
+                      iconSize: 26,
+                      icon: const Icon(Icons.replay_10_rounded),
+                      onPressed: () => _sauter(-1),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(colors: [c.indigo.withAlpha(225), c.violet.withAlpha(210)]),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white.withAlpha(65)),
+                      boxShadow: [BoxShadow(color: c.indigo.withAlpha(80), blurRadius: 22)],
+                    ),
+                    child: IconButton(
+                      iconSize: 38,
+                      color: Colors.white,
+                      onPressed: fin ? () => ctrl.seekTo(Duration.zero).then((_) => ctrl.play()) : widget.onLecturePause,
+                      icon: Icon(fin
+                          ? Icons.replay_rounded
+                          : val.isPlaying
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded),
+                    ),
+                  ),
+                  if (taille.width >= 260) ...[
+                    const SizedBox(width: 8),
+                    IconButton(
+                      color: Colors.white,
+                      iconSize: 26,
+                      icon: const Icon(Icons.forward_10_rounded),
+                      onPressed: () => _sauter(1),
+                    ),
+                  ],
+                ]),
+              ),
+              Positioned(
+                left: 10,
+                right: 6,
+                bottom: 2,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {},
                   child: Row(children: [
                     Text('${_temps(posAffichee)} / ${_temps(val.duration)}',
                         style: mono(context, taille: 11, couleur: Colors.white, poids: FontWeight.w600)),
@@ -630,13 +669,15 @@ class _LecteurInlineState extends State<_LecteurInline> {
                         child: Slider(
                           value: avancement,
                           onChangeStart: (x) {
+                            _glisseEnCours = true;
                             setState(() => _glisseRatio = x);
                             widget.onInteraction();
                           },
                           onChanged: (x) => setState(() => _glisseRatio = x),
-                          onChangeEnd: (x) {
-                            ctrl.seekTo(Duration(milliseconds: (x * dureeMs).round()));
-                            setState(() => _glisseRatio = null);
+                          onChangeEnd: (x) async {
+                            _glisseEnCours = false;
+                            await ctrl.seekTo(Duration(milliseconds: (x * dureeMs).round()));
+                            if (mounted && !_glisseEnCours) setState(() => _glisseRatio = null);
                             widget.onInteraction();
                           },
                         ),
@@ -660,8 +701,8 @@ class _LecteurInlineState extends State<_LecteurInline> {
                     ),
                   ]),
                 ),
-              ]),
-            ),
+              ),
+            ]),
           ),
         ),
       ]);

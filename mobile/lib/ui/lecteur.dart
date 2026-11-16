@@ -193,7 +193,7 @@ class Lecteur extends StatefulWidget {
   State<Lecteur> createState() => _LecteurState();
 }
 
-class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
+class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   VideoPlayerController? _ctrl;
   int _generation = 0;
   late final List<MediaLecteur> _file = List<MediaLecteur>.of(widget.liste);
@@ -274,6 +274,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   IconData? _iconeIndication;
   Timer? _finIndication;
   int _cumulSaut = 0;
+  Duration? _cibleSaut;
   Timer? _finSaut;
   int _onde = 0; // -1 gauche, 1 droite, 0 aucune
   bool _poulsCentre = false;
@@ -281,16 +282,30 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   Timer? _finPoulsCentre;
   Duration? _cible;
   double? _ratioGlisseBarre;
+  bool _glisseBarreEnCours = false;
   double _debutGlisse = 0;
   Duration _positionDebut = Duration.zero;
+  Offset? _doubleTapPos;
+  bool _vitesseMaintienActive = false;
   double _luminosite = 0.5;
   double _volume = 1.0;
+  bool _volumeSysteme = false;
+  String? _gesteVertical; // 'lum' | 'vol' verrouillé au début du glissement
+  int _dernierPourcentLum = -1;
+  int _dernierPourcentVol = -1;
+  int _genSyncLum = 0;
+  int _genSyncVol = 0;
+  bool _syncLumEnCours = false;
+  bool _syncVolEnCours = false;
+  double _deltaLumAvantSync = 0;
+  double _deltaVolAvantSync = 0;
   double? _vitesseAvantAppuiLong;
   String? _barre; // 'lum' | 'vol'
   Timer? _finBarre;
 
   // Pinch zoom + pan libre (1.0x..3.5x)
   final _pointeurs = <int, Offset>{};
+  bool _pinceEnCours = false;
   double _distanceDebutPince = 0;
   double _zoomDebutPince = 1.0;
   Offset _milieuPincePrecedent = Offset.zero;
@@ -329,10 +344,10 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    Natif.luminosite().then((v) {
-      if (mounted) _luminosite = v.clamp(0.0, 1.0);
-    });
+    _lireLuminositeSysteme();
+    _lireVolumeSysteme();
     _abos.add(Natif.commandesMedia.listen(_commande));
     _abos.add(Natif.pipEtat.listen((v) {
       if (mounted) setState(() => _pip = v);
@@ -340,8 +355,42 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     _charger();
   }
 
+  Future<void> _lireLuminositeSysteme() async {
+    try {
+      final v = await Natif.luminosite();
+      if (mounted && _gesteVertical != 'lum') {
+        _luminosite = v.clamp(0.0, 1.0);
+        _dernierPourcentLum = (_luminosite * 100).round();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _lireVolumeSysteme() async {
+    try {
+      final v = await Natif.volume();
+      if (mounted && v != null) {
+        _volumeSysteme = true;
+        if (_gesteVertical != 'vol') {
+          _volume = v.clamp(0.0, 1.0);
+          _dernierPourcentVol = (_volume * 100).round();
+          _ctrl?.setVolume(1.0);
+        }
+      }
+    } catch (_) {
+      _volumeSysteme = false;
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _lireVolumeSysteme();
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _memoriserPosition();
     _masquer?.cancel();
     _sommeil?.cancel();
@@ -480,7 +529,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     }
     await ctrl.setLooping(_boucle);
     await ctrl.setPlaybackSpeed(_vitesse);
-    await ctrl.setVolume(_volume);
+    await ctrl.setVolume(_volumeSysteme ? 1.0 : _volume);
     final pos = ((reglages['positions'] as Map?) ?? {})[_item.clePrefs];
     if (_reprendreAuto && pos is int && pos > 10000 && pos < ctrl.value.duration.inMilliseconds * 0.95) {
       await ctrl.seekTo(Duration(milliseconds: pos));
@@ -537,7 +586,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       ctrl.removeListener(_maj);
       await ctrl.setLooping(_boucle);
       await ctrl.setPlaybackSpeed(_vitesse);
-      await ctrl.setVolume(_volume);
+      await ctrl.setVolume(_volumeSysteme ? 1.0 : _volume);
       if (perime()) return;
 
       ctrl.addListener(_maj);
@@ -668,7 +717,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
 
           await ctrl.setLooping(_boucle);
           await ctrl.setPlaybackSpeed(_vitesse);
-          await ctrl.setVolume(_volume);
+          await ctrl.setVolume(_volumeSysteme ? 1.0 : _volume);
           if (!item.direct && _reprendreAuto && ctrl.value.duration > Duration.zero) {
             final pos = ((reglages['positions'] as Map?) ?? {})[item.clePrefs];
             if (pos is int && pos > 10000 && pos < ctrl.value.duration.inMilliseconds * 0.95) {
@@ -764,7 +813,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       }
       await nouv.setLooping(_boucle);
       await nouv.setPlaybackSpeed(_vitesse);
-      await nouv.setVolume(_volume);
+      await nouv.setVolume(_volumeSysteme ? 1.0 : _volume);
       if (enCours) await nouv.play();
       if (!mounted || generation != _generation) {
         nouv.dispose();
@@ -1210,7 +1259,11 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
 
   void _basculerControles() {
     setState(() => _controles = !_controles);
-    if (_controles) _programmerMasquage();
+    if (_controles) {
+      _programmerMasquage();
+    } else {
+      _masquer?.cancel();
+    }
   }
 
   void _lecturePause({bool flashCentre = false}) {
@@ -1262,11 +1315,14 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
   void _sauter(int sens, {bool onde = true}) {
     final c = _ctrl;
     if (c == null) return;
-    _cumulSaut = (_cumulSaut.sign == sens ? _cumulSaut : 0) + _saut * sens;
+    final memeSens = _cumulSaut.sign == sens;
+    _cumulSaut = (memeSens ? _cumulSaut : 0) + _saut * sens;
     final d = c.value.duration;
-    var cible = c.value.position + Duration(seconds: _saut * sens);
+    final base = (memeSens && _cibleSaut != null) ? _cibleSaut! : c.value.position;
+    var cible = base + Duration(seconds: _saut * sens);
     if (cible < Duration.zero) cible = Duration.zero;
     if (cible > d) cible = d;
+    _cibleSaut = cible;
     c.seekTo(cible).then((_) => _synchro());
     HapticFeedback.selectionClick();
     if (onde) {
@@ -1279,16 +1335,22 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       _indiquer('${_cumulSaut > 0 ? '+' : ''}$_cumulSaut s',
           sens > 0 ? Icons.fast_forward_rounded : Icons.fast_rewind_rounded);
     }
+    if (_controles) _programmerMasquage();
     _finSaut?.cancel();
-    _finSaut = Timer(const Duration(milliseconds: 900), () => _cumulSaut = 0);
+    _finSaut = Timer(const Duration(milliseconds: 900), () {
+      _cumulSaut = 0;
+      _cibleSaut = null;
+    });
   }
 
-  void _montrerBarre(String type) {
+  void _montrerBarre(String type, {bool maintenir = false}) {
     _finBarre?.cancel();
     setState(() => _barre = type);
-    _finBarre = Timer(const Duration(milliseconds: 950), () {
-      if (mounted) setState(() => _barre = null);
-    });
+    if (!maintenir) {
+      _finBarre = Timer(const Duration(milliseconds: 850), () {
+        if (mounted) setState(() => _barre = null);
+      });
+    }
   }
 
   void _changerVitesse(double v) {
@@ -1372,6 +1434,7 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     c.seekTo(ch.debut).then((_) => _synchro());
     HapticFeedback.selectionClick();
     _indiquer(ch.titre, Icons.menu_book_rounded);
+    if (_controles) _programmerMasquage();
   }
 
   List<({int ms, String note})> _signetsVideo() {
@@ -3048,15 +3111,17 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     return '${fin.hour.toString().padLeft(2, '0')}:${fin.minute.toString().padLeft(2, '0')}';
   }
 
-  // ── zoom & pincement 2 doigts ───────────────────────────────────────
+  // ── zoom, pincement 2 doigts & gestes tactiles ──────────────────────
   void _gererPointeur(PointerEvent e) {
     if (_verrou || _audio) {
       _pointeurs.clear();
+      _pinceEnCours = false;
       _distanceDebutPince = 0;
       return;
     }
     if (e is PointerDownEvent) {
       _pointeurs[e.pointer] = e.position;
+      if (_pointeurs.length >= 2) _pinceEnCours = true;
       if (_pointeurs.length == 2) {
         final p = _pointeurs.values.toList();
         _distanceDebutPince = (p[0] - p[1]).distance;
@@ -3100,6 +3165,214 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
           });
         }
       }
+      if (_pointeurs.isEmpty) _pinceEnCours = false;
+    }
+  }
+
+  void _gererAppuiSimple(TapUpDetails d, Size taille) {
+    if (_verrou) {
+      _basculerControles();
+      return;
+    }
+    if (_onde != 0 && !_estLive) {
+      final x = d.localPosition.dx / math.max(1.0, taille.width);
+      if (_onde < 0 && x < 0.36) {
+        _sauter(-1);
+        return;
+      }
+      if (_onde > 0 && x > 0.64) {
+        _sauter(1);
+        return;
+      }
+    }
+    _basculerControles();
+  }
+
+  void _executerDoubleAppui(Size taille) {
+    final pos = _doubleTapPos;
+    _doubleTapPos = null;
+    if (_verrou || pos == null) return;
+    final x = pos.dx / math.max(1.0, taille.width);
+    if (!_estLive && x < 0.36) {
+      _sauter(-1);
+    } else if (!_estLive && x > 0.64) {
+      _sauter(1);
+    } else {
+      _lecturePause(flashCentre: true);
+    }
+  }
+
+  void _demarrerVitesseMaintien(VideoPlayerController ctrl) {
+    _interaction = true;
+    _masquer?.cancel();
+    _vitesseAvantAppuiLong = _vitesse;
+    ctrl.setPlaybackSpeed(_vitesseMaintien);
+    HapticFeedback.mediumImpact();
+    setState(() => _vitesseMaintienActive = true);
+  }
+
+  void _arreterVitesseMaintien(VideoPlayerController ctrl) {
+    if (!_vitesseMaintienActive && _vitesseAvantAppuiLong == null) return;
+    _interaction = false;
+    _programmerMasquage();
+    ctrl.setPlaybackSpeed(_vitesseAvantAppuiLong ?? _vitesse);
+    _vitesseAvantAppuiLong = null;
+    if (mounted) setState(() => _vitesseMaintienActive = false);
+  }
+
+  void _debutGlisseH(DragStartDetails d, VideoPlayerController ctrl) {
+    if (_pinceEnCours || _glisseBarreEnCours) return;
+    _interaction = true;
+    _masquer?.cancel();
+    _debutGlisse = d.localPosition.dx;
+    _positionDebut = _cible ?? ctrl.value.position;
+  }
+
+  void _majGlisseH(DragUpdateDetails d, VideoPlayerController ctrl, Size taille) {
+    if (_pinceEnCours || _glisseBarreEnCours) return;
+    final total = ctrl.value.duration;
+    if (total <= Duration.zero) return;
+    final portee = total.inSeconds < 90 ? total.inMilliseconds : 90000;
+    final delta = (d.localPosition.dx - _debutGlisse) / math.max(120.0, taille.width) * portee;
+    var cible = _positionDebut + Duration(milliseconds: delta.round());
+    if (cible < Duration.zero) cible = Duration.zero;
+    if (cible > total) cible = total;
+    final ecart = cible - _positionDebut;
+    final ch = _chapitrePour(cible);
+    setState(() {
+      _cible = cible;
+      _indication =
+          '${_temps(cible)}  (${ecart.isNegative ? '−' : '+'}${_temps(ecart.abs())})${ch != null ? '\n${ch.titre}' : ''}';
+      _iconeIndication = ecart.isNegative ? Icons.fast_rewind_rounded : Icons.fast_forward_rounded;
+    });
+  }
+
+  void _finGlisseH(VideoPlayerController ctrl) {
+    _interaction = false;
+    _programmerMasquage();
+    final c = _cible;
+    setState(() => _indication = null);
+    if (c != null) {
+      ctrl.seekTo(c).then((_) {
+        if (mounted && !_interaction) {
+          setState(() => _cible = null);
+        }
+        _synchro();
+      });
+    }
+  }
+
+  void _annulerGlisseH() {
+    _interaction = false;
+    _programmerMasquage();
+    setState(() {
+      _cible = null;
+      _indication = null;
+    });
+  }
+
+  void _appliquerLuminosite() {
+    final pct = (_luminosite * 100).round();
+    if (pct != _dernierPourcentLum) {
+      _dernierPourcentLum = pct;
+      Natif.luminosite(_luminosite);
+    }
+  }
+
+  void _appliquerVolume(VideoPlayerController? ctrl) {
+    final pct = (_volume * 100).round();
+    if (_volumeSysteme) {
+      if (pct != _dernierPourcentVol) {
+        _dernierPourcentVol = pct;
+        Natif.volume(_volume).catchError((_) => null);
+      }
+      if (ctrl != null) {
+        final cibleCtrl = _volume <= 0.005 ? 0.0 : 1.0;
+        if ((ctrl.value.volume - cibleCtrl).abs() > 0.01) {
+          ctrl.setVolume(cibleCtrl);
+        }
+      }
+    } else {
+      ctrl?.setVolume(_volume);
+    }
+  }
+
+  void _debutGlisseV(DragStartDetails d, VideoPlayerController ctrl, Size taille) {
+    if (_pinceEnCours || _glisseBarreEnCours) return;
+    _interaction = true;
+    _masquer?.cancel();
+    final type = d.localPosition.dx < taille.width / 2 ? 'lum' : 'vol';
+    _gesteVertical = type;
+    _montrerBarre(type, maintenir: true);
+    if (type == 'lum') {
+      final gen = ++_genSyncLum;
+      _deltaLumAvantSync = 0;
+      _syncLumEnCours = true;
+      Natif.luminosite().then((sysL) {
+        if (!mounted || gen != _genSyncLum) return;
+        _syncLumEnCours = false;
+        final base = (_luminosite - _deltaLumAvantSync).clamp(0.0, 1.0);
+        if ((sysL - base).abs() > 0.06) {
+          _luminosite = (sysL + _deltaLumAvantSync).clamp(0.0, 1.0);
+          _appliquerLuminosite();
+          if (_gesteVertical == 'lum') setState(() {});
+        }
+      }).catchError((_) {
+        _syncLumEnCours = false;
+      });
+    } else {
+      final gen = ++_genSyncVol;
+      _deltaVolAvantSync = 0;
+      _syncVolEnCours = true;
+      Natif.volume().then((sysV) {
+        if (!mounted || gen != _genSyncVol) return;
+        _syncVolEnCours = false;
+        if (sysV != null) {
+          _volumeSysteme = true;
+          final base = (_volume - _deltaVolAvantSync).clamp(0.0, 1.0);
+          if ((sysV - base).abs() > 0.08) {
+            _volume = (sysV + _deltaVolAvantSync).clamp(0.0, 1.0);
+            _appliquerVolume(ctrl);
+            if (_gesteVertical == 'vol') setState(() {});
+          }
+        }
+      }).catchError((_) {
+        _syncVolEnCours = false;
+      });
+    }
+  }
+
+  void _majGlisseV(DragUpdateDetails d, VideoPlayerController ctrl, Size taille) {
+    if (_pinceEnCours || _glisseBarreEnCours) return;
+    _gesteVertical ??= d.localPosition.dx < taille.width / 2 ? 'lum' : 'vol';
+    _interaction = true;
+    _masquer?.cancel();
+    final denom = math.max(160.0, taille.height * 0.55);
+    final variation = -d.delta.dy / denom;
+    if (_gesteVertical == 'lum') {
+      if (_syncLumEnCours) _deltaLumAvantSync += variation;
+      _luminosite = (_luminosite + variation).clamp(0.0, 1.0);
+      _appliquerLuminosite();
+      _montrerBarre('lum', maintenir: true);
+    } else {
+      if (_syncVolEnCours) _deltaVolAvantSync += variation;
+      _volume = (_volume + variation).clamp(0.0, 1.0);
+      _appliquerVolume(ctrl);
+      _montrerBarre('vol', maintenir: true);
+    }
+  }
+
+  void _finGlisseV() {
+    _gesteVertical = null;
+    _syncLumEnCours = false;
+    _syncVolEnCours = false;
+    _interaction = false;
+    _programmerMasquage();
+    if (_barre != null) {
+      _finBarre?.cancel();
+      _finBarre = Timer(const Duration(milliseconds: 850), () {
+        if (mounted) setState(() => _barre = null);
+      });
     }
   }
 
@@ -3112,9 +3385,21 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     }
     final ligneSt = (ctrl != null && ctrl.value.isInitialized) ? _sousTitreActif(ctrl.value.position) : null;
     final zoome = _zoom > 1.04 && !_audio;
+    final chapActif = (ctrl != null && ctrl.value.isInitialized)
+        ? _chapitrePour(_cible ?? ctrl.value.position)
+        : null;
+    final topPilule = _controles ? (chapActif != null ? 96.0 : 62.0) : 12.0;
 
     return PopScope(
       canPop: !_verrou,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _verrou) {
+          HapticFeedback.lightImpact();
+          setState(() => _controles = true);
+          _programmerMasquage();
+          _indiquer('Écran verrouillé', Icons.lock_rounded);
+        }
+      },
       child: Scaffold(
         backgroundColor: Colors.black,
         body: _erreur != null
@@ -3129,52 +3414,25 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                       ],
                     ]),
                   )
-                : Stack(fit: StackFit.expand, children: [
-                    // Zone vidéo + gestes tactiles dédiés
-                    Listener(
-                      onPointerDown: _gererPointeur,
-                      onPointerMove: _gererPointeur,
-                      onPointerUp: _gererPointeur,
-                      onPointerCancel: _gererPointeur,
-                      child: GestureDetector(
+                : Listener(
+                    onPointerDown: _gererPointeur,
+                    onPointerMove: _gererPointeur,
+                    onPointerUp: _gererPointeur,
+                    onPointerCancel: _gererPointeur,
+                    child: Stack(fit: StackFit.expand, children: [
+                      // Zone vidéo + gestes tactiles dédiés (sous la surcouche transparente aux clics hors boutons)
+                      GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: _basculerControles,
-                        onDoubleTapDown: _verrou
-                            ? null
-                            : (d) {
-                                final x = d.localPosition.dx / taille.width;
-                                if (!_estLive && x < 0.36) {
-                                  _sauter(-1);
-                                } else if (!_estLive && x > 0.64) {
-                                  _sauter(1);
-                                } else {
-                                  _lecturePause(flashCentre: true);
-                                }
-                              },
-                        onDoubleTap: _verrou ? null : () {},
-                        onLongPressStart: _verrou
-                            ? null
-                            : (_) {
-                                _interaction = true;
-                                _masquer?.cancel();
-                                _vitesseAvantAppuiLong = _vitesse;
-                                ctrl.setPlaybackSpeed(_vitesseMaintien);
-                                HapticFeedback.mediumImpact();
-                                setState(() {
-                                  _indication = '${_libVitesse(_vitesseMaintien)} ▶▶';
-                                  _iconeIndication = Icons.speed_rounded;
-                                });
-                              },
-                        onLongPressEnd: _verrou
-                            ? null
-                            : (_) {
-                                _interaction = false;
-                                _programmerMasquage();
-                                ctrl.setPlaybackSpeed(_vitesseAvantAppuiLong ?? _vitesse);
-                                setState(() => _indication = null);
-                              },
+                        onTapUp: (d) => _gererAppuiSimple(d, taille),
+                        onDoubleTapDown: _verrou ? null : (d) => _doubleTapPos = d.localPosition,
+                        onDoubleTap: _verrou ? null : () => _executerDoubleAppui(taille),
+                        onDoubleTapCancel: _verrou ? null : () => _doubleTapPos = null,
+                        onLongPressStart: _verrou ? null : (_) => _demarrerVitesseMaintien(ctrl),
+                        onLongPressEnd: _verrou ? null : (_) => _arreterVitesseMaintien(ctrl),
+                        onLongPressCancel: _verrou ? null : () => _arreterVitesseMaintien(ctrl),
                         onPanUpdate: (zoome && !_verrou)
                             ? (d) {
+                                if (_pointeurs.length > 1) return;
                                 final maxDx = (taille.width * (_zoom - 1)) / 2;
                                 final maxDy = (taille.height * (_zoom - 1)) / 2;
                                 setState(() {
@@ -3185,132 +3443,119 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                                 });
                               }
                             : null,
-                        onHorizontalDragStart: (_verrou || !_gestes || _estLive || zoome || _pointeurs.length > 1)
+                        onHorizontalDragStart: (_verrou || !_gestes || _estLive || zoome || _pinceEnCours || _glisseBarreEnCours)
                             ? null
-                            : (d) {
-                                _interaction = true;
-                                _masquer?.cancel();
-                                _debutGlisse = d.localPosition.dx;
-                                _positionDebut = ctrl.value.position;
-                              },
-                        onHorizontalDragUpdate: (_verrou || !_gestes || _estLive || zoome || _pointeurs.length > 1)
+                            : (d) => _debutGlisseH(d, ctrl),
+                        onHorizontalDragUpdate: (_verrou || !_gestes || _estLive || zoome || _pinceEnCours || _glisseBarreEnCours)
                             ? null
-                            : (d) {
-                                final total = ctrl.value.duration;
-                                final portee = total.inSeconds < 90 ? total.inMilliseconds : 90000;
-                                final delta = (d.localPosition.dx - _debutGlisse) / taille.width * portee;
-                                var cible = _positionDebut + Duration(milliseconds: delta.round());
-                                if (cible < Duration.zero) cible = Duration.zero;
-                                if (cible > total) cible = total;
-                                final ecart = cible - _positionDebut;
-                                final ch = _chapitrePour(cible);
-                                setState(() {
-                                  _cible = cible;
-                                  _indication =
-                                      '${_temps(cible)}  (${ecart.isNegative ? '−' : '+'}${_temps(ecart.abs())})${ch != null ? '\n${ch.titre}' : ''}';
-                                  _iconeIndication = ecart.isNegative ? Icons.fast_rewind_rounded : Icons.fast_forward_rounded;
-                                });
-                              },
+                            : (d) => _majGlisseH(d, ctrl, taille),
                         onHorizontalDragEnd: (_verrou || !_gestes || _estLive || zoome)
                             ? null
-                            : (_) {
-                                _interaction = false;
-                                _programmerMasquage();
-                                final c = _cible;
-                                setState(() {
-                                  _cible = null;
-                                  _indication = null;
-                                });
-                                if (c != null) ctrl.seekTo(c).then((_) => _synchro());
-                              },
-                        onVerticalDragUpdate: (_verrou || !_gestes || _audio || zoome || _pointeurs.length > 1)
+                            : (_) => _finGlisseH(ctrl),
+                        onHorizontalDragCancel: (_verrou || !_gestes || _estLive || zoome)
                             ? null
-                            : (d) {
-                                _interaction = true;
-                                _masquer?.cancel();
-                                final variation = -d.delta.dy / (taille.height * 0.55);
-                                if (d.localPosition.dx < taille.width / 2) {
-                                  _luminosite = (_luminosite + variation).clamp(0.0, 1.0);
-                                  Natif.luminosite(_luminosite);
-                                  _montrerBarre('lum');
-                                } else {
-                                  _volume = (_volume + variation).clamp(0.0, 1.0);
-                                  ctrl.setVolume(_volume);
-                                  _montrerBarre('vol');
-                                }
-                              },
+                            : _annulerGlisseH,
+                        onVerticalDragStart: (_verrou || !_gestes || _audio || zoome || _pinceEnCours || _glisseBarreEnCours)
+                            ? null
+                            : (d) => _debutGlisseV(d, ctrl, taille),
+                        onVerticalDragUpdate: (_verrou || !_gestes || _audio || zoome || _pinceEnCours || _glisseBarreEnCours)
+                            ? null
+                            : (d) => _majGlisseV(d, ctrl, taille),
                         onVerticalDragEnd: (_verrou || !_gestes || _audio || zoome)
                             ? null
-                            : (_) {
-                                _interaction = false;
-                                _programmerMasquage();
-                              },
-                        child: SizedBox.expand(
-                          child: _imageTransformee(ctrl),
-                        ),
-                      ),
-                    ),
-
-                    // Filtre nuit anti-lumière bleue
-                    if (_nuit > 0.01 && !_audio)
-                      IgnorePointer(
-                        child: ColoredBox(color: const Color(0xFFFF9329).withAlpha((_nuit * 180).round())),
-                      ),
-
-                    // Sous-titres stylisés
-                    if (ligneSt != null)
-                      Positioned(
-                        left: 20,
-                        right: 20,
-                        bottom: (_controles ? 124.0 : _margeSt.toDouble()),
-                        child: IgnorePointer(
-                          child: Center(
-                            child: _bulleSousTitre(ligneSt.texte),
-                          ),
+                            : (_) => _finGlisseV(),
+                        onVerticalDragCancel: (_verrou || !_gestes || _audio || zoome)
+                            ? null
+                            : _finGlisseV,
+                        child: RepaintBoundary(
+                          child: SizedBox.expand(child: _imageTransformee(ctrl)),
                         ),
                       ),
 
-                    if (ctrl.value.isBuffering && ctrl.value.isPlaying)
-                      const Center(child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5)),
+                      // Filtre nuit anti-lumière bleue
+                      if (_nuit > 0.01 && !_audio)
+                        IgnorePointer(
+                          child: ColoredBox(color: const Color(0xFFFF9329).withAlpha((_nuit * 180).round())),
+                        ),
 
-                    _ondeSaut(taille),
-                    if (_poulsCentre) _flashPlayPause(ctrl.value.isPlaying),
-                    if (_barre != null) _barreLateral(),
-                    if (_indication != null) Center(child: _bulle()),
-                    if (_changementQualite != null)
-                      Positioned(
-                        top: 12,
-                        left: 0,
-                        right: 0,
-                        child: SafeArea(
-                          child: Center(
-                            child: _piluleVerre(
-                              icone: Icons.hd_rounded,
-                              texte: 'Passage en $_changementQualite…',
+                      // Sous-titres stylisés
+                      if (ligneSt != null)
+                        Positioned(
+                          left: 20,
+                          right: 20,
+                          bottom: (_controles && !_verrou ? 104.0 : _margeSt.toDouble()) +
+                              MediaQuery.paddingOf(context).bottom,
+                          child: IgnorePointer(
+                            child: Center(
+                              child: _bulleSousTitre(ligneSt.texte),
                             ),
                           ),
                         ),
-                      ),
-                    if (zoome && !_verrou && _changementQualite == null)
-                      Positioned(
-                        top: 12,
-                        left: 0,
-                        right: 0,
-                        child: SafeArea(
-                          child: Center(
-                            child: GestureDetector(
-                              onTap: _reinitialiserZoom,
-                              child: _piluleVerre(
-                                icone: Icons.fit_screen_rounded,
-                                texte: 'Zoom ${_zoom.toStringAsFixed(1)}× · Réinitialiser',
+
+                      if (ctrl.value.isBuffering && ctrl.value.isPlaying)
+                        const IgnorePointer(
+                          child: Center(child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5)),
+                        ),
+
+                      _ondeSaut(taille),
+                      if (_poulsCentre) _flashPlayPause(ctrl.value.isPlaying),
+                      if (_barre != null) _barreLateral(),
+                      if (_indication != null) Center(child: _bulle()),
+                      if (_vitesseMaintienActive)
+                        AnimatedPositioned(
+                          duration: const Duration(milliseconds: 180),
+                          top: topPilule,
+                          left: 0,
+                          right: 0,
+                          child: SafeArea(
+                            child: IgnorePointer(
+                              child: Center(
+                                child: _piluleVerre(
+                                  icone: Icons.fast_forward_rounded,
+                                  texte: '${_libVitesse(_vitesseMaintien)} ▶▶',
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    _surcouche(ctrl),
-                    if (_compteur != null) _carteSuivant(),
-                  ]),
+                      if (_changementQualite != null)
+                        Positioned(
+                          top: 12,
+                          left: 0,
+                          right: 0,
+                          child: SafeArea(
+                            child: IgnorePointer(
+                              child: Center(
+                                child: _piluleVerre(
+                                  icone: Icons.hd_rounded,
+                                  texte: 'Passage en $_changementQualite…',
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (zoome && !_verrou && _changementQualite == null && !_vitesseMaintienActive)
+                        AnimatedPositioned(
+                          duration: const Duration(milliseconds: 180),
+                          top: topPilule,
+                          left: 0,
+                          right: 0,
+                          child: SafeArea(
+                            child: Center(
+                              child: GestureDetector(
+                                onTap: _reinitialiserZoom,
+                                child: _piluleVerre(
+                                  icone: Icons.fit_screen_rounded,
+                                  texte: 'Zoom ${_zoom.toStringAsFixed(1)}× · Réinitialiser',
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      _surcouche(ctrl),
+                      if (_compteur != null) _carteSuivant(),
+                    ]),
+                  ),
       ),
     );
   }
@@ -3477,34 +3722,69 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
         ),
       );
 
-  Widget _bulle() => IgnorePointer(
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-              decoration: BoxDecoration(
-                color: const Color(0xC80D1123),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withAlpha(32)),
-                boxShadow: [BoxShadow(color: Colors.black.withAlpha(90), blurRadius: 24)],
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
+  Widget _bulle() {
+    final c = context.c;
+    final ctrl = _ctrl;
+    final totalMs = ctrl?.value.duration.inMilliseconds ?? 0;
+    final cible = _cible;
+    final ratioCible = (cible != null && totalMs > 0) ? (cible.inMilliseconds / totalMs).clamp(0.0, 1.0) : null;
+    return IgnorePointer(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 280),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xC80D1123),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withAlpha(32)),
+              boxShadow: [BoxShadow(color: Colors.black.withAlpha(90), blurRadius: 24)],
+            ),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Row(mainAxisSize: MainAxisSize.min, children: [
                 if (_iconeIndication != null) ...[
-                  Icon(_iconeIndication, color: context.c.cyan, size: 22),
+                  Icon(_iconeIndication, color: c.cyan, size: 22),
                   const SizedBox(width: 10),
                 ],
-                Text(
-                  _indication!,
-                  textAlign: TextAlign.center,
-                  style: mono(context, taille: 14.5, couleur: Colors.white, poids: FontWeight.w700),
+                Flexible(
+                  child: Text(
+                    _indication!,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: mono(context, taille: 14.5, couleur: Colors.white, poids: FontWeight.w700),
+                  ),
                 ),
               ]),
-            ),
+              if (ratioCible != null) ...[
+                const SizedBox(height: 9),
+                SizedBox(
+                  width: 176,
+                  height: 4,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: Stack(children: [
+                      Container(color: Colors.white24),
+                      FractionallySizedBox(
+                        widthFactor: ratioCible,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(colors: [c.indigo, c.cyan]),
+                          ),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ),
+              ],
+            ]),
           ),
         ),
-      );
+      ),
+    );
+  }
 
   Widget _flashPlayPause(bool lecture) => IgnorePointer(
         child: Center(
@@ -3560,10 +3840,17 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                   color: const Color(0xB00E1226),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: Text(
-                  '${_cumulSaut.abs()} s',
-                  style: mono(context, taille: 14, couleur: Colors.white, poids: FontWeight.w800),
-                ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text(
+                    '${_cumulSaut.abs()} s',
+                    style: mono(context, taille: 14, couleur: Colors.white, poids: FontWeight.w800),
+                  ),
+                  if (_cibleSaut != null)
+                    Text(
+                      _temps(_cibleSaut!),
+                      style: mono(context, taille: 11, couleur: context.c.cyan, poids: FontWeight.w700),
+                    ),
+                ]),
               ),
             ]),
           ),
@@ -3582,58 +3869,66 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       bottom: 0,
       left: lum ? 24 : null,
       right: lum ? null : 24,
-      child: SafeArea(
-        child: Center(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-              child: Container(
-                width: 48,
-                height: 200,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xBA0D1123),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: Colors.white.withAlpha(28)),
-                ),
-                child: Column(children: [
-                  Text('${(val * 100).round()}', style: mono(context, taille: 12, couleur: Colors.white, poids: FontWeight.w700)),
-                  const SizedBox(height: 10),
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(5),
-                      child: SizedBox(
-                        width: 7,
-                        child: Stack(alignment: Alignment.bottomCenter, children: [
-                          Container(color: Colors.white24),
-                          FractionallySizedBox(
-                            heightFactor: val.clamp(0.0, 1.0),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.bottomCenter,
-                                  end: Alignment.topCenter,
-                                  colors: [c.indigo, couleur],
+      child: IgnorePointer(
+        child: SafeArea(
+          child: Center(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                child: Container(
+                  width: 52,
+                  height: 204,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xBA0D1123),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: Colors.white.withAlpha(28)),
+                  ),
+                  child: Column(children: [
+                    Text('${(val * 100).round()}%', style: mono(context, taille: 11.5, couleur: Colors.white, poids: FontWeight.w700)),
+                    const SizedBox(height: 10),
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(5),
+                        child: SizedBox(
+                          width: 7,
+                          child: Stack(alignment: Alignment.bottomCenter, children: [
+                            Container(color: Colors.white24),
+                            FractionallySizedBox(
+                              heightFactor: val.clamp(0.0, 1.0),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.bottomCenter,
+                                    end: Alignment.topCenter,
+                                    colors: [c.indigo, couleur],
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ]),
+                          ]),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  Icon(
-                    lum
-                        ? Icons.brightness_6_rounded
-                        : val == 0
-                            ? Icons.volume_off_rounded
-                            : Icons.volume_up_rounded,
-                    color: couleur,
-                    size: 19,
-                  ),
-                ]),
+                    const SizedBox(height: 10),
+                    Icon(
+                      lum
+                          ? (val < 0.3
+                              ? Icons.brightness_low_rounded
+                              : val < 0.7
+                                  ? Icons.brightness_medium_rounded
+                                  : Icons.brightness_high_rounded)
+                          : (val <= 0.005
+                              ? Icons.volume_off_rounded
+                              : val < 0.5
+                                  ? Icons.volume_down_rounded
+                                  : Icons.volume_up_rounded),
+                      color: couleur,
+                      size: 20,
+                    ),
+                  ]),
+                ),
               ),
             ),
           ),
@@ -3649,53 +3944,57 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       right: 20,
       bottom: 98,
       child: SafeArea(
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              width: (MediaQuery.sizeOf(context).width - 40).clamp(0, 310).toDouble(),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xD8111528),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withAlpha(30)),
-              ),
-              child: Row(children: [
-                Miniature(suivant.miniature, largeur: 84, rayon: 12),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                    Text('Suivant dans $_compte s', style: TextStyle(color: c.cyan, fontWeight: FontWeight.w700, fontSize: 12)),
-                    const SizedBox(height: 2),
-                    Text(suivant.titre,
-                        maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 13)),
-                    Row(children: [
-                      TextButton(
-                        style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: const Size(0, 32)),
-                        onPressed: () {
-                          _annulerCompte();
-                          setState(() => _compteAnnule = true);
-                        },
-                        child: const Text('Annuler'),
-                      ),
-                      const Spacer(),
-                      FilledButton(
-                        style: FilledButton.styleFrom(
-                            backgroundColor: c.indigo,
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            minimumSize: const Size(0, 32)),
-                        onPressed: () {
-                          _annulerCompte();
-                          _aller(_index + 1);
-                        },
-                        child: const Text('Lire'),
-                      ),
-                    ]),
-                  ]),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {},
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: Container(
+                width: (MediaQuery.sizeOf(context).width - 40).clamp(0, 310).toDouble(),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xD8111528),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white.withAlpha(30)),
                 ),
-              ]),
+                child: Row(children: [
+                  Miniature(suivant.miniature, largeur: 84, rayon: 12),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                      Text('Suivant dans $_compte s', style: TextStyle(color: c.cyan, fontWeight: FontWeight.w700, fontSize: 12)),
+                      const SizedBox(height: 2),
+                      Text(suivant.titre,
+                          maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                      Row(children: [
+                        TextButton(
+                          style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: const Size(0, 32)),
+                          onPressed: () {
+                            _annulerCompte();
+                            setState(() => _compteAnnule = true);
+                          },
+                          child: const Text('Annuler'),
+                        ),
+                        const Spacer(),
+                        FilledButton(
+                          style: FilledButton.styleFrom(
+                              backgroundColor: c.indigo,
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              minimumSize: const Size(0, 32)),
+                          onPressed: () {
+                            _annulerCompte();
+                            _aller(_index + 1);
+                          },
+                          child: const Text('Lire'),
+                        ),
+                      ]),
+                    ]),
+                  ),
+                ]),
+              ),
             ),
           ),
         ),
@@ -3776,16 +4075,22 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
       child: AnimatedOpacity(
         opacity: _controles ? 1 : 0,
         duration: const Duration(milliseconds: 200),
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xCC060812), Color(0x18000000), Color(0x18000000), Color(0xE2060812)],
-              stops: [0, 0.25, 0.62, 1],
+        child: Stack(children: [
+          const Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0xCC060812), Color(0x18000000), Color(0x18000000), Color(0xE2060812)],
+                    stops: [0, 0.25, 0.62, 1],
+                  ),
+                ),
+              ),
             ),
           ),
-          child: SafeArea(
+          SafeArea(
             child: Stack(children: [
               // Barre du haut (Liquid Glass)
               Positioned(
@@ -3793,101 +4098,101 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                 right: 6,
                 top: 4,
                 child: Row(children: [
-                  _ib(Icons.arrow_back_rounded, 'Retour', () => Navigator.of(context).pop()),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _menuInfos,
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Row(children: [
-                          Expanded(
-                            child: Text(
-                              _item.titre,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: blanc, fontWeight: FontWeight.w700, fontSize: 15),
+                    _ib(Icons.arrow_back_rounded, 'Retour', () => Navigator.of(context).pop()),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _menuInfos,
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: [
+                            Expanded(
+                              child: Text(
+                                _item.titre,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: blanc, fontWeight: FontWeight.w700, fontSize: 15),
+                              ),
                             ),
-                          ),
-                          if (_estStream && _qualitesStream.isNotEmpty) ...[
-                            const SizedBox(width: 6),
-                            InkWell(
-                              borderRadius: BorderRadius.circular(8),
-                              onTap: _menuQualiteStream,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: _sourceStream?.adaptatif == true ? c.cyan.withAlpha(55) : c.indigo.withAlpha(85),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: (_sourceStream?.adaptatif == true ? c.cyan : c.indigo).withAlpha(155),
+                            if (_estStream && _qualitesStream.isNotEmpty) ...[
+                              const SizedBox(width: 6),
+                              InkWell(
+                                borderRadius: BorderRadius.circular(8),
+                                onTap: _menuQualiteStream,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: _sourceStream?.adaptatif == true ? c.cyan.withAlpha(55) : c.indigo.withAlpha(85),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: (_sourceStream?.adaptatif == true ? c.cyan : c.indigo).withAlpha(155),
+                                    ),
                                   ),
+                                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                    Text(
+                                      _changementQualite != null
+                                          ? '$_changementQualite…'
+                                          : (_sourceStream?.adaptatif == true
+                                              ? (qualiteBadge != null ? 'Auto · $qualiteBadge' : 'Auto')
+                                              : (_sourceStream?.libelle ?? qualiteBadge ?? 'Auto')),
+                                      style: mono(context, taille: 10, couleur: blanc, poids: FontWeight.w800),
+                                    ),
+                                    const SizedBox(width: 2),
+                                    const Icon(Icons.expand_more_rounded, size: 12, color: blanc),
+                                  ]),
                                 ),
-                                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                                  Text(
-                                    _changementQualite != null
-                                        ? '$_changementQualite…'
-                                        : (_sourceStream?.adaptatif == true
-                                            ? (qualiteBadge != null ? 'Auto · $qualiteBadge' : 'Auto')
-                                            : (_sourceStream?.libelle ?? qualiteBadge ?? 'Auto')),
-                                    style: mono(context, taille: 10, couleur: blanc, poids: FontWeight.w800),
-                                  ),
-                                  const SizedBox(width: 2),
-                                  const Icon(Icons.expand_more_rounded, size: 12, color: blanc),
-                                ]),
                               ),
-                            ),
-                          ] else if (qualiteBadge != null && !compact) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: c.indigo.withAlpha(70),
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: c.indigo.withAlpha(120)),
+                            ] else if (qualiteBadge != null && !compact) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: c.indigo.withAlpha(70),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: c.indigo.withAlpha(120)),
+                                ),
+                                child: Text(qualiteBadge, style: mono(context, taille: 10, couleur: blanc, poids: FontWeight.w700)),
                               ),
-                              child: Text(qualiteBadge, style: mono(context, taille: 10, couleur: blanc, poids: FontWeight.w700)),
-                            ),
-                          ],
+                            ],
+                          ]),
+                          const SizedBox(height: 1),
+                          Text(
+                            [
+                              if (_item.chaine != null) _item.chaine!,
+                              if (_file.length > 1) '${_index + 1}/${_file.length}',
+                            ].join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
                         ]),
-                        const SizedBox(height: 1),
-                        Text(
-                          [
-                            if (_item.chaine != null) _item.chaine!,
-                            if (_file.length > 1) '${_index + 1}/${_file.length}',
-                          ].join(' · '),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white70, fontSize: 12),
-                        ),
-                      ]),
-                    ),
-                  ),
-                  if (!_audio) _ib(Icons.picture_in_picture_alt_rounded, 'Image dans l’image', _entrerPip),
-                  if (_estStream && !compact) _ib(Icons.download_rounded, 'Télécharger cette vidéo', _telechargerVideo),
-                  if (_aSousTitres && (!compact || _estStream))
-                    GestureDetector(
-                      onLongPress: _menuSousTitres,
-                      child: _ib(
-                        _sousTitresActifs ? Icons.closed_caption_rounded : Icons.closed_caption_off_outlined,
-                        'Sous-titres (appui long : options)',
-                        _basculerSousTitres,
-                        actif: _sousTitresActifs,
                       ),
                     ),
-                  if (!compact)
-                    _ib(Icons.graphic_eq_rounded, 'Studio Audio & Égaliseur', _menuStudioAudio, actif: _eqActif),
-                  TextButton(
-                    style: TextButton.styleFrom(minimumSize: const Size(38, 38), padding: const EdgeInsets.symmetric(horizontal: 6)),
-                    onPressed: _menuVitesse,
-                    child: Text(
-                      _libVitesse(_vitesse) == 'Normale' ? '1×' : _libVitesse(_vitesse),
-                      style: mono(context, taille: 13, couleur: _vitesse == 1 ? blanc : c.cyan, poids: FontWeight.w800),
+                    if (!_audio) _ib(Icons.picture_in_picture_alt_rounded, 'Image dans l’image', _entrerPip),
+                    if (_estStream && !compact) _ib(Icons.download_rounded, 'Télécharger cette vidéo', _telechargerVideo),
+                    if (_aSousTitres && (!compact || _estStream))
+                      GestureDetector(
+                        onLongPress: _menuSousTitres,
+                        child: _ib(
+                          _sousTitresActifs ? Icons.closed_caption_rounded : Icons.closed_caption_off_outlined,
+                          'Sous-titres (appui long : options)',
+                          _basculerSousTitres,
+                          actif: _sousTitresActifs,
+                        ),
+                      ),
+                    if (!compact)
+                      _ib(Icons.graphic_eq_rounded, 'Studio Audio & Égaliseur', _menuStudioAudio, actif: _eqActif),
+                    TextButton(
+                      style: TextButton.styleFrom(minimumSize: const Size(38, 38), padding: const EdgeInsets.symmetric(horizontal: 6)),
+                      onPressed: _menuVitesse,
+                      child: Text(
+                        _libVitesse(_vitesse) == 'Normale' ? '1×' : _libVitesse(_vitesse),
+                        style: mono(context, taille: 13, couleur: _vitesse == 1 ? blanc : c.cyan, poids: FontWeight.w800),
+                      ),
                     ),
-                  ),
-                  _ib(Icons.tune_rounded, 'Studio & réglages', _menuReglages),
-                ]),
-              ),
+                    _ib(Icons.tune_rounded, 'Studio & réglages', _menuReglages),
+                  ]),
+                ),
 
               // Pilule de chapitre courant (si la vidéo a des chapitres)
               if (chapActif != null)
@@ -4010,242 +4315,259 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
                 left: 12,
                 right: 12,
                 bottom: 4,
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  LayoutBuilder(builder: (ctx, box) {
-                    final largeurActions = (_audio ? 144.0 : 240.0)
-                        .clamp(0.0, (box.maxWidth - 88).clamp(0.0, double.infinity));
-                    return Row(children: [
-                      Expanded(
-                        child: Semantics(
-                          button: true,
-                          label: 'Position de lecture. Appuyer pour choisir un moment',
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: _estLive ? null : _allerAuTemps,
-                            onLongPress: _estLive ? null : () => setState(() => _reste = !_reste),
-                            child: SizedBox(
-                              height: 46,
-                              child: Row(children: [
-                                if (_estLive) ...[
-                                  Container(
-                                    width: 8,
-                                    height: 8,
-                                    decoration: const BoxDecoration(color: Color(0xFFFF453A), shape: BoxShape.circle),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text('EN DIRECT', style: mono(context, taille: 12.5, couleur: blanc, poids: FontWeight.w800)),
-                                ] else ...[
-                                  Flexible(
-                                    child: Text(
-                                      '${_temps(posAffichee)} / ${_reste ? '−${_temps(restant < Duration.zero ? Duration.zero : restant)}' : _temps(v.duration)}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: mono(context, taille: 12.5, couleur: blanc, poids: FontWeight.w600),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {},
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    LayoutBuilder(builder: (ctx, box) {
+                      final largeurActions = (_audio ? 124.0 : 200.0)
+                          .clamp(0.0, (box.maxWidth - 88).clamp(0.0, double.infinity));
+                      return Row(children: [
+                        Expanded(
+                          child: Semantics(
+                            button: true,
+                            label: 'Position de lecture. Appuyer pour choisir un moment',
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _estLive ? null : _allerAuTemps,
+                              onLongPress: _estLive
+                                  ? null
+                                  : () {
+                                      setState(() => _reste = !_reste);
+                                      _programmerMasquage();
+                                    },
+                              child: SizedBox(
+                                height: 46,
+                                child: Row(children: [
+                                  if (_estLive) ...[
+                                    Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: const BoxDecoration(color: Color(0xFFFF453A), shape: BoxShape.circle),
                                     ),
-                                  ),
-                                  if (!compact && v.isPlaying) ...[
                                     const SizedBox(width: 6),
-                                    Text('· fin ${_heureFin(v)}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                                  ],
-                                  if (_a != null) ...[
-                                    const SizedBox(width: 6),
-                                    GestureDetector(
-                                      onTap: _menuBoucleAB,
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(color: c.ambre.withAlpha(65), borderRadius: BorderRadius.circular(6)),
-                                        child: Text(
-                                          _b == null ? 'A ${_temps(_a!)}' : 'A→B',
-                                          style: mono(context, taille: 10.5, couleur: blanc, poids: FontWeight.w700),
-                                        ),
+                                    Text('EN DIRECT', style: mono(context, taille: 12.5, couleur: blanc, poids: FontWeight.w800)),
+                                  ] else ...[
+                                    Flexible(
+                                      child: Text(
+                                        '${_temps(posAffichee)} / ${_reste ? '−${_temps(restant < Duration.zero ? Duration.zero : restant)}' : _temps(v.duration)}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: mono(context, taille: 12.5, couleur: blanc, poids: FontWeight.w600),
                                       ),
                                     ),
+                                    if (!compact && v.isPlaying) ...[
+                                      const SizedBox(width: 6),
+                                      Text('· fin ${_heureFin(v)}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                    ],
+                                    if (_a != null) ...[
+                                      const SizedBox(width: 6),
+                                      GestureDetector(
+                                        onTap: _menuBoucleAB,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(color: c.ambre.withAlpha(65), borderRadius: BorderRadius.circular(6)),
+                                          child: Text(
+                                            _b == null ? 'A ${_temps(_a!)}' : 'A→B',
+                                            style: mono(context, taille: 10.5, couleur: blanc, poids: FontWeight.w700),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ],
-                                ],
-                              ]),
+                                ]),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(maxWidth: largeurActions),
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            if (!_audio) ...[
-                              GestureDetector(
-                                onLongPress: _menuImage,
-                                child: _ib(
-                                  _format == 1 ? Icons.fit_screen_rounded : Icons.aspect_ratio_rounded,
-                                  'Format : ${_formats[_format]}',
-                                  () => _changerFormat((_format + 1) % _formats.length),
-                                  taille: 22,
-                                ),
-                              ),
-                              GestureDetector(
-                                onLongPress: _menuOrientation,
-                                child: _ib(
-                                  Icons.screen_rotation_rounded,
-                                  'Pivoter · paysage dans les deux sens',
-                                  _pivoter,
-                                  taille: 22,
-                                ),
-                              ),
-                            ],
-                            if (!_estLive)
-                              GestureDetector(
-                                onLongPress: _menuBoucleAB,
-                                child: _ib(
-                                  _b != null ? Icons.repeat_on_rounded : Icons.flag_outlined,
-                                  _a == null ? 'Boucle A-B : définir A' : _b == null ? 'Définir B' : 'Retirer la boucle',
-                                  _boucleAB,
-                                  actif: _a != null,
-                                  taille: 22,
-                                ),
-                              ),
-                            _ib(Icons.queue_music_rounded, 'File d’attente', _menuFile, taille: 22),
-                            _ib(Icons.lock_open_rounded, 'Verrouiller l’écran', () {
-                              HapticFeedback.lightImpact();
-                              setState(() {
-                                _verrou = true;
-                                _controles = true;
-                              });
-                              _programmerMasquage();
-                            }, taille: 22),
-                          ]),
-                        ),
-                      ),
-                    ]);
-                  }),
-                  SizedBox(
-                    height: 38,
-                    child: LayoutBuilder(builder: (ctx, box) {
-                      final largeur = box.maxWidth;
-                      double x(Duration d) => 16 + (d.inMilliseconds / dureeMs).clamp(0.0, 1.0) * (largeur - 32);
-                      double bufRatio() {
-                        if (v.buffered.isEmpty) return 0;
-                        final fin = v.buffered.last.end.inMilliseconds / dureeMs;
-                        return fin.clamp(0.0, 1.0);
-                      }
-
-                      return Stack(clipBehavior: Clip.none, alignment: Alignment.center, children: [
-                        // Fond de piste + tampon + intervalle A-B + repères chapitres
-                        Positioned(
-                          left: 16,
-                          right: 16,
-                          child: SizedBox(
-                            height: 5,
-                            child: Stack(clipBehavior: Clip.none, children: [
-                              Container(
-                                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)),
-                              ),
-                              if (!_estLive)
-                                FractionallySizedBox(
-                                  widthFactor: bufRatio(),
-                                  child: Container(
-                                    decoration: BoxDecoration(color: Colors.white.withAlpha(75), borderRadius: BorderRadius.circular(3)),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: largeurActions),
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              if (!_audio) ...[
+                                GestureDetector(
+                                  onLongPress: _menuImage,
+                                  child: _ib(
+                                    _format == 1 ? Icons.fit_screen_rounded : Icons.aspect_ratio_rounded,
+                                    'Format : ${_formats[_format]}',
+                                    () => _changerFormat((_format + 1) % _formats.length),
+                                    taille: 22,
+                                    serre: true,
                                   ),
                                 ),
-                              if (!_estLive && _a != null && _b != null)
-                                Positioned(
-                                  left: ((_a!.inMilliseconds / dureeMs).clamp(0.0, 1.0)) * (largeur - 32),
-                                  width: (((_b!.inMilliseconds - _a!.inMilliseconds) / dureeMs).clamp(0.0, 1.0)) * (largeur - 32),
-                                  top: 0,
-                                  bottom: 0,
-                                  child: Container(
-                                    decoration: BoxDecoration(color: c.ambre.withAlpha(190), borderRadius: BorderRadius.circular(3)),
+                                GestureDetector(
+                                  onLongPress: _menuOrientation,
+                                  child: _ib(
+                                    Icons.screen_rotation_rounded,
+                                    'Pivoter · paysage dans les deux sens',
+                                    _pivoter,
+                                    taille: 22,
+                                    serre: true,
                                   ),
                                 ),
+                              ],
                               if (!_estLive)
-                                for (final ch in _chapitres)
-                                  if (ch.debutMs > 0 && ch.debutMs < dureeMs)
-                                    Positioned(
-                                      left: ((ch.debutMs / dureeMs).clamp(0.0, 1.0)) * (largeur - 32) - 1,
-                                      top: -1,
-                                      bottom: -1,
-                                      child: Container(width: 2, color: Colors.black87),
-                                    ),
+                                GestureDetector(
+                                  onLongPress: _menuBoucleAB,
+                                  child: _ib(
+                                    _b != null ? Icons.repeat_on_rounded : Icons.flag_outlined,
+                                    _a == null ? 'Boucle A-B : définir A' : _b == null ? 'Définir B' : 'Retirer la boucle',
+                                    _boucleAB,
+                                    actif: _a != null,
+                                    taille: 22,
+                                    serre: true,
+                                  ),
+                                ),
+                              _ib(Icons.queue_music_rounded, 'File d’attente', _menuFile, taille: 22, serre: true),
+                              _ib(Icons.lock_open_rounded, 'Verrouiller l’écran', () {
+                                HapticFeedback.lightImpact();
+                                setState(() {
+                                  _verrou = true;
+                                  _controles = true;
+                                });
+                                _programmerMasquage();
+                              }, taille: 22, serre: true),
                             ]),
                           ),
                         ),
-                        if (!_estLive && _a != null) Positioned(left: x(_a!) - 2, top: 8, bottom: 8, child: Container(width: 3, color: blanc)),
-                        if (!_estLive && _b != null) Positioned(left: x(_b!) - 2, top: 8, bottom: 8, child: Container(width: 3, color: c.ambre)),
-                        SliderTheme(
-                          data: SliderThemeData(
-                            trackHeight: 4.5,
-                            activeTrackColor: _estLive ? const Color(0xFFFF453A) : accent,
-                            disabledActiveTrackColor: const Color(0xFFFF453A),
-                            inactiveTrackColor: Colors.transparent,
-                            disabledInactiveTrackColor: Colors.transparent,
-                            thumbColor: blanc,
-                            disabledThumbColor: const Color(0xFFFF453A),
-                            overlayColor: accent.withAlpha(55),
-                            thumbShape: RoundSliderThumbShape(enabledThumbRadius: _glisseBarre ? 9 : 6.5),
-                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-                          ),
-                          child: Slider(
-                            value: _estLive ? 1.0 : avancement,
-                            onChangeStart: _estLive
-                                ? null
-                                : (x) {
-                                    _glisseBarre = true;
-                                    _ratioGlisseBarre = x;
-                                    _masquer?.cancel();
-                                    setState(() {});
-                                  },
-                            onChanged: _estLive ? null : (x) => setState(() => _ratioGlisseBarre = x),
-                            onChangeEnd: _estLive
-                                ? null
-                                : (x) async {
-                                    final cible = Duration(milliseconds: (x * dureeMs).round());
-                                    await ctrl.seekTo(cible);
-                                    _glisseBarre = false;
-                                    _ratioGlisseBarre = null;
-                                    _synchro();
-                                    _programmerMasquage();
-                                  },
-                          ),
-                        ),
-                        if (_glisseBarre)
+                      ]);
+                    }),
+                    SizedBox(
+                      height: 38,
+                      child: LayoutBuilder(builder: (ctx, box) {
+                        final largeur = box.maxWidth;
+                        double x(Duration d) => 16 + (d.inMilliseconds / dureeMs).clamp(0.0, 1.0) * (largeur - 32);
+                        double bufRatio() {
+                          if (v.buffered.isEmpty) return 0;
+                          final fin = v.buffered.last.end.inMilliseconds / dureeMs;
+                          return fin.clamp(0.0, 1.0);
+                        }
+
+                        return Stack(clipBehavior: Clip.none, alignment: Alignment.center, children: [
+                          // Fond de piste + tampon + intervalle A-B + repères chapitres
                           Positioned(
-                            left: (16 + avancement * (largeur - 32) - 65).clamp(4.0, math.max(4.0, largeur - 134)),
-                            top: chapActif != null ? -54 : -38,
-                            child: IgnorePointer(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: BackdropFilter(
-                                  filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                                  child: Container(
-                                    constraints: const BoxConstraints(maxWidth: 150),
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xDC111528),
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(color: Colors.white.withAlpha(32)),
+                            left: 16,
+                            right: 16,
+                            child: SizedBox(
+                              height: 5,
+                              child: Stack(clipBehavior: Clip.none, children: [
+                                Container(
+                                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)),
+                                ),
+                                if (!_estLive)
+                                  FractionallySizedBox(
+                                    widthFactor: bufRatio(),
+                                    child: Container(
+                                      decoration: BoxDecoration(color: Colors.white.withAlpha(75), borderRadius: BorderRadius.circular(3)),
                                     ),
-                                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                                      Text(_temps(posAffichee), style: mono(context, taille: 12.5, couleur: blanc, poids: FontWeight.w800)),
-                                      if (chapActif != null)
-                                        Text(
-                                          chapActif.titre,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(color: c.cyan, fontSize: 10, fontWeight: FontWeight.w600),
-                                        ),
-                                    ]),
+                                  ),
+                                if (!_estLive && _a != null && _b != null)
+                                  Positioned(
+                                    left: ((_a!.inMilliseconds / dureeMs).clamp(0.0, 1.0)) * (largeur - 32),
+                                    width: (((_b!.inMilliseconds - _a!.inMilliseconds) / dureeMs).clamp(0.0, 1.0)) * (largeur - 32),
+                                    top: 0,
+                                    bottom: 0,
+                                    child: Container(
+                                      decoration: BoxDecoration(color: c.ambre.withAlpha(190), borderRadius: BorderRadius.circular(3)),
+                                    ),
+                                  ),
+                                if (!_estLive)
+                                  for (final ch in _chapitres)
+                                    if (ch.debutMs > 0 && ch.debutMs < dureeMs)
+                                      Positioned(
+                                        left: ((ch.debutMs / dureeMs).clamp(0.0, 1.0)) * (largeur - 32) - 1,
+                                        top: -1,
+                                        bottom: -1,
+                                        child: Container(width: 2, color: Colors.black87),
+                                      ),
+                              ]),
+                            ),
+                          ),
+                          if (!_estLive && _a != null) Positioned(left: x(_a!) - 2, top: 8, bottom: 8, child: Container(width: 3, color: blanc)),
+                          if (!_estLive && _b != null) Positioned(left: x(_b!) - 2, top: 8, bottom: 8, child: Container(width: 3, color: c.ambre)),
+                          SliderTheme(
+                            data: SliderThemeData(
+                              trackHeight: 4.5,
+                              activeTrackColor: _estLive ? const Color(0xFFFF453A) : accent,
+                              disabledActiveTrackColor: const Color(0xFFFF453A),
+                              inactiveTrackColor: Colors.transparent,
+                              disabledInactiveTrackColor: Colors.transparent,
+                              thumbColor: blanc,
+                              disabledThumbColor: const Color(0xFFFF453A),
+                              overlayColor: accent.withAlpha(55),
+                              thumbShape: RoundSliderThumbShape(enabledThumbRadius: _glisseBarre ? 9 : 6.5),
+                              overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+                            ),
+                            child: Slider(
+                              value: _estLive ? 1.0 : avancement,
+                              onChangeStart: _estLive
+                                  ? null
+                                  : (x) {
+                                      _glisseBarre = true;
+                                      _glisseBarreEnCours = true;
+                                      _ratioGlisseBarre = x;
+                                      _masquer?.cancel();
+                                      setState(() {});
+                                    },
+                              onChanged: _estLive ? null : (x) => setState(() => _ratioGlisseBarre = x),
+                              onChangeEnd: _estLive
+                                  ? null
+                                  : (x) async {
+                                      _glisseBarreEnCours = false;
+                                      final cible = Duration(milliseconds: (x * dureeMs).round());
+                                      await ctrl.seekTo(cible);
+                                      if (!mounted || _glisseBarreEnCours) return;
+                                      setState(() {
+                                        _glisseBarre = false;
+                                        _ratioGlisseBarre = null;
+                                      });
+                                      _synchro();
+                                      _programmerMasquage();
+                                    },
+                            ),
+                          ),
+                          if (_glisseBarre)
+                            Positioned(
+                              left: (16 + avancement * (largeur - 32) - 65).clamp(4.0, math.max(4.0, largeur - 134)),
+                              top: chapActif != null ? -54 : -38,
+                              child: IgnorePointer(
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: BackdropFilter(
+                                    filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                                    child: Container(
+                                      constraints: const BoxConstraints(maxWidth: 150),
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xDC111528),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(color: Colors.white.withAlpha(32)),
+                                      ),
+                                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                                        Text(_temps(posAffichee), style: mono(context, taille: 12.5, couleur: blanc, poids: FontWeight.w800)),
+                                        if (chapActif != null)
+                                          Text(
+                                            chapActif.titre,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(color: c.cyan, fontSize: 10, fontWeight: FontWeight.w600),
+                                          ),
+                                      ]),
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                      ]);
-                    }),
-                  ),
-                ]),
+                        ]);
+                      }),
+                    ),
+                  ]),
+                ),
               ),
             ]),
           ),
-        ),
+        ]),
       ),
     );
   }
@@ -4284,11 +4606,15 @@ class _LecteurState extends State<Lecteur> with SingleTickerProviderStateMixin {
     );
   }
 
-  Widget _ib(IconData icone, String aide, VoidCallback? tap, {bool actif = false, double taille = 24}) => IconButton(
+  Widget _ib(IconData icone, String aide, VoidCallback? tap,
+          {bool actif = false, double taille = 24, bool serre = false}) =>
+      IconButton(
         tooltip: aide,
         icon: Icon(icone, size: taille),
         color: actif ? context.c.cyan : Colors.white,
         disabledColor: Colors.white30,
+        padding: serre ? EdgeInsets.zero : null,
+        constraints: serre ? const BoxConstraints(minWidth: 40, minHeight: 42) : null,
         onPressed: tap == null
             ? null
             : () {

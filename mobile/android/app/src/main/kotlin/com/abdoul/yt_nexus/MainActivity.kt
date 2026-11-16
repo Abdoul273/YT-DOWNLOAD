@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageInstaller
 import android.content.res.Configuration
+import android.media.AudioManager
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
@@ -288,13 +289,29 @@ class MainActivity : FlutterActivity() {
                 }
                 val actuelle = window.attributes.screenBrightness
                 res.success(
-                    if (actuelle >= 0) actuelle.toDouble()
+                    if (actuelle >= 0) actuelle.toDouble().coerceIn(0.0, 1.0)
                     else try {
-                        Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255.0
+                        val resId = resources.getIdentifier("config_screenBrightnessSettingMaximum", "integer", "android")
+                        val maxSys = if (resId != 0) resources.getInteger(resId).coerceAtLeast(255) else 255
+                        val brut = Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+                        val norm = brut.toDouble() / maxSys.toDouble()
+                        (if (norm > 1.0 && brut <= 4095) brut / 4095.0 else norm).coerceIn(0.0, 1.0)
                     } catch (e: Exception) {
                         0.5
                     },
                 )
+            }
+            "volume" -> {
+                val am = getSystemService(AudioManager::class.java)
+                val min = if (android.os.Build.VERSION.SDK_INT >= 28) am.getStreamMinVolume(AudioManager.STREAM_MUSIC) else 0
+                val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(min + 1)
+                val v = appel.argument<Double>("valeur")
+                if (v != null) {
+                    val cible = Math.round(min + v.coerceIn(0.0, 1.0) * (max - min)).toInt().coerceIn(min, max)
+                    am.setStreamVolume(AudioManager.STREAM_MUSIC, cible, 0)
+                }
+                val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+                res.success(((cur - min).toDouble() / (max - min).toDouble()).coerceIn(0.0, 1.0))
             }
             "lireTexte" -> enFond(res) {
                 contentResolver.openInputStream(Uri.parse(appel.argument<String>("uri")!!))?.use {

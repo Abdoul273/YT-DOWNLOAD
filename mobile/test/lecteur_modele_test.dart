@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:video_player/video_player.dart';
 import 'package:yt_nexus/moteur/analyse.dart' as analyse;
 import 'package:yt_nexus/moteur/natif.dart';
 import 'package:yt_nexus/moteur/paroles.dart';
@@ -221,4 +222,170 @@ Bienvenue sur la chaîne
     expect(m.estStream, isTrue);
     expect(m.clePrefs, 'stream:abc');
   });
+
+  testWidgets('Lecteur accepte luminosité, volume, glisser et double-appui même quand les boutons sont affichés',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 480);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    const canalNatif = MethodChannel('yt_nexus/natif');
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var lumCourante = 0.4;
+    var volCourant = 0.3;
+    final appelsLum = <double>[];
+    final appelsVol = <double>[];
+
+    messenger.setMockMethodCallHandler(canalNatif, (appel) async {
+      switch (appel.method) {
+        case 'luminosite':
+          final v = (appel.arguments as Map?)?['valeur'] as double?;
+          if (v != null && v >= 0) {
+            lumCourante = v;
+            appelsLum.add(v);
+          }
+          return lumCourante;
+        case 'volume':
+          final v = (appel.arguments as Map?)?['valeur'] as double?;
+          if (v != null) {
+            volCourant = v;
+            appelsVol.add(v);
+          }
+          return volCourant;
+        default:
+          return null;
+      }
+    });
+    const canalWakeloockToggle = BasicMessageChannel<Object?>(
+      'dev.flutter.pigeon.wakelock_plus_platform_interface.WakelockPlusApi.toggle',
+      StandardMessageCodec(),
+    );
+    messenger.setMockMessageHandler(canalWakeloockToggle.name, (_) async => const StandardMessageCodec().encodeMessage(<Object?>[null]));
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(canalNatif, null);
+      messenger.setMockMessageHandler(canalWakeloockToggle.name, null);
+    });
+
+    final ctrl = _FauxControleurVideo();
+    final media = MediaLecteur.depuisEntree(
+      analyse.Entree('v1', 'Démo lecteur', 'https://www.youtube.com/watch?v=v1', 180, null, 'Chaîne', 10, null, false),
+    );
+
+    await tester.pumpWidget(MaterialApp(
+      theme: construireTheme(true),
+      home: Lecteur([media], 0, controleurInitial: ctrl),
+    ));
+    await tester.pump();
+
+    // Les contrôles sont affichés dès l'ouverture (bouton Pause visible et actif).
+    expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+
+    // 1. Glisser vertical à gauche -> augmente la luminosité malgré les boutons affichés.
+    await tester.dragFrom(const Offset(120, 300), const Offset(0, -140));
+    await tester.pump();
+    expect(appelsLum, isNotEmpty);
+    expect(lumCourante, greaterThan(0.4));
+
+    // 2. Glisser vertical à droite -> augmente le volume système malgré les boutons affichés.
+    await tester.dragFrom(const Offset(680, 300), const Offset(0, -140));
+    await tester.pump();
+    expect(appelsVol, isNotEmpty);
+    expect(volCourant, greaterThan(0.3));
+
+    // 3. Glisser horizontal -> fait avancer la vidéo malgré les boutons affichés.
+    final posAvant = ctrl.value.position;
+    await tester.dragFrom(const Offset(260, 180), const Offset(180, 0));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(ctrl.value.position, greaterThan(posAvant));
+
+    // 4. Double appui à droite (puis 3e appui en rafale) -> saute +10s puis +10s malgré les boutons affichés.
+    final posAvantSaut = ctrl.value.position;
+    await tester.tapAt(const Offset(700, 200));
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(const Offset(700, 200));
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(ctrl.value.position.inSeconds - posAvantSaut.inSeconds, 10);
+
+    await tester.tapAt(const Offset(700, 200));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(ctrl.value.position.inSeconds - posAvantSaut.inSeconds, 20);
+
+    // 5. Les boutons (ex. Pause) fonctionnent toujours normalement.
+    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.pumpAndSettle();
+    expect(ctrl.value.isPlaying, isFalse);
+    await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+    await tester.pumpAndSettle();
+    expect(ctrl.value.isPlaying, isTrue);
+
+    // 6. Appui long maintenu -> accélère à 2× tant que maintenu puis restaure 1×.
+    final gesteMaintien = await tester.startGesture(const Offset(140, 200));
+    await tester.pump(const Duration(milliseconds: 650));
+    expect(ctrl.value.playbackSpeed, 2.0);
+    expect(find.textContaining('▶▶'), findsOneWidget);
+    await gesteMaintien.up();
+    await tester.pump();
+    expect(ctrl.value.playbackSpeed, 1.0);
+
+    // 7. Appui simple dans le vide -> masque les boutons (IgnorePointer actif).
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tapAt(const Offset(140, 200));
+    await tester.pump(const Duration(milliseconds: 360));
+    await tester.pump(const Duration(milliseconds: 220));
+    final op = tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity).last);
+    expect(op.opacity, 0.0);
+
+    // Laisser les timers d'animation / masquage se terminer proprement avant teardown.
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+}
+
+class _FauxControleurVideo extends VideoPlayerController {
+  _FauxControleurVideo() : super.networkUrl(Uri.parse('https://example.com/v.mp4')) {
+    value = const VideoPlayerValue(
+      duration: Duration(minutes: 3),
+      position: Duration(seconds: 30),
+      size: Size(1280, 720),
+      isInitialized: true,
+      isPlaying: true,
+    );
+  }
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<void> play() async => value = value.copyWith(isPlaying: true);
+
+  @override
+  Future<void> pause() async => value = value.copyWith(isPlaying: false);
+
+  @override
+  Future<void> seekTo(Duration position) async {
+    final p = position < Duration.zero
+        ? Duration.zero
+        : (position > value.duration ? value.duration : position);
+    value = value.copyWith(position: p);
+  }
+
+  @override
+  Future<void> setLooping(bool looping) async => value = value.copyWith(isLooping: looping);
+
+  @override
+  Future<void> setVolume(double volume) async => value = value.copyWith(volume: volume.clamp(0.0, 1.0));
+
+  @override
+  Future<void> setPlaybackSpeed(double speed) async => value = value.copyWith(playbackSpeed: speed);
+
+  @override
+  Future<List<VideoAudioTrack>> getAudioTracks() async => const [];
+
+  @override
+  Future<void> dispose() async {
+    value = const VideoPlayerValue.uninitialized();
+    super.dispose();
+  }
 }
