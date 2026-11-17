@@ -13,7 +13,7 @@ Remede? remede(String texte) {
 
 const _connues = <(List<String>, String, bool)>[
   (['sign in to confirm you', 'not a bot'],
-      "YouTube demande de prouver que tu n'es pas un robot. Ajoute tes cookies YouTube dans Réglages.", false),
+      'YouTube bloque temporairement cette requête (anti-robot). Réessaie dans un instant ou utilise des cookies dans Réglages.', false),
   (['sign in to confirm your age', 'age-restricted', 'inappropriate for some users'],
       'Vidéo réservée aux adultes : ajoute tes cookies YouTube (Réglages).', false),
   (['private video', 'this video is private'], 'Vidéo privée : accès refusé.', false),
@@ -30,6 +30,7 @@ const _connues = <(List<String>, String, bool)>[
   (['permission denied'], "Impossible d'écrire le fichier.", false),
   (['http error 429', 'too many requests'], 'YouTube limite les requêtes (429). Nouvelle tentative…', true),
   (['http error 403'], 'YouTube a coupé la connexion (403). Reprise automatique…', true),
+  (['page needs to be reloaded'], 'Session temporaire expirée. Nouvelle tentative…', true),
   ([
     'timed out', 'timeout', 'connection reset', 'connection refused', 'temporary failure',
     'network is unreachable', 'name resolution', 'remote end closed', 'incompleteread',

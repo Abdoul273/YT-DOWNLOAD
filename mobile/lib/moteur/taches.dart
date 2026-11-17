@@ -817,11 +817,13 @@ class Gestionnaire extends ChangeNotifier {
 
   Future<void> _executerAvecRelances(Tache t) async {
     final relances = (reglages['relances'] as num).toInt();
+    var clientSecours = false;
+    var secoursTente = false;
     while (true) {
       var (ok, message, passagere) = (false, '', false);
       if (t.arret == null) {
         t.tentatives++;
-        (ok, message, passagere) = await _uneTentative(t);
+        (ok, message, passagere) = await _uneTentative(t, clientSecours: clientSecours);
       }
       if (t.arret == 'pause') {
         t
@@ -850,7 +852,24 @@ class Gestionnaire extends ChangeNotifier {
         return _maj(t, sauver: true);
       }
       if (ok) return _terminer(t);
+      final bloqueeOu403 = message.contains('403') || erreurs.remede(message) == erreurs.Remede.cookies;
+      if (!secoursTente && bloqueeOu403 && t.tentatives <= relances + 1) {
+        clientSecours = true;
+        secoursTente = true;
+        analyse.oublier(t.url);
+        t
+          ..statut = 'attente_relance'
+          ..vitesse = 0
+          ..eta = null
+          ..phase = 'Bascule sur un client de secours…'
+          ..message = '';
+        _maj(t);
+        t._reveil = Completer();
+        await Future.any([t._reveil!.future, Future.delayed(const Duration(seconds: 1))]);
+        continue;
+      }
       if (passagere && t.tentatives <= relances) {
+        if (bloqueeOu403) clientSecours = true;
         final attente = min(60, 5 * pow(2, t.tentatives - 1).toInt());
         t
           ..statut = 'attente_relance'
@@ -912,7 +931,7 @@ class Gestionnaire extends ChangeNotifier {
   }
 
   /// (réussi, message d'erreur, erreur passagère ?)
-  Future<(bool, String, bool)> _uneTentative(Tache t) async {
+  Future<(bool, String, bool)> _uneTentative(Tache t, {bool clientSecours = false}) async {
     var o = t.options;
     t
       ..statut = 'analyse'
@@ -921,7 +940,11 @@ class Gestionnaire extends ChangeNotifier {
     _maj(t);
     final Map<String, dynamic> info;
     try {
-      info = await analyse.infoComplete(t.url);
+      info = await analyse.infoComplete(
+        t.url,
+        frais: t.tentatives > 1 || clientSecours,
+        clientSecours: clientSecours,
+      );
     } on analyse.ErreurAnalyse catch (e) {
       return (false, e.message, e.passagere);
     }
@@ -961,46 +984,55 @@ class Gestionnaire extends ChangeNotifier {
     await File(cheminInfo).writeAsString(jsonEncode(info));
     Directory(t.dossierTravail).createSync(recursive: true);
 
-    // Résolution exacte des formats (tailles, ordre des parties) : simulation, sans réseau
+    // Résolution exacte des formats (tailles, ordre des parties) en Dart si disponible,
+    // sinon simulation yt-dlp sans réseau (ex. tests sans liste de formats).
     final conteneur = (o['conteneur'] ?? reglages['conteneur']) as String;
-    final sim = await Natif.executer('${t.id}-sim', [
-      '--load-info-json', cheminInfo, '--ignore-config', '--no-warnings',
-      '-f', sel, '-S', tri.join(','), '--audio-multistreams', '--merge-output-format', conteneur,
-      '-O', '%(requested_formats)j',
-      '-O', '%(format_id)s\t%(height)s\t%(language)s\t%(filesize,filesize_approx)s\t%(vcodec)s\t%(acodec)s',
-    ]);
-    if (t.arret != null) return (false, '', false);
-    if (!sim.ok) {
-      final (message, passagere) = erreurs.analyser(sim.erreur.isNotEmpty ? sim.erreur : sim.sortie, sim.code);
-      return (false, message, passagere);
-    }
+    final resolutionDart = formats.resoudreFormatsSelection(info, o, piste, originale, deux);
+    var selUtilise = sel;
     t.parties = [];
-    final lignesSim = sim.sortie.trim().split('\n');
-    List? demandes;
-    try {
-      final d = jsonDecode(lignesSim.first);
-      if (d is List) demandes = d;
-    } catch (_) {}
-    String libelle(String? hauteur, String? code, bool video) => video
-        ? 'Vidéo ${hauteur ?? ''}p'.replaceAll(' p', '')
-        : (code != null && code.isNotEmpty && code != 'NA' ? 'Audio ${langues.drapeau(code)} ${langues.nom(code)}' : 'Audio');
     final codecs = <(String?, String?)>[]; // (vcodec, acodec) de chaque partie
-    if (demandes != null) {
-      for (final f in demandes.cast<Map>()) {
-        final video = formats.estVideo(f.cast<String, dynamic>());
-        codecs.add((f['vcodec'] as String?, f['acodec'] as String?));
-        t.parties.add((
-          '${f['format_id']}',
-          formats.taille(f.cast<String, dynamic>()),
-          libelle('${f['height']}', f['language'] as String?, video),
-        ));
+    if (resolutionDart != null) {
+      selUtilise = resolutionDart.selecteurExact;
+      t.parties = List.of(resolutionDart.parties);
+      codecs.addAll(resolutionDart.codecs);
+    } else {
+      final sim = await Natif.executer('${t.id}-sim', [
+        '--load-info-json', cheminInfo, '--ignore-config', '--no-warnings',
+        '-f', sel, '-S', tri.join(','), '--audio-multistreams', '--merge-output-format', conteneur,
+        '-O', '%(requested_formats)j',
+        '-O', '%(format_id)s\t%(height)s\t%(language)s\t%(filesize,filesize_approx)s\t%(vcodec)s\t%(acodec)s',
+      ]);
+      if (t.arret != null) return (false, '', false);
+      if (!sim.ok) {
+        final (message, passagere) = erreurs.analyser(sim.erreur.isNotEmpty ? sim.erreur : sim.sortie, sim.code);
+        return (false, message, passagere);
       }
-    } else if (lignesSim.length > 1) {
-      final c = lignesSim[1].split('\t');
-      final h = c.length > 1 && c[1] != 'NA' ? c[1] : null;
-      String? codec(int i) => c.length > i && c[i].trim() != 'NA' ? c[i].trim() : null;
-      codecs.add((codec(4), codec(5)));
-      t.parties.add((c[0], c.length > 3 ? int.tryParse(c[3]) ?? 0 : 0, libelle(h, c.length > 2 ? c[2] : null, h != null)));
+      final lignesSim = sim.sortie.trim().split('\n');
+      List? demandes;
+      try {
+        final d = jsonDecode(lignesSim.first);
+        if (d is List) demandes = d;
+      } catch (_) {}
+      String libelle(String? hauteur, String? code, bool video) => video
+          ? 'Vidéo ${hauteur ?? ''}p'.replaceAll(' p', '')
+          : (code != null && code.isNotEmpty && code != 'NA' ? 'Audio ${langues.drapeau(code)} ${langues.nom(code)}' : 'Audio');
+      if (demandes != null) {
+        for (final f in demandes.cast<Map>()) {
+          final video = formats.estVideo(f.cast<String, dynamic>());
+          codecs.add((f['vcodec'] as String?, f['acodec'] as String?));
+          t.parties.add((
+            '${f['format_id']}',
+            formats.taille(f.cast<String, dynamic>()),
+            libelle('${f['height']}', f['language'] as String?, video),
+          ));
+        }
+      } else if (lignesSim.length > 1) {
+        final c = lignesSim[1].split('\t');
+        final h = c.length > 1 && c[1] != 'NA' ? c[1] : null;
+        String? codec(int i) => c.length > i && c[i].trim() != 'NA' ? c[i].trim() : null;
+        codecs.add((codec(4), codec(5)));
+        t.parties.add((c[0], c.length > 3 ? int.tryParse(c[3]) ?? 0 : 0, libelle(h, c.length > 2 ? c[2] : null, h != null)));
+      }
     }
     // Conversion seulement si YouTube n'a pas fourni directement de l'H.264 / AAC
     final convVideo = publiable && codecs.any((c) => !formats.videoPubliable(c.$1));
@@ -1073,8 +1105,12 @@ class Gestionnaire extends ChangeNotifier {
     final espace = await _verifierEspace(t, o, info);
     if (t.arret != null) return (false, '', false);
     if (espace != null) return (false, espace, false);
-    final cmd = _commande(t, o, sel, tri, cheminInfo, piste ?? originale, deux ? originale : null, secours, langue,
-        publiable: publiable, conversion: conversion, stAudioLangs: stAudioLangs, stAudioAuto: stAudioAuto);
+    final cmd = _commande(t, o, selUtilise, tri, cheminInfo, piste ?? originale, deux ? originale : null, secours, langue,
+        publiable: publiable,
+        conversion: conversion,
+        stAudioLangs: stAudioLangs,
+        stAudioAuto: stAudioAuto,
+        chunkSize: info['_source_client'] == 'ANDROID' ? '2M' : '10M');
     return _lancer(t, cmd);
   }
 
@@ -1114,7 +1150,8 @@ class Gestionnaire extends ChangeNotifier {
       {bool publiable = false,
       String conversion = '',
       List<String> stAudioLangs = const [],
-      bool stAudioAuto = false}) {
+      bool stAudioAuto = false,
+      String chunkSize = '10M'}) {
     final r = reglages;
     final audio = o['type'] == 'audio';
     final conteneur = (o['conteneur'] ?? r['conteneur']) as String;
@@ -1126,7 +1163,7 @@ class Gestionnaire extends ChangeNotifier {
       '--progress-template', 'download:NEXUS %(progress)j\t%(info.format_id)s',
       '--progress-template', 'postprocess:NEXUSPP %(progress.postprocessor)s\t%(progress.status)s',
       '--print', 'after_move:NEXUSFICHIER %(filepath)s',
-      '-N', '${r['fragments']}', '--http-chunk-size', '10M',
+      '-N', '${r['fragments']}', '--http-chunk-size', chunkSize,
       '--retries', '10', '--fragment-retries', '10',
       '--retry-sleep', 'http:exp=1:30', '--retry-sleep', 'fragment:exp=1:30',
       '--socket-timeout', '30', '--trim-filenames', '120',

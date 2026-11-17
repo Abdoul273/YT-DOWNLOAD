@@ -183,3 +183,156 @@ SousTitres sousTitresDispo(Json info) {
   final auto = ((info['automatic_captions'] as Map?) ?? {}).keys.cast<String>();
   return SousTitres(manuels, auto.isNotEmpty, auto.any((c) => langues.memeLangue(c, 'fr')));
 }
+
+class SelectionFormats {
+  final String selecteurExact;
+  final List<(String, int, String)> parties;
+  final List<(String?, String?)> codecs;
+  const SelectionFormats(this.selecteurExact, this.parties, this.codecs);
+}
+
+int _hauteurFormat(Json f) {
+  final hf = (f['height'] as num?)?.toInt() ?? 0;
+  final w = (f['width'] as num?)?.toInt() ?? hf;
+  if (hf <= 0) return 0;
+  return w > 0 && hf > w ? w : hf;
+}
+
+bool _estHlsOuDash(Json f) {
+  final p = '${f['protocol'] ?? ''}';
+  return p.startsWith('m3u8') || p.contains('dash');
+}
+
+String _libellePartie(int? hauteur, String? code, bool video) => video
+    ? 'Vidéo ${hauteur != null && hauteur > 0 ? '${hauteur}p' : ''}'.trim()
+    : (code != null && code.isNotEmpty && code != 'NA' ? 'Audio ${langues.drapeau(code)} ${langues.nom(code)}' : 'Audio');
+
+/// Résout en Dart les formats correspondant à [selecteur] et [tri] sans lancer de sous-processus `-sim`.
+/// Retourne `null` si `info['formats']` est vide ou si aucun format direct exploitable n'est trouvé.
+SelectionFormats? resoudreFormatsSelection(
+  Json info,
+  Json opts,
+  String? piste,
+  String? originale,
+  bool deuxPistes,
+) {
+  final tous = _formats(info).where((f) => f['format_id'] != null).toList();
+  if (tous.isEmpty) return null;
+
+  final selRepli = selecteur(opts, piste, originale, deuxPistes);
+  final conteneur = (opts['conteneur'] ?? 'mp4') as String;
+  final compatible = opts['compatible'] == true;
+  final estModeAudio = opts['type'] == 'audio';
+  final formatAudio = '${opts['format_audio'] ?? 'mp3'}';
+  final veulentM4a = estModeAudio ? (formatAudio == 'm4a' || formatAudio == 'mp3') : (compatible || conteneur == 'mp4');
+  final veulentOpus = estModeAudio && !veulentM4a;
+
+  final bruts = tous.where((f) => !_estHlsOuDash(f)).toList();
+  final pool = bruts.isNotEmpty ? bruts : tous;
+
+  int scoreAudio(Json f, {String? codeVise}) {
+    var s = 0;
+    final code = f['language'] as String?;
+    if (codeVise != null) {
+      if (code == codeVise) {
+        s += 100000;
+      } else if (code != null && langues.memeLangue(code, codeVise)) {
+        s += 50000;
+      }
+    }
+    final ac = '${f['acodec'] ?? ''}'.toLowerCase();
+    final ext = '${f['ext'] ?? ''}'.toLowerCase();
+    if (compatible && (ac.startsWith('mp4a') || ac == 'aac')) s += 4000;
+    if (veulentM4a && (ext == 'm4a' || ac.startsWith('mp4a') || ac == 'aac')) s += 2000;
+    if (veulentOpus && (ac.contains('opus') || ext == 'webm')) s += 2000;
+    if (!estModeAudio && conteneur == 'webm' && (ext == 'webm' || ac.contains('opus'))) s += 1500;
+    if ((f['preference'] as num?)?.toInt() != null && (f['preference'] as num).toInt() < 0) s -= 500; // évite DRC si normal dispo
+    final abr = ((f['abr'] ?? f['tbr'] ?? 0) as num).round();
+    return s + abr;
+  }
+
+  Json? choisirAudio(String? codeVise) {
+    final candidats = pool.where(estAudio).where((f) {
+      if (codeVise == null) return true;
+      final l = f['language'] as String?;
+      return l == codeVise || (l != null && langues.memeLangue(l, codeVise));
+    }).toList();
+    if (candidats.isEmpty) return null;
+    candidats.sort((a, b) => scoreAudio(b, codeVise: codeVise).compareTo(scoreAudio(a, codeVise: codeVise)));
+    return candidats.first;
+  }
+
+  SelectionFormats depuisListe(List<Json> choisis) {
+    final idStr = choisis.map((f) => '${f['format_id']}').join('+');
+    return SelectionFormats(
+      '$idStr/$selRepli',
+      [
+        for (final f in choisis)
+          (
+            '${f['format_id']}',
+            taille(f),
+            _libellePartie((f['height'] as num?)?.toInt(), f['language'] as String?, estVideo(f)),
+          ),
+      ],
+      [for (final f in choisis) (f['vcodec'] as String?, f['acodec'] as String?)],
+    );
+  }
+
+  final audioPrincipal = choisirAudio(piste ?? originale) ?? choisirAudio(null);
+
+  if (estModeAudio) {
+    if (audioPrincipal != null) return depuisListe([audioPrincipal]);
+    final mux = pool.where((f) => estAudio(f) || !_aucun(f['acodec'])).toList();
+    if (mux.isEmpty) return null;
+    mux.sort((a, b) => scoreAudio(b).compareTo(scoreAudio(a)));
+    return depuisListe([mux.first]);
+  }
+
+  final maxH = int.tryParse('${opts['qualite'] ?? 'best'}');
+  final videos = pool.where((f) {
+    if (!estVideo(f) || _aucun(f['vcodec'])) return false;
+    // Préférer vidéo seule pour bv+ba quand un flux audio séparé existe
+    if (!_aucun(f['acodec'])) return false;
+    final h = _hauteurFormat(f);
+    if (h <= 0) return false;
+    return maxH == null || h <= maxH;
+  }).toList();
+
+  int scoreVideo(Json f) {
+    final h = _hauteurFormat(f);
+    final fps = ((f['fps'] ?? 0) as num).toInt();
+    final vc = '${f['vcodec'] ?? ''}'.toLowerCase();
+    final ext = '${f['ext'] ?? ''}'.toLowerCase();
+    final vbr = ((f['vbr'] ?? f['tbr'] ?? 0) as num).toInt();
+    final h264 = videoPubliable(f['vcodec'] as String?);
+    var s = 0;
+    if (compatible) {
+      if (h264) s += 100000000;
+      if (ext == 'mp4') s += 10000;
+    } else if (conteneur == 'mp4' && (ext == 'mp4' || h264 || vc.startsWith('av01'))) {
+      s += (ext == 'mp4' ? 20000 : 0) + (h264 ? 5000 : 0);
+    } else if (conteneur == 'webm' && (ext == 'webm' || vc.startsWith('vp'))) {
+      s += 20000;
+    }
+    return s + h * 100000 + fps * 100 + (vbr ~/ 10);
+  }
+
+  if (videos.isNotEmpty && audioPrincipal != null) {
+    videos.sort((a, b) => scoreVideo(b).compareTo(scoreVideo(a)));
+    final v = videos.first;
+    final audioVo = deuxPistes && originale != null && piste != null && originale != piste ? choisirAudio(originale) : null;
+    final choisis = [v, audioPrincipal, if (audioVo != null && audioVo['format_id'] != audioPrincipal['format_id']) audioVo];
+    return depuisListe(choisis);
+  }
+
+  // Repli : flux déjà multiplexé (ex. format 18 en secours mobile ou vidéo sans flux séparés)
+  final muxes = pool.where((f) => estVideo(f) && !_aucun(f['acodec'])).where((f) {
+    final h = _hauteurFormat(f);
+    return maxH == null || h == 0 || h <= maxH;
+  }).toList();
+  if (muxes.isNotEmpty) {
+    muxes.sort((a, b) => scoreVideo(b).compareTo(scoreVideo(a)));
+    return depuisListe([muxes.first]);
+  }
+  return null;
+}

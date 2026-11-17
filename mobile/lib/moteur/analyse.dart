@@ -11,12 +11,14 @@ import 'package:flutter/foundation.dart';
 
 import 'erreurs.dart' as erreurs;
 import 'formats.dart';
+import 'innertube.dart' as innertube;
 import 'langues.dart' as langues;
 import 'natif.dart';
 import 'reglages.dart';
 
 const dureeCache = Duration(minutes: 30); // les liens YouTube expirent après ~6 h
 final _cache = <String, (DateTime, Json)>{};
+final _enCoursInfo = <String, Future<Json>>{};
 var _compteur = 0;
 
 class ErreurAnalyse implements Exception {
@@ -27,13 +29,23 @@ class ErreurAnalyse implements Exception {
   String toString() => message;
 }
 
+List<String> _argsClientsYoutube(String url, List<String> extra) {
+  final dejaClient = extra.any((a) => a.contains('player_client='));
+  final estYt = innertube.estHoteYoutube(url) || url.startsWith('ytsearch');
+  if (!estYt || reglages.aDesCookies || dejaClient) return const [];
+  return ['--extractor-args', 'youtube:player_client=web_embedded,tv_downgraded,android_vr,web'];
+}
+
 Future<Json> _extraire(String url, List<String> extra) async {
   final r = await Natif.executer('analyse-${_compteur++}', [
     '-J', '--no-warnings', '--ignore-config',
     '--socket-timeout', '20', '--extractor-retries', '3',
     // date de publication dans les recherches/playlists
     '--extractor-args', 'youtubetab:approximate_date',
-    ...reglages.argsAuth(), ...extra, url,
+    ...reglages.argsAuth(),
+    ..._argsClientsYoutube(url, extra),
+    ...extra,
+    url,
   ]);
   final debut = r.sortie.indexOf('{');
   if (debut >= 0) {
@@ -45,11 +57,7 @@ Future<Json> _extraire(String url, List<String> extra) async {
   throw ErreurAnalyse(message, passagere);
 }
 
-/// Infos complètes d'une vidéo (avec formats), mises en cache.
-Future<Json> infoComplete(String url, {bool frais = false}) async {
-  final ent = _cache[url];
-  if (ent != null && !frais && DateTime.now().difference(ent.$1) < dureeCache) return ent.$2;
-  final info = await _extraire(url, ['--no-playlist']);
+void _mettreEnCache(String url, Json info) {
   final e = (DateTime.now(), info);
   _cache[url] = e;
   if (info['webpage_url'] is String) _cache[info['webpage_url']] = e;
@@ -57,7 +65,55 @@ Future<Json> infoComplete(String url, {bool frais = false}) async {
     final plusVieux = _cache.entries.reduce((a, b) => a.value.$1.isBefore(b.value.$1) ? a : b).key;
     _cache.remove(plusVieux);
   }
-  return info;
+}
+
+/// Infos complètes d'une vidéo (avec formats), mises en cache.
+/// Utilise d'abord Innertube direct (~1 s, sans bot-check), puis yt-dlp et secours mobile si nécessaire.
+Future<Json> infoComplete(String url, {bool frais = false, bool clientSecours = false}) async {
+  if (!frais && !clientSecours) {
+    final ent = _cache[url];
+    if (ent != null && DateTime.now().difference(ent.$1) < dureeCache) return ent.$2;
+  }
+  final cleVol = '$url|${clientSecours ? 1 : 0}';
+  if (!frais) {
+    final existant = _enCoursInfo[cleVol];
+    if (existant != null) return existant;
+  }
+
+  final futur = () async {
+    final vid = innertube.extraireIdVideo(url);
+    if (vid != null && innertube.disponible && !reglages.aDesCookies && !clientSecours) {
+      try {
+        final direct = await innertube.extraireVideo(vid);
+        if (direct.ok) {
+          _mettreEnCache(url, direct.info!);
+          return direct.info!;
+        }
+      } catch (_) {}
+    }
+
+    try {
+      final info = await _extraire(url, ['--no-playlist']);
+      _mettreEnCache(url, info);
+      return info;
+    } on ErreurAnalyse {
+      if (vid != null && innertube.disponible && !reglages.aDesCookies) {
+        final secours = await innertube.extraireSecoursMobile(vid);
+        if (secours != null) {
+          _mettreEnCache(url, secours);
+          return secours;
+        }
+      }
+      rethrow;
+    }
+  }();
+
+  _enCoursInfo[cleVol] = futur;
+  try {
+    return await futur;
+  } finally {
+    if (identical(_enCoursInfo[cleVol], futur)) _enCoursInfo.remove(cleVol);
+  }
 }
 
 /// Retourne les infos déjà présentes en mémoire sans lancer de requête réseau.
@@ -170,7 +226,13 @@ Future<InfosChaine> explorerChaine({
   if (base.isEmpty) throw ErreurAnalyse('Chaîne introuvable pour cette vidéo.');
   final racine = _racineChaine(normaliserUrl(base));
   final cible = '$racine/$section';
-  final brut = await _extraire(cible, ['--flat-playlist', '--playlist-end', '$max']);
+  Json? brut;
+  if (innertube.disponible && innertube.estHoteYoutube(cible)) {
+    try {
+      brut = await innertube.extraireChaine(racine, section: section, max: max);
+    } catch (_) {}
+  }
+  brut ??= await _extraire(cible, ['--flat-playlist', '--playlist-end', '$max']);
   final titreBrut = ((brut['channel'] ?? brut['uploader'] ?? brut['title'] ?? nomChaine ?? 'Chaîne') as String)
       .replaceFirst(RegExp(r'\s*-\s*(Videos|Shorts|Live|Streams)$', caseSensitive: false), '')
       .trim();
@@ -199,9 +261,31 @@ Future<InfosChaine> explorerChaine({
   );
 }
 
+Future<Json?> _extraireListeYoutubeInnertube(String url, {int max = 25}) async {
+  if (!innertube.disponible || !innertube.estHoteYoutube(url)) return null;
+  try {
+    final listId = innertube.extrairePlaylistId(url);
+    final vid = innertube.extraireIdVideo(url);
+    if (listId != null && (listId.startsWith('RD') || listId.startsWith('UL')) && vid != null) {
+      return await innertube.extraireMix(vid, listId, max: max);
+    }
+    if (listId != null) {
+      return await innertube.extrairePlaylist(listId, max: max);
+    }
+    if (innertube.estChaineYoutube(url)) {
+      final uri = Uri.tryParse(url);
+      final seg = uri != null && uri.pathSegments.isNotEmpty ? uri.pathSegments.last : 'videos';
+      final section = const {'videos', 'shorts', 'streams', 'playlists'}.contains(seg) ? seg : 'videos';
+      return await innertube.extraireChaine(_racineChaine(url), section: section, max: max);
+    }
+  } catch (_) {}
+  return null;
+}
+
 /// Vidéos d'une liste (mix, chaîne, page) sans les détails, limitées à [max].
 Future<List<Entree>> listeVideos(String url, {int max = 25}) async {
-  final brut = await _extraire(url, ['--flat-playlist', '--playlist-end', '$max']);
+  final brut = await _extraireListeYoutubeInnertube(url, max: max) ??
+      await _extraire(url, ['--flat-playlist', '--playlist-end', '$max']);
   return [
     for (final e in ((brut['entries'] as List?) ?? []).whereType<Map>())
       if (e['id'] != null && e['ie_key'] != 'YoutubeTab') _entree(e.cast<String, dynamic>())
@@ -281,10 +365,13 @@ Future<Object> analyser(String lien) async {
   final url = normaliserUrl(lien);
   if (!url.startsWith('http')) throw ErreurAnalyse('Lien invalide.');
   if (playlistAssociee(url) == null &&
-      (url.contains('/watch') || url.contains('/shorts/') || url.contains('youtu.be/'))) {
+      (url.contains('/watch') ||
+          url.contains('/shorts/') ||
+          url.contains('youtu.be/') ||
+          innertube.extraireIdVideo(url) != null)) {
     return resumeVideo(await infoComplete(url));
   }
-  final brut = await _extraire(url, ['--flat-playlist']);
+  final brut = await _extraireListeYoutubeInnertube(url, max: 50) ?? await _extraire(url, ['--flat-playlist']);
   if (brut['_type'] == 'playlist' || brut['_type'] == 'multi_video' || brut['entries'] != null) {
     final entrees = [
       for (final e in ((brut['entries'] as List?) ?? []).whereType<Map>())
@@ -329,15 +416,29 @@ String _paramSp(Filtres f) {
 }
 
 Future<List<Entree>> rechercher(String requete, Filtres f, {int nombre = 30}) async {
-  final Json brut;
-  if (f.tri == 'pertinence' && !f.actifs) {
-    brut = await _extraire('ytsearch$nombre:$requete', ['--flat-playlist']);
+  List<Json>? itemsDirects;
+  if (innertube.disponible) {
+    try {
+      final sp = (f.tri == 'pertinence' && !f.actifs) ? null : _paramSp(f);
+      final directe = await innertube.rechercher(requete, sp: sp, max: nombre);
+      if (directe.isNotEmpty) itemsDirects = directe;
+    } catch (_) {}
+  }
+  final Iterable<Map> entries;
+  if (itemsDirects != null) {
+    entries = itemsDirects;
   } else {
-    final url = Uri.https('www.youtube.com', '/results', {'search_query': requete, 'sp': _paramSp(f)}).toString();
-    brut = await _extraire(url, ['--flat-playlist', '--playlist-end', '$nombre']);
+    final Json brut;
+    if (f.tri == 'pertinence' && !f.actifs) {
+      brut = await _extraire('ytsearch$nombre:$requete', ['--flat-playlist']);
+    } else {
+      final url = Uri.https('www.youtube.com', '/results', {'search_query': requete, 'sp': _paramSp(f)}).toString();
+      brut = await _extraire(url, ['--flat-playlist', '--playlist-end', '$nombre']);
+    }
+    entries = ((brut['entries'] as List?) ?? []).whereType<Map>();
   }
   var res = [
-    for (final e in ((brut['entries'] as List?) ?? []).whereType<Map>())
+    for (final e in entries)
       if (e['id'] != null) _entree(e.cast<String, dynamic>())
   ];
   // YouTube glisse parfois des vidéos hors période : on les écarte (date approximative → marge)
@@ -844,5 +945,11 @@ List<PisteSousTitreStream> sousTitresStreaming(Json info) {
 
 /// Infos de secours pour l'aperçu : clients YouTube qui exposent le HLS et le format 18
 /// quand l'extraction par défaut n'a rien donné de lisible.
-Future<Json> infoApercuSecours(String url) =>
-    _extraire(url, ['--no-playlist', '--extractor-args', 'youtube:player_client=default,android_vr,mweb']);
+Future<Json> infoApercuSecours(String url) async {
+  final vid = innertube.extraireIdVideo(url);
+  if (vid != null && innertube.disponible && !reglages.aDesCookies) {
+    final rapide = await innertube.extraireSecoursMobile(vid);
+    if (rapide != null) return rapide;
+  }
+  return _extraire(url, ['--no-playlist', '--extractor-args', 'youtube:player_client=android_vr,web_embedded,tv_downgraded']);
+}
